@@ -3,6 +3,16 @@ from pydantic import BaseModel
 # RecapData must match packages/shared/src/schemas.ts.
 
 
+class HealthResponse(BaseModel):
+    ok: bool
+    service: str
+    providers: list[str]
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+
+
 class GroupFocus(BaseModel):
     quote: str
     who: list[str]

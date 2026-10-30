@@ -8,7 +8,7 @@ All commands run from the repo root. They are written for bash: on Windows, use 
 
 | Tool | Version | Check |
 | --- | --- | --- |
-| Node | 20+ (CI uses 22) | `node -v` |
+| Node | 22.14+ (CI uses 22) | `node -v` |
 | Python | 3.12+ | `python --version` |
 | [uv](https://docs.astral.sh/uv/) | any recent | `uv --version` |
 | [Docker](https://docs.docker.com/get-docker/) | running, not just installed | `docker info --format '{{.ServerVersion}}'` |
@@ -62,7 +62,7 @@ grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local
 
 This replaces any existing `.env`. Both files are gitignored. The keys are the shared demo keys every local Supabase uses, so they are not secrets, but never use them for a cloud project.
 
-To use the AI recap, also set `ANTHROPIC_API_KEY` in `.env`. Everything else works without it.
+To use the AI recap, also set at least one of `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` or `ANTHROPIC_API_KEY` in `.env`. Everything else works without it.
 
 **Verify:**
 
@@ -124,7 +124,7 @@ post /api/rooms/text '{"title":"Smoke","text":"Hello from local setup."}' "$TOKE
 
 To see the data, open the inbox at http://127.0.0.1:54324 and Studio at http://127.0.0.1:54323.
 
-**AI recap:** `POST /api/rooms/:id/recap` returns `{"error":"Recap failed"} [502]` when `ANTHROPIC_API_KEY` is empty. That is expected.
+**AI recap:** `POST /api/rooms/:id/recap` returns `{"error":"Recap failed"} [502]` when no provider API key is set. That is expected.
 
 ## 7. Run the checks
 
@@ -159,7 +159,6 @@ After changing a migration, `npx supabase db reset` rebuilds the local database.
 | `failed to connect to the docker API` | Docker Desktop isn't running. Start it and retry. |
 | `npm run test:db` fails with `Connection terminated unexpectedly`, or port 54324 gives an empty reply, while the API on 54321 works | Docker's port forwarding is stuck. This happened when Supabase started right after Docker Desktop. Run `npx supabase stop`, then `npm run supabase:start`. |
 | `Local Supabase is not running` in the tests | Check `npx supabase status`, and start it if needed. |
-| `Hook timed out in 10000ms` on the first `test:integration` | The first import of the app was slow. Run it again. |
 | `supabase_vector_linkroom` keeps restarting in Docker | Seen on Windows. It only ships logs, and every check above passes with it restarting. |
 | A port is already in use | The apps use 3000, 4000 and 8000. Supabase uses 54321 to 54324. Stop whatever holds the port. |
 | Signup returns 429 | Signup, login and resend share a limit of 10 requests per 15 minutes per IP. Set `AUTH_RATE_LIMIT=1000` in `.env` and restart the backend. |

@@ -2,11 +2,20 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
+import swaggerUi from "swagger-ui-express";
 import { env } from "./env";
 import { errorHandler, notFound } from "./middleware/error";
+import { openApiDocument } from "./openapi";
 import { authRouter } from "./routes/auth";
 import { healthRouter } from "./routes/health";
 import { roomsRouter } from "./routes/rooms";
+
+// Every API router, by mount path. test/unit/openapi.test.ts checks each route is documented.
+export const apiRouters = {
+  "/health": healthRouter,
+  "/api/auth": authRouter,
+  "/api/rooms": roomsRouter,
+};
 
 export function createApp() {
   const app = express();
@@ -19,9 +28,12 @@ export function createApp() {
   app.use(express.json({ limit: "1mb" }));
   if (env.NODE_ENV !== "test") app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
-  app.use("/health", healthRouter);
-  app.use("/api/auth", authRouter);
-  app.use("/api/rooms", roomsRouter);
+  for (const [path, router] of Object.entries(apiRouters)) app.use(path, router);
+
+  app.get("/openapi.json", (_req, res) => {
+    res.json(openApiDocument);
+  });
+  app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
   app.use(notFound);
   app.use(errorHandler);
