@@ -41,10 +41,21 @@ export async function extractArticle(rawUrl: string) {
   const article = new Readability(dom.window.document).parse();
   if (!article?.content) throw new HttpError(422, UNREADABLE);
 
+  // Readability already made relative link and image URLs absolute, using the page URL above.
   return {
     title: article.title ?? url.hostname,
-    html: addBlockIds(DOMPurify.sanitize(article.content)),
+    html: addBlockIds(openLinksInNewTab(DOMPurify.sanitize(article.content))),
   };
+}
+
+// Links open in a new tab so following one doesn't take the reader out of the room.
+export function openLinksInNewTab(html: string) {
+  const { document } = new JSDOM(`<body>${html}</body>`).window;
+  document.querySelectorAll("a[href]:not([href^='#'])").forEach((a) => {
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+  });
+  return document.body.innerHTML;
 }
 
 export function textToHtml(text: string) {

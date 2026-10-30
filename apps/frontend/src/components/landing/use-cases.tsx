@@ -5,12 +5,26 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Reveal } from "@/components/fx/reveal";
 import { USE_CASES } from "./content";
 
+// The pinned layout needs the heading, the tallest cards and room for the fixed nav to fit in
+// one viewport (about 600px + 80px). Shorter windows, such as a phone in landscape, scroll normally.
+const SHORT_VIEWPORT = "(max-height: 700px)";
+
 // Horizontal scroll: the section pins, and vertical scroll drives the track sideways.
 export function UseCases() {
   const section = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const [distance, setDistance] = useState(0);
-  const reduce = useReducedMotion();
+  const [short, setShort] = useState(false);
+  // Plain layout: a normal horizontally scrolling row instead of the pinned, scroll-driven track.
+  const plain = useReducedMotion() || short;
+
+  useLayoutEffect(() => {
+    const mq = window.matchMedia(SHORT_VIEWPORT);
+    const sync = () => setShort(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   useLayoutEffect(() => {
     const measure = () => {
@@ -36,10 +50,10 @@ export function UseCases() {
     <section
       ref={section}
       id="use-cases"
-      className={reduce ? "relative" : "relative -mb-[8vh]"}
-      style={{ height: reduce ? "auto" : `calc(100dvh + ${distance}px)` }}
+      className={plain ? "relative" : "relative -mb-[8vh]"}
+      style={{ height: plain ? "auto" : `calc(100dvh + ${distance}px)` }}
     >
-      <div className={reduce ? "py-28" : "sticky top-0 flex h-dvh flex-col justify-center overflow-hidden"}>
+      <div className={plain ? "py-28" : "sticky top-0 flex h-dvh flex-col justify-center overflow-hidden"}>
         <div className="mx-auto mb-12 flex w-full max-w-7xl items-end justify-between gap-6 px-5 md:px-8">
           <Reveal>
             <div className="eyebrow text-azure">Made for</div>
@@ -56,9 +70,9 @@ export function UseCases() {
 
         <motion.div
           ref={track}
-          style={reduce ? undefined : { x }}
+          style={plain ? undefined : { x }}
           className={
-            reduce
+            plain
               ? "flex snap-x gap-5 overflow-x-auto px-5 pb-4 md:px-8"
               : "flex w-max gap-5 pr-[8vw] pl-5 will-change-transform md:pl-[max(2rem,calc((100vw-80rem)/2+2rem))]"
           }
