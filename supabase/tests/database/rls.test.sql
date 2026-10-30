@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(26);
+select plan(40);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room');
@@ -14,6 +14,10 @@ values ('00000000-0000-0000-0000-000000000001', 'room0001', 'Ana', '#f00', 'b0',
 insert into comments (id, room_id, highlight_id, author_name, author_color, body)
 values ('00000000-0000-0000-0000-000000000002', 'room0001', '00000000-0000-0000-0000-000000000001', 'Ana', '#f00', 'Nice');
 insert into recaps (room_id, data) values ('room0001', '{"summary": "fixture"}');
+insert into storage.objects (bucket_id, name) values ('pdfs', 'room0001.pdf');
+-- The Storage API sets this before deleting, which leaves the decision to RLS; without it, a trigger
+-- refuses every direct delete and the delete checks below would pass for the wrong reason.
+set local storage.allow_delete_query = 'true';
 
 -- RLS is on for every table the browser can reach.
 select ok(relrowsecurity, format('RLS is enabled on %s', relname))
@@ -68,7 +72,23 @@ select is_empty(
   $$delete from comments where id = '00000000-0000-0000-0000-000000000002' returning 1$$,
   'anon cannot delete someone''s comment'
 );
+select is_empty($$update recaps set data = '{}' where room_id = 'room0001' returning 1$$, 'anon cannot edit recaps');
 select is_empty($$delete from recaps where room_id = 'room0001' returning 1$$, 'anon cannot delete recaps');
+
+-- Storage: the pdfs bucket is readable by anyone, writable only by the backend.
+select isnt_empty($$select 1 from storage.objects where bucket_id = 'pdfs' and name = 'room0001.pdf'$$, 'anon can read PDFs');
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name) values ('pdfs', 'evil.pdf')$$,
+  '42501', null, 'anon cannot upload PDFs'
+);
+select is_empty(
+  $$update storage.objects set name = 'renamed.pdf' where bucket_id = 'pdfs' and name = 'room0001.pdf' returning 1$$,
+  'anon cannot rename PDFs'
+);
+select is_empty(
+  $$delete from storage.objects where bucket_id = 'pdfs' and name = 'room0001.pdf' returning 1$$,
+  'anon cannot delete PDFs'
+);
 
 -- Input limits from 0002 hold for browser inserts too.
 select throws_ok(
@@ -88,29 +108,58 @@ select throws_ok(
   '23514', null, 'a highlight ending before it starts is rejected'
 );
 
--- Logged-in users (authenticated role) get no extra write access -----------------------------
+-- Logged-in users (authenticated role): same access as guests, no extra writes ---------------
 reset role;
 set local role authenticated;
 set local request.jwt.claims = '{"sub": "00000000-0000-0000-0000-0000000000aa", "role": "authenticated"}';
 
+select lives_ok(
+  $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
+    values ('room0001', 'Member', '#00f', 'b2', 0, 3, 'abc')$$,
+  'logged-in users can add a highlight'
+);
+select lives_ok(
+  $$insert into comments (room_id, author_name, author_color, body) values ('room0001', 'Member', '#00f', 'Hi')$$,
+  'logged-in users can add a comment'
+);
+
 select throws_ok(
   $$insert into rooms (id, kind, title) values ('room0003', 'link', 'Direct')$$,
   '42501', null, 'logged-in users cannot create rooms directly (they go through the backend)'
+);
+select is_empty($$update rooms set title = 'Hijacked' where id = 'room0001' returning 1$$, 'logged-in users cannot edit rooms');
+select is_empty($$delete from rooms where id = 'room0001' returning 1$$, 'logged-in users cannot delete rooms');
+
+select throws_ok(
+  $$insert into recaps (room_id, data) values ('room0001', '{}')$$,
+  '42501', null, 'logged-in users cannot write recaps'
+);
+select is_empty($$update recaps set data = '{}' where room_id = 'room0001' returning 1$$, 'logged-in users cannot edit recaps');
+
+select is_empty(
+  $$update highlights set quote = 'edited' where id = '00000000-0000-0000-0000-000000000001' returning 1$$,
+  'logged-in users cannot edit someone''s highlight'
+);
+select is_empty(
+  $$delete from highlights where id = '00000000-0000-0000-0000-000000000001' returning 1$$,
+  'logged-in users cannot delete someone''s highlight'
+);
+select is_empty(
+  $$update comments set body = 'edited' where id = '00000000-0000-0000-0000-000000000002' returning 1$$,
+  'logged-in users cannot edit someone''s comment'
 );
 select is_empty(
   $$delete from comments where id = '00000000-0000-0000-0000-000000000002' returning 1$$,
   'logged-in users cannot delete someone''s comment'
 );
 
--- Storage: the pdfs bucket is readable by anyone, writable only by the backend ----------------
-reset role;
-insert into storage.objects (bucket_id, name) values ('pdfs', 'room0001.pdf');
-set local role anon;
-
-select isnt_empty($$select 1 from storage.objects where bucket_id = 'pdfs' and name = 'room0001.pdf'$$, 'anon can read PDFs');
 select throws_ok(
-  $$insert into storage.objects (bucket_id, name) values ('pdfs', 'evil.pdf')$$,
-  '42501', null, 'anon cannot upload PDFs'
+  $$insert into storage.objects (bucket_id, name) values ('pdfs', 'member.pdf')$$,
+  '42501', null, 'logged-in users cannot upload PDFs directly (they go through the backend)'
+);
+select is_empty(
+  $$delete from storage.objects where bucket_id = 'pdfs' and name = 'room0001.pdf' returning 1$$,
+  'logged-in users cannot delete PDFs'
 );
 
 select * from finish();
