@@ -102,6 +102,8 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **QA**
 - [ ] Live Vercel URL loads in light and dark mode
+- [ ] Unit, integration and e2e tests pass (`npm test`, `npm run test:e2e`) *(in repo)*
+- [ ] CI workflow runs on every PR; **CI passed** set as a required check on `main` (GitHub → Settings → Branches)
 
 **Done when:** the live Vercel URL loads, Supabase tables exist, and a new account can sign up, verify by email and log in.
 

@@ -11,6 +11,8 @@ const Env = z
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_ANON_KEY: z.string().optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+    // Requests per IP per 15 min across signup, login and resend-verification.
+    AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
   })
   .superRefine((env, ctx) => {
     // In dev the server boots without Supabase so /health works; in production fail fast.

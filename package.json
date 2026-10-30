@@ -16,6 +16,10 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
+    "test": "turbo run test:unit test:integration",
+    "test:unit": "turbo run test:unit",
+    "test:integration": "turbo run test:integration",
+    "test:e2e": "turbo run test:e2e --filter=@linkroom/backend",
     "setup:ai": "cd apps/ai && uv sync"
   },
   "devDependencies": {

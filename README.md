@@ -54,7 +54,25 @@ Run the files in [supabase/migrations](supabase/migrations) in order (`0001`, th
 | `npm run dev:frontend` / `dev:backend` / `dev:ai` | Runs one app |
 | `npm run build` | Builds frontend (`.next`) and backend (`dist`) |
 | `npm run typecheck` | TypeScript checks + ruff |
+| `npm test` | Unit + integration tests |
+| `npm run test:unit` / `test:integration` / `test:e2e` | One test level (e2e builds the backend first) |
 | `npm run lint` | ESLint + ruff |
+
+## Testing
+
+All JS tests use [Vitest](https://vitest.dev). None of them need a real Supabase project or network access.
+
+| Level | Where | What it covers |
+| --- | --- | --- |
+| Unit | `apps/backend/test/unit`, `packages/shared/test`, `apps/frontend/src/**/*.test.ts` | URL checks, HTML extraction and escaping, auth middleware, env validation, zod contracts, the frontend API client |
+| Integration | `apps/backend/test/integration` | The Express app in-process (supertest) against a fake Supabase server: every `/api/auth` route, email verification links, and the auth checks on room creation |
+| E2E | `apps/backend/test/e2e` | Starts the built `dist/index.js` in production mode as its own process: signup → verify by email → login → create a room → refresh → logout, plus rate limiting |
+
+`apps/backend/test/support/fake-supabase.ts` is an in-memory stand-in for the Supabase auth, database and storage HTTP APIs, so the real `supabase-js` client is exercised. Its `outbox` records the verification emails Supabase would send.
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, integration, e2e, build, and ruff for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
 
 ## API
 

@@ -23,7 +23,7 @@ const CHECK_EMAIL = "Check your email to verify your account.";
 // Brute-force guard on the endpoints that take a password or send email.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: env.AUTH_RATE_LIMIT,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Too many attempts. Try again in a few minutes." },
