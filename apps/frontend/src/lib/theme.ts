@@ -1,13 +1,9 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { THEME_STORAGE_KEY } from "./theme-script";
 
 export type Theme = "light" | "dark";
-
-export const THEME_STORAGE_KEY = "linkroom-theme";
-
-// Runs in <head> before first paint: saved choice wins, otherwise follow the OS.
-export const themeInitScript = `(function(){try{var t=localStorage.getItem("${THEME_STORAGE_KEY}");if(t!=="light"&&t!=="dark")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.classList.toggle("dark",t==="dark")}catch(e){}})()`;
 
 function readTheme(): Theme {
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
