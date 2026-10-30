@@ -15,7 +15,7 @@ export default defineConfig([
         {
           // npx and npm are .cmd shims on Windows, which these calls can't launch without a shell.
           selector:
-            "CallExpression[callee.name=/^(execFile|execFileSync|spawn|spawnSync)$/][arguments.0.value=/^(npx|npm)$/]",
+            "CallExpression:matches([callee.name=/^(execFile|execFileSync|spawn|spawnSync)$/], [callee.property.name=/^(execFile|execFileSync|spawn|spawnSync)$/])[arguments.0.value=/^(npx|npm)$/]",
           message: "This fails with ENOENT on Windows. Use execSync with the full command string.",
         },
       ],

@@ -8,7 +8,7 @@ All commands run from the repo root. They are written for bash: on Windows, use 
 
 | Tool | Version | Check |
 | --- | --- | --- |
-| Node | 20+ (CI uses 22) | `node -v` |
+| Node | 22.14+ (CI uses 22) | `node -v` |
 | Python | 3.12+ | `python --version` |
 | [uv](https://docs.astral.sh/uv/) | any recent | `uv --version` |
 | [Docker](https://docs.docker.com/get-docker/) | running, not just installed | `docker info --format '{{.ServerVersion}}'` |

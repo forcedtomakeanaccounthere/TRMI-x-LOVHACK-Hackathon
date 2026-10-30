@@ -29,7 +29,7 @@ Cursors, scroll and reactions go browser to browser over Supabase Realtime. High
 
 **To run locally, follow [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).** It uses a local Supabase in Docker and checks each step.
 
-To use a cloud Supabase project instead, requirements are Node 20+, Python 3.12+ and [uv](https://docs.astral.sh/uv/):
+To use a cloud Supabase project instead, requirements are Node 22.14+, Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
 npm install              # all JS workspaces
