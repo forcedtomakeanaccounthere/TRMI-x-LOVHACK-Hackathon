@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { TestProject } from "vitest/node";
 import type { LocalSupabase } from "./supabase";
@@ -16,7 +16,7 @@ declare module "vitest" {
 export default function setup(project: TestProject) {
   let status: Record<string, string>;
   try {
-    const out = execFileSync("npx", ["supabase", "status", "-o", "json"], { cwd: ROOT, stdio: "pipe" });
+    const out = execSync("npx supabase status -o json", { cwd: ROOT, stdio: "pipe" });
     status = JSON.parse(out.toString());
   } catch {
     throw new Error("Local Supabase is not running. Start it with `npm run supabase:start` (needs Docker).");
