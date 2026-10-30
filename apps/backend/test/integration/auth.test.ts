@@ -2,22 +2,23 @@ import { randomBytes } from "node:crypto";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startFakeSupabase, type FakeSupabase } from "../support/fake-supabase";
+import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
 
-let supabase: FakeSupabase;
+let supabase: TestSupabase;
 let app: Express;
 
-const API = "http://api.test";
+// Must match the redirect URLs allowed in supabase/config.toml.
+const API = "http://127.0.0.1:4000";
 const WEB = "http://web.test";
-// Generated per run: these only reach the fake Supabase server.
+// Generated per run: these only reach the local Supabase.
 const PASSWORD = randomBytes(12).toString("base64url");
 
 beforeAll(async () => {
-  supabase = await startFakeSupabase();
+  supabase = await connectSupabase();
   Object.assign(process.env, {
     SUPABASE_URL: supabase.url,
-    SUPABASE_ANON_KEY: "anon-key",
-    SUPABASE_SERVICE_ROLE_KEY: "service-key",
+    SUPABASE_ANON_KEY: supabase.anonKey,
+    SUPABASE_SERVICE_ROLE_KEY: supabase.serviceRoleKey,
     API_PUBLIC_URL: API,
     WEB_ORIGIN: WEB,
     AUTH_RATE_LIMIT: "1000",
@@ -27,10 +28,10 @@ beforeAll(async () => {
   app = createApp();
 });
 
-afterAll(() => supabase.close());
+afterAll(() => supabase?.close());
 
 let n = 0;
-const newEmail = () => `user${++n}@example.com`;
+const newEmail = () => uniqueEmail(`user${++n}`);
 
 const signup = (email: string, password = PASSWORD, name = "Priya") =>
   request(app).post("/api/auth/signup").send({ email, password, name });
@@ -39,8 +40,8 @@ const login = (email: string, password = PASSWORD) =>
   request(app).post("/api/auth/login").send({ email, password });
 
 // Follows the emailed link through our backend, as a browser would.
-async function verify(email: string) {
-  const link = new URL(supabase.verificationLink(email));
+async function verify(email: string, count?: number) {
+  const link = new URL(await supabase.verificationLink(email, count));
   return request(app).get(`${link.pathname}${link.search}`);
 }
 
@@ -59,18 +60,20 @@ describe("POST /api/auth/signup", () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({ message: "Check your email to verify your account." });
-    expect(supabase.outbox.at(-1)).toMatchObject({ to: email, redirectTo: `${API}/api/auth/verify` });
+    expect(await supabase.verificationLink(email)).toMatch(`${API}/api/auth/verify?token_hash=`);
   });
 
   it("normalises the email before sending it to Supabase", async () => {
-    const res = await signup("  Mixed.Case@Example.COM ");
+    const email = uniqueEmail("mixed.case");
+    const res = await signup(`  ${email.replace("mixed.case", "Mixed.Case").replace("example.com", "Example.COM")} `);
     expect(res.status).toBe(201);
-    expect(supabase.outbox.at(-1)?.to).toBe("mixed.case@example.com");
+    expect(await supabase.verificationLinks(email)).toHaveLength(1);
   });
 
   it("gives the same reply for an already registered email", async () => {
-    const { user } = await verifiedSession("taken@example.com");
-    const res = await signup("taken@example.com", `${PASSWORD}-other`);
+    const email = uniqueEmail("taken");
+    const { user } = await verifiedSession(email);
+    const res = await signup(email, `${PASSWORD}-other`);
 
     expect(user.id).toBeTruthy();
     expect(res.status).toBe(201);
@@ -114,7 +117,7 @@ describe("GET /api/auth/verify", () => {
   it("reports an expired link", async () => {
     const email = newEmail();
     await signup(email);
-    supabase.expireVerificationTokens();
+    await supabase.expireVerificationLink(email);
     const res = await verify(email);
 
     expect(res.headers.location).toBe(`${WEB}/login?verified=0&error=expired_link`);
@@ -132,17 +135,17 @@ describe("POST /api/auth/resend-verification", () => {
   it("sends a fresh link that works", async () => {
     const email = newEmail();
     await signup(email);
-    supabase.expireVerificationTokens();
+    await supabase.expireVerificationLink(email);
 
     const res = await request(app).post("/api/auth/resend-verification").send({ email });
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/sent a new email/);
 
-    expect((await verify(email)).headers.location).toBe(`${WEB}/login?verified=1`);
+    expect((await verify(email, 2)).headers.location).toBe(`${WEB}/login?verified=1`);
   });
 
   it("gives the same reply for unknown emails", async () => {
-    const res = await request(app).post("/api/auth/resend-verification").send({ email: "ghost@example.com" });
+    const res = await request(app).post("/api/auth/resend-verification").send({ email: uniqueEmail("ghost") });
     expect(res.status).toBe(200);
   });
 });
@@ -176,7 +179,7 @@ describe("POST /api/auth/login", () => {
     const email = newEmail();
     await verifiedSession(email);
 
-    for (const res of [await login(email, `${PASSWORD}-wrong`), await login("nobody@example.com")]) {
+    for (const res of [await login(email, `${PASSWORD}-wrong`), await login(uniqueEmail("nobody"))]) {
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ error: "Invalid email or password" });
     }
@@ -201,10 +204,18 @@ describe("authenticated session", () => {
     const res = await request(app).post("/api/auth/refresh").send({ refresh_token: session.refresh_token });
     expect(res.status).toBe(200);
     expect(res.body.access_token).not.toBe(session.access_token);
+    expect(res.body.refresh_token).not.toBe(session.refresh_token);
     expect(res.body.user).toEqual(session.user);
 
+    // Supabase accepts the old refresh token for a few seconds (refresh_token_reuse_interval), so two
+    // tabs refreshing at once both stay logged in. Logging out ends it for good (see the logout test).
     const reused = await request(app).post("/api/auth/refresh").send({ refresh_token: session.refresh_token });
-    expect(reused.status).toBe(401);
+    expect(reused.status).toBe(200);
+  });
+
+  it("POST /refresh refuses an unknown refresh token", async () => {
+    const res = await request(app).post("/api/auth/refresh").send({ refresh_token: "not-a-real-token" });
+    expect(res.status).toBe(401);
   });
 
   it("POST /logout revokes the session", async () => {
@@ -259,7 +270,7 @@ describe("room creation authorization", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.id).toMatch(/^[\w-]{8}$/);
-    expect(supabase.rows("rooms").find((r) => r.id === res.body.id)).toMatchObject({
+    expect(await supabase.room(res.body.id)).toMatchObject({
       kind: "link",
       title: "Notes",
       created_by: session.user.id,
@@ -272,11 +283,11 @@ describe("room creation authorization", () => {
     const res = await request(app)
       .post("/api/rooms/pdf")
       .set("Authorization", `Bearer ${session.access_token}`)
-      .attach("file", Buffer.from("%PDF-1.4 fake"), { filename: "paper.pdf", contentType: "application/pdf" });
+      .attach("file", Buffer.from("%PDF-1.4 test"), { filename: "paper.pdf", contentType: "application/pdf" });
 
     expect(res.status).toBe(201);
-    expect(supabase.objects.get(`pdfs/${res.body.id}.pdf`)).toBeDefined();
-    expect(supabase.rows("rooms").find((r) => r.id === res.body.id)).toMatchObject({
+    expect(await (await supabase.pdf(`${res.body.id}.pdf`))?.text()).toBe("%PDF-1.4 test");
+    expect(await supabase.room(res.body.id)).toMatchObject({
       kind: "pdf",
       title: "paper.pdf",
       created_by: session.user.id,
