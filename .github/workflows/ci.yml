@@ -45,10 +45,11 @@ jobs:
       - run: npm ci
       - run: npm run test:unit
 
-  integration:
-    name: Integration tests
+  # Database (pgTAP), integration and e2e tests share one real local Supabase, started once.
+  supabase:
+    name: Database, integration and e2e tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -56,21 +57,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm run test:integration
-
-  e2e:
-    name: E2E tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - run: npm ci
+      # The Supabase CLI comes from devDependencies. Applies supabase/migrations and supabase/config.toml.
+      # Services the tests don't use are skipped to start faster.
+      - run: npx supabase start -x realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      - name: Database tests (RLS)
+        run: npm run test:db
+      - name: Integration tests
+        run: npm run test:integration
       # Builds the backend, starts dist/index.js in production mode and runs the account journey.
-      - run: npm run test:e2e
+      - name: E2E tests
+        run: npm run test:e2e
 
   build:
     name: Build
@@ -106,7 +102,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [lint-typecheck, unit, integration, e2e, build, ai]
+    needs: [lint-typecheck, unit, supabase, build, ai]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')

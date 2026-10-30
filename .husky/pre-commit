@@ -1,0 +1,1 @@
+npx turbo run lint typecheck --filter='[HEAD]' --ui=stream
