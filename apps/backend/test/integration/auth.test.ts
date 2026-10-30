@@ -217,6 +217,28 @@ describe("authenticated session", () => {
     expect(refresh.status).toBe(401);
   });
 
+  it("POST /logout reports a failed revoke with 502 so the client can retry", async () => {
+    const session = await verifiedSession();
+    const auth = `Bearer ${session.access_token}`;
+    supabase.failNext("POST /auth/v1/logout", 500, "unexpected_failure");
+
+    const failed = await request(app).post("/api/auth/logout").set("Authorization", auth);
+    expect(failed.status).toBe(502);
+    expect(failed.body).toEqual({ error: "Could not log out. Please try again." });
+
+    // The session was not revoked, so the retry succeeds and then revokes it.
+    expect((await request(app).post("/api/auth/logout").set("Authorization", auth)).status).toBe(204);
+    expect((await request(app).get("/api/auth/me").set("Authorization", auth)).status).toBe(401);
+  });
+
+  it("POST /logout treats an already-ended session as logged out", async () => {
+    const session = await verifiedSession();
+    supabase.failNext("POST /auth/v1/logout", 404, "session_not_found");
+
+    const res = await request(app).post("/api/auth/logout").set("Authorization", `Bearer ${session.access_token}`);
+    expect(res.status).toBe(204);
+  });
+
   it("POST /logout needs a token", async () => {
     expect((await request(app).post("/api/auth/logout")).status).toBe(401);
   });

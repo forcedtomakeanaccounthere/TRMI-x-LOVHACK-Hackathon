@@ -4,6 +4,7 @@ import {
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
   LoginRequest,
+  NewHighlight,
   NewComment,
   RefreshRequest,
   ResendVerificationRequest,
@@ -112,6 +113,37 @@ describe("room contracts", () => {
   it("CreateTextRoomRequest limits title and text", () => {
     expect(CreateTextRoomRequest.safeParse({ text: "" }).success).toBe(false);
     expect(CreateTextRoomRequest.safeParse({ text: "x", title: "t".repeat(201) }).success).toBe(false);
+  });
+
+  describe("NewHighlight (matches the database checks)", () => {
+    const highlight = {
+      room_id: "abcd1234",
+      block_id: "b3",
+      start_offset: 4,
+      end_offset: 10,
+      quote: "x".repeat(1000),
+      author_name: "Priya",
+      author_color: "#3b82f6",
+    };
+
+    it("accepts a quote of up to 1000 chars", () => {
+      expect(NewHighlight.safeParse(highlight).success).toBe(true);
+    });
+
+    it("rejects a quote over 1000 chars", () => {
+      expect(NewHighlight.safeParse({ ...highlight, quote: "x".repeat(1001) }).success).toBe(false);
+    });
+
+    it("accepts an empty range but rejects end before start", () => {
+      expect(NewHighlight.safeParse({ ...highlight, end_offset: 4 }).success).toBe(true);
+      const result = NewHighlight.safeParse({ ...highlight, end_offset: 3 });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.path).toEqual(["end_offset"]);
+    });
+
+    it("rejects an author name over 40 chars", () => {
+      expect(NewHighlight.safeParse({ ...highlight, author_name: "x".repeat(41) }).success).toBe(false);
+    });
   });
 
   it("NewComment limits the body to 2000 chars", () => {

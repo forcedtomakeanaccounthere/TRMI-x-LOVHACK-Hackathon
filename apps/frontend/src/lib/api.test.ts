@@ -66,6 +66,18 @@ describe("api.auth", () => {
     expect(lastCall().headers.get("Authorization")).toBe("Bearer tok");
   });
 
+  it("logout rejects when the backend could not revoke the session", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Could not log out. Please try again." }), { status: 502 }),
+    );
+    await expect(api.auth.logout("tok")).rejects.toThrow("Could not log out. Please try again.");
+  });
+
+  it("logout rejects an expired token", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "Not authenticated" }), { status: 401 }));
+    await expect(api.auth.logout("tok")).rejects.toThrow("Not authenticated");
+  });
+
   it("resendVerification posts the email", async () => {
     await api.auth.resendVerification("a@b.co");
     expect(JSON.parse(lastCall().init.body as string)).toEqual({ email: "a@b.co" });

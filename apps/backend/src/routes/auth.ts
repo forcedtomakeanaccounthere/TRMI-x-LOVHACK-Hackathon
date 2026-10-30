@@ -6,7 +6,7 @@ import {
   type AuthSession,
   type MessageResponse,
 } from "@linkroom/shared";
-import type { AuthError, Session } from "@supabase/supabase-js";
+import { isAuthSessionMissingError, type AuthError, type Session } from "@supabase/supabase-js";
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -137,7 +137,12 @@ authRouter.post("/refresh", async (req, res) => {
 // POST /api/auth/logout  (Bearer token): revokes the session's refresh tokens.
 authRouter.post("/logout", requireAuth, async (req, res) => {
   const { error } = await supabaseAdmin().auth.admin.signOut(req.accessToken!, "local");
-  if (error) console.warn("[auth] logout failed", error.code ?? error.message);
+  // A session that is already gone counts as logged out. Any other failure means the
+  // refresh token may still work, so report it and let the client retry.
+  if (error && !isAuthSessionMissingError(error)) {
+    console.warn("[auth] logout failed", error.code ?? error.message);
+    throw new HttpError(502, "Could not log out. Please try again.");
+  }
   res.status(204).end();
 });
 

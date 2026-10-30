@@ -22,16 +22,22 @@ export const Author = z.object({
   author_color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
-export const NewHighlight = Author.extend({
+// Limits match the check constraints in supabase/migrations/0002_auth_and_phase1.sql.
+const HighlightFields = Author.extend({
   room_id: z.string(),
   block_id: z.string(), // link: "b12" | pdf: "p3"
   start_offset: z.number().int().nonnegative(),
   end_offset: z.number().int().nonnegative(),
-  quote: z.string().min(1),
+  quote: z.string().min(1).max(1000),
+});
+
+export const NewHighlight = HighlightFields.refine((h) => h.end_offset >= h.start_offset, {
+  message: "end_offset must not be before start_offset",
+  path: ["end_offset"],
 });
 export type NewHighlight = z.infer<typeof NewHighlight>;
 
-export const Highlight = NewHighlight.extend({
+export const Highlight = HighlightFields.extend({
   id: z.string().uuid(),
   created_at: z.string(),
 });

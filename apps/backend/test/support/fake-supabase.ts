@@ -29,6 +29,8 @@ export async function startFakeSupabase() {
   const outbox: SentEmail[] = [];
   const tables = new Map<string, Record<string, unknown>[]>();
   const objects = new Map<string, { contentType: string; size: number }>();
+  // One-shot injected failures, keyed by "METHOD /path".
+  const failures = new Map<string, { status: number; code: string }>();
 
   const userById = (id: string) => [...users.values()].find((u) => u.id === id);
 
@@ -88,6 +90,12 @@ export async function startFakeSupabase() {
     const isJson = req.headers["content-type"]?.includes("application/json");
     const body = isJson && raw.length ? JSON.parse(raw.toString()) : {};
     const route = `${req.method} ${url.pathname}`;
+
+    const failure = failures.get(route);
+    if (failure) {
+      failures.delete(route);
+      return authError(res, failure.status, failure.code, `fake-supabase: injected ${failure.code}`);
+    }
 
     // --- GoTrue ---
     if (route === "POST /auth/v1/signup") {
@@ -204,6 +212,10 @@ export async function startFakeSupabase() {
       const mail = [...outbox].reverse().find((m) => m.to === email);
       if (!mail) throw new Error(`no verification email sent to ${email}`);
       return `${mail.redirectTo}?token_hash=${mail.tokenHash}&type=email`;
+    },
+    // Makes the next request to `route` (e.g. "POST /auth/v1/logout") fail once.
+    failNext(route: string, status: number, code: string) {
+      failures.set(route, { status, code });
     },
     expireVerificationTokens() {
       for (const entry of verifyTokens.values()) entry.expired = true;

@@ -42,11 +42,9 @@ export const api = {
 
     me: (token: string) => request<AuthUser>("/api/auth/me", { method: "GET" }, token),
 
+    // 204 on success; rejects if the backend could not revoke the session, so callers can retry.
     logout: (token: string) =>
-      fetch(`${API_URL}/api/auth/logout`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(() => undefined),
+      request<unknown>("/api/auth/logout", { method: "POST" }, token).then(() => undefined),
   },
 
   createLinkRoom: (data: CreateLinkRoomRequest, token: string) =>
