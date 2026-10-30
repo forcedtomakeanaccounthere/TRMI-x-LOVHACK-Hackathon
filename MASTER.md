@@ -123,7 +123,8 @@ One Next.js app on Vercel plus one Supabase project. There is no separate backen
 | Hosting | **Vercel** | Deploys on every push to `main` |
 
 ```bash
-npx create-next-app@latest linkroom --ts --tailwind --app --eslint
+# run from the repo root so the app lives at the root, not in a subfolder
+npx create-next-app@latest . --ts --tailwind --app --eslint
 npx shadcn@latest init
 npm i @supabase/supabase-js @mozilla/readability jsdom isomorphic-dompurify react-pdf @anthropic-ai/sdk zod nanoid framer-motion qrcode.react
 ```
