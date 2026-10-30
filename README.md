@@ -27,17 +27,19 @@ Cursors, scroll and reactions go browser to browser over Supabase Realtime. High
 
 ## Setup
 
-Requirements: Node 20+, Python 3.12+, [uv](https://docs.astral.sh/uv/), and [Docker](https://docs.docker.com/get-docker/) for the local Supabase used by the tests.
+**To run locally, follow [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).** It uses a local Supabase in Docker and checks each step.
+
+To use a cloud Supabase project instead, requirements are Node 20+, Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
 npm install              # all JS workspaces
 npm run setup:ai         # Python deps for apps/ai
 
-cp .env.example .env                                   # backend + ai
-cp apps/frontend/.env.example apps/frontend/.env.local # frontend
+cp .env.example .env                                     # backend + ai
+grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local     # frontend, after filling in .env
 ```
 
-Run the files in [supabase/migrations](supabase/migrations) in order (`0001`, then `0002`) in the Supabase SQL editor, then fill in the env files.
+Run the files in [supabase/migrations](supabase/migrations) in order (`0001`, then `0002`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
 
 ### Supabase Auth (email verification)
 
