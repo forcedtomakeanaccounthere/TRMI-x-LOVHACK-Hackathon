@@ -1,0 +1,27 @@
+{
+  "name": "linkroom",
+  "private": true,
+  "packageManager": "npm@11.8.0",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend",
+    "apps/ai",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:frontend": "turbo run dev --filter=@linkroom/frontend",
+    "dev:backend": "turbo run dev --filter=@linkroom/backend",
+    "dev:ai": "turbo run dev --filter=@linkroom/ai",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "setup:ai": "cd apps/ai && uv sync"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
