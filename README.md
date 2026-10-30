@@ -91,6 +91,8 @@ npm run supabase:stop
 
 ## API
 
+Interactive docs are generated when each service starts: backend at http://localhost:4000/docs (`/openapi.json`), AI service at http://localhost:8000/docs.
+
 | Method | Path | Service |
 | --- | --- | --- |
 | `GET` | `/health` | backend, ai |
