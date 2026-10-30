@@ -37,7 +37,14 @@ cp .env.example .env                                   # backend + ai
 cp apps/frontend/.env.example apps/frontend/.env.local # frontend
 ```
 
-Run [supabase/migrations/0001_init.sql](supabase/migrations/0001_init.sql) in the Supabase SQL editor, then fill in the env files.
+Run the files in [supabase/migrations](supabase/migrations) in order (`0001`, then `0002`) in the Supabase SQL editor, then fill in the env files.
+
+### Supabase Auth (email verification)
+
+1. **Auth → Providers → Email**: turn on **Confirm email**; minimum password length 8.
+2. **Auth → URL Configuration**: Site URL = the frontend URL. Add `http://localhost:4000/api/auth/verify` and `<production backend>/api/auth/verify` to **Redirect URLs**.
+3. **Auth → Email Templates → Confirm signup**: make the link `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email`.
+4. **Auth → SMTP**: the built-in sender only mails project team members and is heavily rate-limited; set up custom SMTP (for example Resend) before the demo.
 
 ## Scripts
 
@@ -54,8 +61,17 @@ Run [supabase/migrations/0001_init.sql](supabase/migrations/0001_init.sql) in th
 | Method | Path | Service |
 | --- | --- | --- |
 | `GET` | `/health` | backend, ai |
-| `POST` | `/api/rooms/link` `{ url }` | backend |
-| `POST` | `/api/rooms/text` `{ title?, text }` | backend |
-| `POST` | `/api/rooms/pdf` multipart `file` | backend |
+| `POST` | `/api/auth/signup` `{ email, password, name }` | backend: sends a verification email |
+| `GET` | `/api/auth/verify?token_hash&type` | backend: email link target, redirects to `WEB_ORIGIN/login?verified=1` |
+| `POST` | `/api/auth/resend-verification` `{ email }` | backend |
+| `POST` | `/api/auth/login` `{ email, password }` | backend: returns `{ access_token, refresh_token, expires_at, user }`; 403 if unverified |
+| `POST` | `/api/auth/refresh` `{ refresh_token }` | backend |
+| `POST` | `/api/auth/logout` 🔒 | backend |
+| `GET` | `/api/auth/me` 🔒 | backend |
+| `POST` | `/api/rooms/link` `{ url }` 🔒 | backend |
+| `POST` | `/api/rooms/text` `{ title?, text }` 🔒 | backend |
+| `POST` | `/api/rooms/pdf` multipart `file` 🔒 | backend |
 | `POST` | `/api/rooms/:id/recap` | backend → ai |
 | `POST` | `/recap` | ai (internal) |
+
+🔒 = needs `Authorization: Bearer <access_token>` from a verified account. Joining and reading rooms needs no login. Signup, login and resend share a limit of 10 requests per 15 minutes per IP.

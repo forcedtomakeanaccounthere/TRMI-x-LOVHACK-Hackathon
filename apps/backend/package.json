@@ -15,6 +15,7 @@
     "@supabase/supabase-js": "^2.57.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.7.2",
     "helmet": "^8.1.0",
     "isomorphic-dompurify": "^2.26.0",
     "jsdom": "^26.1.0",

@@ -12,6 +12,7 @@ export const Room = z.object({
   title: z.string().nullable(),
   content_html: z.string().nullable(),
   pdf_path: z.string().nullable(),
+  created_by: z.string().uuid().nullable(), // auth.users id of the creator
   created_at: z.string(),
 });
 export type Room = z.infer<typeof Room>;
@@ -83,6 +84,47 @@ export type CreateTextRoomRequest = z.infer<typeof CreateTextRoomRequest>;
 
 export const CreateRoomResponse = z.object({ id: z.string() });
 export type CreateRoomResponse = z.infer<typeof CreateRoomResponse>;
+
+// --- Auth (apps/backend /api/auth) ---
+
+const Email = z.string().trim().toLowerCase().email().max(254);
+
+export const SignupRequest = z.object({
+  email: Email,
+  password: z.string().min(8, "Password must be at least 8 characters").max(72),
+  name: z.string().trim().min(1).max(40),
+});
+export type SignupRequest = z.infer<typeof SignupRequest>;
+
+export const LoginRequest = z.object({
+  email: Email,
+  password: z.string().min(1).max(72),
+});
+export type LoginRequest = z.infer<typeof LoginRequest>;
+
+export const ResendVerificationRequest = z.object({ email: Email });
+export type ResendVerificationRequest = z.infer<typeof ResendVerificationRequest>;
+
+export const RefreshRequest = z.object({ refresh_token: z.string().min(1) });
+export type RefreshRequest = z.infer<typeof RefreshRequest>;
+
+export const AuthUser = z.object({
+  id: z.string().uuid(),
+  email: z.string(),
+  name: z.string(),
+});
+export type AuthUser = z.infer<typeof AuthUser>;
+
+export const AuthSession = z.object({
+  access_token: z.string(),
+  refresh_token: z.string(),
+  expires_at: z.number(), // unix seconds
+  user: AuthUser,
+});
+export type AuthSession = z.infer<typeof AuthSession>;
+
+export const MessageResponse = z.object({ message: z.string() });
+export type MessageResponse = z.infer<typeof MessageResponse>;
 
 export const ApiError = z.object({ error: z.string() });
 export type ApiError = z.infer<typeof ApiError>;

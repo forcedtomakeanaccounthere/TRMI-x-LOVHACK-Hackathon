@@ -66,23 +66,33 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 - [ ] Read the official rules and judging criteria at kickoff; update MASTER.md if anything changes
 - [ ] Confirm the Devpost submission fields
 
+The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (Express, all `/api/*` routes), `apps/ai` (FastAPI recap), `packages/shared` (zod contracts). Items marked *(in repo)* are written; tick them once they are merged and work on the deployed URL.
+
 **OPS**
-- [ ] `create-next-app` with TypeScript, Tailwind, App Router and ESLint in the repo root
-- [ ] `shadcn init`; add components: button, input, dialog, popover, tooltip, tabs, sheet, sonner (toasts), avatar, skeleton, scroll-area
-- [ ] Install packages: `@supabase/supabase-js @mozilla/readability jsdom isomorphic-dompurify react-pdf @anthropic-ai/sdk zod nanoid framer-motion qrcode.react`
-- [ ] `.env.local` with `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`
-- [ ] `.env.example` committed with empty values; `.env.local` is in `.gitignore`
-- [ ] Connect the repo to Vercel and add the same env vars there
+- [ ] Monorepo scaffold: frontend, backend, ai, shared, turbo scripts *(in repo)*
+- [ ] `shadcn init` in `apps/frontend`; add components: button, input, dialog, popover, tooltip, tabs, sheet, sonner (toasts), avatar, skeleton, scroll-area
+- [ ] Root `.env` from `.env.example` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `API_PUBLIC_URL`, `WEB_ORIGIN`, `AI_SERVICE_URL`, `ANTHROPIC_API_KEY`) and `apps/frontend/.env.local` (`NEXT_PUBLIC_*`); both gitignored *(example in repo)*
+- [ ] Backend validates env at boot and refuses to start in production without Supabase keys *(in repo)*
+- [ ] Deploy frontend to Vercel, backend and ai to a Node/Python host; add the same env vars there
 - [ ] First deploy succeeds
 
 **BE**
 - [ ] Create the Supabase project (region closest to the team, e.g. Mumbai)
-- [ ] `supabase/schema.sql` with tables `rooms`, `highlights`, `comments`, `recaps` (schema in the implementation plan)
-- [ ] Run the schema in the Supabase SQL editor
-- [ ] Add `highlights`, `comments`, `recaps` to the `supabase_realtime` publication
-- [ ] RLS: enable on all tables; allow anonymous `select` on all; allow anonymous `insert` on `highlights` and `comments` only
-- [ ] Create a `pdfs` storage bucket (public read, 20 MB limit, `application/pdf` only)
-- [ ] `lib/supabase/client.ts` (browser, anon key) and `lib/supabase/admin.ts` (server, service role key, never imported in client code)
+- [ ] Run `supabase/migrations/0001_init.sql` then `0002_auth_and_phase1.sql` in the SQL editor *(in repo)*
+  - tables `rooms`, `highlights`, `comments`, `recaps`; realtime publication; RLS (public select, anonymous insert on highlights and comments only)
+  - `pdfs` bucket: public read, 20 MB limit, `application/pdf` only
+  - length checks: quote ≤ 1,000, comment body ≤ 2,000, author name ≤ 40
+  - `rooms.created_by` → `auth.users`
+- [ ] `apps/backend/src/lib/supabase.ts`: `supabaseAdmin()` (service role, server only) and `supabaseAuth()` (anon key, fresh per request) *(in repo)*
+- [ ] `apps/frontend/src/lib/supabase.ts`: browser client with the anon key *(in repo)*
+
+**BE: Auth (signup, login, email verification)**
+- [ ] `POST /api/auth/signup` sends a verification email; same reply for existing emails *(in repo)*
+- [ ] `GET /api/auth/verify` (email link target) verifies, then redirects to `WEB_ORIGIN/login?verified=1|0` *(in repo)*
+- [ ] `POST /api/auth/resend-verification`, `/login` (403 until verified), `/refresh`, `/logout`; `GET /api/auth/me` *(in repo)*
+- [ ] `requireAuth` middleware (Bearer token, verified email) on room creation (`/api/rooms/link`, `/text`, `/pdf`); joining and reading rooms stays login-free *(in repo)*
+- [ ] Rate limit: 10 auth requests per 15 min per IP *(in repo)*
+- [ ] Supabase dashboard: Confirm email ON; redirect URLs include `<backend>/api/auth/verify`; "Confirm signup" template link = `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email`; custom SMTP (e.g. Resend)
 
 **FE**
 - [ ] Fonts with `next/font`: Inter, Source Serif 4, JetBrains Mono
@@ -93,7 +103,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 **QA**
 - [ ] Live Vercel URL loads in light and dark mode
 
-**Done when:** the live Vercel URL loads and Supabase tables exist.
+**Done when:** the live Vercel URL loads, Supabase tables exist, and a new account can sign up, verify by email and log in.
 
 ---
 
