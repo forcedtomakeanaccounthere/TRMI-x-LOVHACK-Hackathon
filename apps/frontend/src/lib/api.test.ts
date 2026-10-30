@@ -20,14 +20,14 @@ const lastCall = () => {
 
 describe("api.auth", () => {
   it("signup posts JSON without a token", async () => {
-    await api.auth.signup({ email: "a@b.co", password: "12345678", name: "A" });
+    await api.auth.signup({ email: "a@b.co", password: "x".repeat(8), name: "A" });
     const { url, init, headers } = lastCall();
 
     expect(url).toBe("http://localhost:4000/api/auth/signup");
     expect(init.method).toBe("POST");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.has("Authorization")).toBe(false);
-    expect(JSON.parse(init.body as string)).toEqual({ email: "a@b.co", password: "12345678", name: "A" });
+    expect(JSON.parse(init.body as string)).toEqual({ email: "a@b.co", password: "x".repeat(8), name: "A" });
   });
 
   it("login returns the session", async () => {

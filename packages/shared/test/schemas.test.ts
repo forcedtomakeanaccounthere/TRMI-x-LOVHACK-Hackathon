@@ -12,7 +12,7 @@ import {
 } from "../src";
 
 describe("SignupRequest", () => {
-  const valid = { email: "priya@example.com", password: "12345678", name: "Priya" };
+  const valid = { email: "priya@example.com", password: "x".repeat(8), name: "Priya" };
 
   it("accepts a valid signup", () => {
     expect(SignupRequest.parse(valid)).toEqual(valid);
@@ -31,7 +31,7 @@ describe("SignupRequest", () => {
 
   it.each([
     ["email is not an email", { email: "priya" }],
-    ["password is 7 chars", { password: "1234567" }],
+    ["password is 7 chars", { password: "x".repeat(7) }],
     ["password is over 72 chars (bcrypt limit)", { password: "x".repeat(73) }],
     ["name is blank", { name: "   " }],
     ["name is over 40 chars", { name: "x".repeat(41) }],

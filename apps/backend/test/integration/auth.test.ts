@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -8,7 +9,8 @@ let app: Express;
 
 const API = "http://api.test";
 const WEB = "http://web.test";
-const PASSWORD = "correct horse battery";
+// Generated per run: these only reach the fake Supabase server.
+const PASSWORD = randomBytes(12).toString("base64url");
 
 beforeAll(async () => {
   supabase = await startFakeSupabase();
@@ -68,7 +70,7 @@ describe("POST /api/auth/signup", () => {
 
   it("gives the same reply for an already registered email", async () => {
     const { user } = await verifiedSession("taken@example.com");
-    const res = await signup("taken@example.com", "another password");
+    const res = await signup("taken@example.com", `${PASSWORD}-other`);
 
     expect(user.id).toBeTruthy();
     expect(res.status).toBe(201);
@@ -174,7 +176,7 @@ describe("POST /api/auth/login", () => {
     const email = newEmail();
     await verifiedSession(email);
 
-    for (const res of [await login(email, "wrong password"), await login("nobody@example.com")]) {
+    for (const res of [await login(email, `${PASSWORD}-wrong`), await login("nobody@example.com")]) {
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ error: "Invalid email or password" });
     }

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -80,7 +81,7 @@ const get = (path: string, token?: string) =>
 
 describe("account journey against the production build", () => {
   const email = "e2e.user@example.com";
-  const password = "a long enough password";
+  const password = randomBytes(12).toString("base64url"); // only reaches the fake Supabase
 
   it("signs up, verifies by email, logs in, creates a room and logs out", async () => {
     // 1. Sign up: a verification email is sent, no session yet.
@@ -139,7 +140,7 @@ describe("account journey against the production build", () => {
     // so 7 more get through and the rest are blocked.
     const statuses: number[] = [];
     for (let i = 0; i < 9; i++) {
-      statuses.push((await post("/api/auth/login", { email, password: "wrong password" })).status);
+      statuses.push((await post("/api/auth/login", { email, password: `${password}-wrong` })).status);
     }
     expect(statuses).toEqual([401, 401, 401, 401, 401, 401, 401, 429, 429]);
 
