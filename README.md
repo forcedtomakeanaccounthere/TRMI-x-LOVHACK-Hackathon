@@ -66,7 +66,7 @@ All JS tests use [Vitest](https://vitest.dev). None of them need a real Supabase
 | --- | --- | --- |
 | Unit | `apps/backend/test/unit`, `packages/shared/test`, `apps/frontend/src/**/*.test.ts` | URL checks, HTML extraction and escaping, auth middleware, env validation, zod contracts, the frontend API client |
 | Integration | `apps/backend/test/integration` | The Express app in-process (supertest) against a fake Supabase server: every `/api/auth` route, email verification links, and the auth checks on room creation |
-| E2E | `apps/backend/test/e2e` | Starts the built `dist/index.js` in production mode as its own process: signup → verify by email → login → create a room → refresh → logout, plus rate limiting |
+| E2E | `apps/backend/test/e2e` | Starts the built `dist/index.js` in production mode as its own process and runs user stories over HTTP: new user (signup → verify → login → room → refresh → logout), returning user (login → text and PDF rooms → logout → login again), lost email (link expires → resend → verify → login), taken email (re-signup can't take over an account), plus the default rate limit |
 
 `apps/backend/test/support/fake-supabase.ts` is an in-memory stand-in for the Supabase auth, database and storage HTTP APIs, so the real `supabase-js` client is exercised. Its `outbox` records the verification emails Supabase would send.
 

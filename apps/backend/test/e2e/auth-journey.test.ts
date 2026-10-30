@@ -1,151 +1,203 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startFakeSupabase, type FakeSupabase } from "../support/fake-supabase";
+import { startBackend, WEB, type Backend } from "../support/backend-process";
 
-// Runs the production build (`npm run build`) as a separate process, the way it is deployed,
-// with the default auth rate limit, and walks through the whole account journey over HTTP.
+// User stories run against the production build as a separate process, over HTTP.
+// Passwords are generated per run: they only ever reach the fake Supabase.
+const newPassword = () => randomBytes(12).toString("base64url");
 
-const DIST = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
-const WEB = "http://web.e2e";
+type Session = { access_token: string; refresh_token: string; user: { id: string; email: string; name: string } };
 
-let supabase: FakeSupabase;
-let server: ChildProcess;
-let api: string;
-let logs = "";
-
-async function freePort() {
-  const srv = createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const { port } = srv.address() as AddressInfo;
-  await new Promise((resolve) => srv.close(resolve));
-  return port;
+// Shared steps, so each story reads as the user's actions.
+async function signUpAndVerify(be: Backend, email: string, password: string, name: string) {
+  expect((await be.post("/api/auth/signup", { email, password, name })).status).toBe(201);
+  const click = await be.clickVerificationLink(email);
+  expect(click.headers.get("location")).toBe(`${WEB}/login?verified=1`);
 }
 
-async function waitForHealth(url: string, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (server.exitCode !== null) throw new Error(`backend exited early:\n${logs}`);
-    try {
-      if ((await fetch(`${url}/health`)).ok) return;
-    } catch {
-      // not listening yet
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`backend did not start:\n${logs}`);
+async function logIn(be: Backend, email: string, password: string): Promise<Session> {
+  const res = await be.post("/api/auth/login", { email, password });
+  expect(res.status).toBe(200);
+  return res.json();
 }
 
-beforeAll(async () => {
-  if (!existsSync(DIST)) throw new Error("dist/index.js is missing: run `npm run build` first");
+async function createTextRoom(be: Backend, token: string, title: string) {
+  const res = await be.post("/api/rooms/text", { title, text: "para one\n\npara two" }, token);
+  expect(res.status).toBe(201);
+  const { id } = (await res.json()) as { id: string };
+  return be.supabase.rows("rooms").find((r) => r.id === id);
+}
 
-  supabase = await startFakeSupabase();
-  const port = await freePort();
-  api = `http://127.0.0.1:${port}`;
+describe("user stories (production build)", () => {
+  let be: Backend;
 
-  server = spawn(process.execPath, [DIST], {
-    env: {
-      PATH: process.env.PATH,
-      NODE_ENV: "production",
-      SERVER_PORT: String(port),
-      WEB_ORIGIN: WEB,
-      API_PUBLIC_URL: api,
-      SUPABASE_URL: supabase.url,
-      SUPABASE_ANON_KEY: "anon-key",
-      SUPABASE_SERVICE_ROLE_KEY: "service-key",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
+  // A high limit so the stories don't trip each other; the default limit is tested below.
+  beforeAll(async () => {
+    be = await startBackend({ AUTH_RATE_LIMIT: "100" });
   });
-  server.stdout?.on("data", (d) => (logs += d));
-  server.stderr?.on("data", (d) => (logs += d));
-  await waitForHealth(api);
-});
+  afterAll(() => be?.stop());
 
-afterAll(async () => {
-  server?.kill();
-  await supabase?.close();
-});
+  it("new user: sign up → verify by email → log in → create a room → log out", async () => {
+    const email = "new.user@example.com";
+    const password = newPassword();
 
-const post = (path: string, body: unknown, token?: string) =>
-  fetch(`${api}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(token && { Authorization: `Bearer ${token}` }) },
-    body: JSON.stringify(body),
-  });
-
-const get = (path: string, token?: string) =>
-  fetch(`${api}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-
-describe("account journey against the production build", () => {
-  const email = "e2e.user@example.com";
-  const password = randomBytes(12).toString("base64url"); // only reaches the fake Supabase
-
-  it("signs up, verifies by email, logs in, creates a room and logs out", async () => {
     // 1. Sign up: a verification email is sent, no session yet.
-    const signup = await post("/api/auth/signup", { email, password, name: "E2E User" });
+    const signup = await be.post("/api/auth/signup", { email, password, name: "New User" });
     expect(signup.status).toBe(201);
-    expect(supabase.outbox).toHaveLength(1);
+    expect(be.supabase.outbox.filter((m) => m.to === email)).toHaveLength(1);
 
     // 2. Logging in before verifying is refused.
-    expect((await post("/api/auth/login", { email, password })).status).toBe(403);
+    expect((await be.post("/api/auth/login", { email, password })).status).toBe(403);
 
     // 3. Room creation is refused without an account.
-    expect((await post("/api/rooms/text", { text: "hello" })).status).toBe(401);
+    expect((await be.post("/api/rooms/text", { text: "hello" })).status).toBe(401);
 
     // 4. Clicking the emailed link verifies the account and lands on the frontend login page.
-    const link = supabase.verificationLink(email);
-    expect(link.startsWith(`${api}/api/auth/verify?`)).toBe(true);
-    const verify = await fetch(link, { redirect: "manual" });
+    expect(be.supabase.verificationLink(email).startsWith(`${be.api}/api/auth/verify?`)).toBe(true);
+    const verify = await be.clickVerificationLink(email);
     expect(verify.status).toBe(302);
     expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
 
     // 5. Log in.
-    const login = await post("/api/auth/login", { email, password });
-    expect(login.status).toBe(200);
-    const session = await login.json();
-    expect(session.user).toMatchObject({ email, name: "E2E User" });
+    const session = await logIn(be, email, password);
+    expect(session.user).toMatchObject({ email, name: "New User" });
 
     // 6. Who am I.
-    const me = await get("/api/auth/me", session.access_token);
-    expect(await me.json()).toEqual(session.user);
+    expect(await (await be.get("/api/auth/me", session.access_token)).json()).toEqual(session.user);
 
     // 7. Create a room as the logged-in user.
-    const room = await post("/api/rooms/text", { title: "E2E", text: "para one\n\npara two" }, session.access_token);
-    expect(room.status).toBe(201);
-    const { id } = await room.json();
-    expect(supabase.rows("rooms").find((r) => r.id === id)?.created_by).toBe(session.user.id);
+    expect((await createTextRoom(be, session.access_token, "First room"))?.created_by).toBe(session.user.id);
 
     // 8. Refresh, then log out with the new token.
-    const refreshed = await (await post("/api/auth/refresh", { refresh_token: session.refresh_token })).json();
+    const refreshed = await (await be.post("/api/auth/refresh", { refresh_token: session.refresh_token })).json();
     expect(refreshed.access_token).toEqual(expect.any(String));
-    const logout = await post("/api/auth/logout", {}, refreshed.access_token);
-    expect(logout.status).toBe(204);
+    expect((await be.post("/api/auth/logout", {}, refreshed.access_token)).status).toBe(204);
 
     // 9. The revoked session no longer works.
-    expect((await get("/api/auth/me", refreshed.access_token)).status).toBe(401);
-    expect((await post("/api/auth/refresh", { refresh_token: refreshed.refresh_token })).status).toBe(401);
+    expect((await be.get("/api/auth/me", refreshed.access_token)).status).toBe(401);
+    expect((await be.post("/api/auth/refresh", { refresh_token: refreshed.refresh_token })).status).toBe(401);
+  });
+
+  it("returning user: log in → create rooms → log out → log in again on a new session", async () => {
+    const email = "returning.user@example.com";
+    const password = newPassword();
+    await signUpAndVerify(be, email, password, "Returning User");
+    const emailsBefore = be.supabase.outbox.length;
+
+    // 1. Comes back later and logs in; no new verification email is needed.
+    const first = await logIn(be, email, password);
+    expect(be.supabase.outbox).toHaveLength(emailsBefore);
+
+    // 2. Creates a text room and a PDF room; both belong to them.
+    expect((await createTextRoom(be, first.access_token, "Notes"))?.created_by).toBe(first.user.id);
+
+    const form = new FormData();
+    form.append("file", new Blob(["%PDF-1.4 e2e"], { type: "application/pdf" }), "paper.pdf");
+    const pdf = await be.postForm("/api/rooms/pdf", form, first.access_token);
+    expect(pdf.status).toBe(201);
+    const { id: pdfId } = (await pdf.json()) as { id: string };
+    expect(be.supabase.objects.has(`pdfs/${pdfId}.pdf`)).toBe(true);
+    expect(be.supabase.rows("rooms").find((r) => r.id === pdfId)).toMatchObject({
+      kind: "pdf",
+      title: "paper.pdf",
+      created_by: first.user.id,
+    });
+
+    // 3. Logs out.
+    expect((await be.post("/api/auth/logout", {}, first.access_token)).status).toBe(204);
+    expect((await be.post("/api/rooms/text", { text: "hi" }, first.access_token)).status).toBe(401);
+
+    // 4. Logs in again: a fresh session for the same account.
+    const second = await logIn(be, email, password);
+    expect(second.user).toEqual(first.user);
+    expect(second.access_token).not.toBe(first.access_token);
+    expect((await createTextRoom(be, second.access_token, "Again"))?.created_by).toBe(first.user.id);
+  });
+
+  it("lost email: sign up → link expires → resend → verify with the new link → log in", async () => {
+    const email = "lost.email@example.com";
+    const password = newPassword();
+
+    // 1. Signs up but doesn't click the link in time.
+    expect((await be.post("/api/auth/signup", { email, password, name: "Lost Email" })).status).toBe(201);
+    const oldLink = be.supabase.verificationLink(email);
+    be.supabase.expireVerificationTokens();
+
+    // 2. The old link no longer works and says why.
+    const expired = await be.clickVerificationLink(email);
+    expect(expired.headers.get("location")).toBe(`${WEB}/login?verified=0&error=expired_link`);
+    expect((await be.post("/api/auth/login", { email, password })).status).toBe(403);
+
+    // 3. Asks for a new email.
+    const resend = await be.post("/api/auth/resend-verification", { email });
+    expect(resend.status).toBe(200);
+    const newLink = be.supabase.verificationLink(email);
+    expect(newLink).not.toBe(oldLink);
+
+    // 4. The new link verifies the account.
+    const verify = await be.clickVerificationLink(email);
+    expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
+
+    // 5. Logs in and can create a room.
+    const session = await logIn(be, email, password);
+    expect((await createTextRoom(be, session.access_token, "Finally"))?.created_by).toBe(session.user.id);
+
+    // 6. The new link can't be reused.
+    const reused = await be.clickVerificationLink(email);
+    expect(reused.headers.get("location")).toBe(`${WEB}/login?verified=0&error=expired_link`);
+  });
+
+  it("taken email: signing up again can't take over an existing account", async () => {
+    const email = "owner@example.com";
+    const ownerPassword = newPassword();
+    const intruderPassword = newPassword();
+    await signUpAndVerify(be, email, ownerPassword, "Owner");
+    const emailsBefore = be.supabase.outbox.length;
+
+    // 1. Someone signs up with the same email: same reply as a fresh signup, so the account isn't revealed.
+    const again = await be.post("/api/auth/signup", { email, password: intruderPassword, name: "Intruder" });
+    expect(again.status).toBe(201);
+    expect(await again.json()).toEqual({ message: "Check your email to verify your account." });
+    expect(be.supabase.outbox).toHaveLength(emailsBefore);
+
+    // 2. Their password doesn't work; the owner's still does, with the owner's name.
+    expect((await be.post("/api/auth/login", { email, password: intruderPassword })).status).toBe(401);
+    expect((await logIn(be, email, ownerPassword)).user.name).toBe("Owner");
   });
 
   it("sends security headers and allows the frontend origin", async () => {
-    const res = await fetch(`${api}/health`, { headers: { Origin: WEB } });
+    const res = await fetch(`${be.api}/health`, { headers: { Origin: WEB } });
     expect(res.headers.get("access-control-allow-origin")).toBe(WEB);
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   });
+});
 
-  it("rate limits repeated login attempts", async () => {
-    // The journey above used 3 of the 10 attempts in this window (signup and two logins),
-    // so 7 more get through and the rest are blocked.
+describe("rate limiting (default limit of 10 per 15 min)", () => {
+  let be: Backend;
+
+  beforeAll(async () => {
+    be = await startBackend();
+  });
+  afterAll(() => be?.stop());
+
+  it("blocks the 11th auth request from the same IP across signup, login and resend", async () => {
+    const email = "brute.force@example.com";
     const statuses: number[] = [];
-    for (let i = 0; i < 9; i++) {
-      statuses.push((await post("/api/auth/login", { email, password: `${password}-wrong` })).status);
+    for (let i = 0; i < 10; i++) {
+      statuses.push((await be.post("/api/auth/login", { email, password: newPassword() })).status);
     }
-    expect(statuses).toEqual([401, 401, 401, 401, 401, 401, 401, 429, 429]);
+    expect(statuses).toEqual(Array(10).fill(401));
 
-    const limited = await post("/api/auth/signup", { email: "late@example.com", password, name: "Late" });
-    expect(limited.status).toBe(429);
-    expect(await limited.json()).toEqual({ error: "Too many attempts. Try again in a few minutes." });
+    const login = await be.post("/api/auth/login", { email, password: newPassword() });
+    expect(login.status).toBe(429);
+
+    // The limit is shared, so signup and resend are blocked too.
+    const signup = await be.post("/api/auth/signup", { email, password: newPassword(), name: "Late" });
+    expect(signup.status).toBe(429);
+    expect(await signup.json()).toEqual({ error: "Too many attempts. Try again in a few minutes." });
+    expect((await be.post("/api/auth/resend-verification", { email })).status).toBe(429);
+
+    // Routes outside the limiter keep working.
+    expect((await be.get("/health")).status).toBe(200);
   });
 });
