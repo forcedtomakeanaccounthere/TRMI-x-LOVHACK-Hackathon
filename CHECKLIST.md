@@ -78,7 +78,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **BE**
 - [ ] Create the Supabase project (region closest to the team, e.g. Mumbai)
-- [ ] Run `supabase/migrations/0001_init.sql` then `0002_auth_and_phase1.sql` in the SQL editor *(in repo)*
+- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql` then `0003_comments_highlight_idx.sql` in the SQL editor *(in repo)*
   - tables `rooms`, `highlights`, `comments`, `recaps`; realtime publication; RLS (public select, anonymous insert on highlights and comments only)
   - `pdfs` bucket: public read, 20 MB limit, `application/pdf` only
   - length checks: quote ≤ 1,000, comment body ≤ 2,000, author name ≤ 40
