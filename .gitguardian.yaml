@@ -1,0 +1,8 @@
+# GitGuardian secret scanning config.
+# Test files use throwaway passwords that only reach the in-memory fake Supabase
+# (apps/backend/test/support/fake-supabase.ts); they are not credentials.
+version: 2
+secret:
+  ignored_paths:
+    - "**/test/**"
+    - "**/*.test.ts"

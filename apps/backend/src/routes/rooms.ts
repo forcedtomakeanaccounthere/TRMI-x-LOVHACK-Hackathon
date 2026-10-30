@@ -10,6 +10,7 @@ import { nanoid } from "nanoid";
 import { env } from "../env";
 import { extractArticle, textToHtml } from "../lib/extract";
 import { supabaseAdmin } from "../lib/supabase";
+import { requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
 
 export const roomsRouter = Router();
@@ -19,35 +20,43 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
+// Creating a room needs a verified account; joining and reading a room stays open to guests.
+
 // POST /api/rooms/link  { url }
-roomsRouter.post("/link", async (req, res) => {
+roomsRouter.post("/link", requireAuth, async (req, res) => {
   const { url } = CreateLinkRoomRequest.parse(req.body);
   const { title, html } = await extractArticle(url);
   const id = nanoid(8);
 
   const { error } = await supabaseAdmin()
     .from("rooms")
-    .insert({ id, kind: "link", source_url: url, title, content_html: html });
+    .insert({ id, kind: "link", source_url: url, title, content_html: html, created_by: req.user!.id });
   if (error) throw error;
 
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
 // POST /api/rooms/text  { title?, text }: fallback when a site can't be read
-roomsRouter.post("/text", async (req, res) => {
+roomsRouter.post("/text", requireAuth, async (req, res) => {
   const { title, text } = CreateTextRoomRequest.parse(req.body);
   const id = nanoid(8);
 
   const { error } = await supabaseAdmin()
     .from("rooms")
-    .insert({ id, kind: "link", title: title ?? "Pasted text", content_html: textToHtml(text) });
+    .insert({
+      id,
+      kind: "link",
+      title: title ?? "Pasted text",
+      content_html: textToHtml(text),
+      created_by: req.user!.id,
+    });
   if (error) throw error;
 
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
 // POST /api/rooms/pdf  multipart field "file"
-roomsRouter.post("/pdf", upload.single("file"), async (req, res) => {
+roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file || file.mimetype !== "application/pdf") throw new HttpError(400, "A PDF file is required");
 
@@ -62,7 +71,7 @@ roomsRouter.post("/pdf", upload.single("file"), async (req, res) => {
 
   const { error } = await db
     .from("rooms")
-    .insert({ id, kind: "pdf", title: file.originalname, pdf_path: pdfPath });
+    .insert({ id, kind: "pdf", title: file.originalname, pdf_path: pdfPath, created_by: req.user!.id });
   if (error) throw error;
 
   res.status(201).json({ id } satisfies CreateRoomResponse);

@@ -29,8 +29,8 @@ Confirm the rules and Devpost fields at kickoff. Application code is written onl
 LinkRoom turns **any link or any PDF into a live multiplayer room in one click**.
 
 1. Paste a URL (Wikipedia, a blog post, docs, a news article) or drop a PDF (a research paper, lecture notes, slides).
-2. LinkRoom creates a room with a short shareable link.
-3. Friends open the link, type a name, and they are in. There is no login and nothing to install.
+2. LinkRoom creates a room with a short shareable link. Creating a room needs an account (email + password, verified by email).
+3. Friends open the link, type a name, and they are in. Guests need no login and nothing to install.
 4. Everyone reads the same content together. They see each other's live cursors, highlight text, discuss highlights in comment threads, follow each other's scroll, throw emoji reactions, and finally ask the AI for a **group recap** that appears on every screen at once.
 
 ### The problem
@@ -237,7 +237,7 @@ Ship **every P0 before starting any P1**. Start P2 only if all P0 and P1 work is
 
 ### P3: Do not build
 
-Accounts and login, multi-block highlights, voice chat, showing the original site through a proxy or iframe, co-editing the document, a browser extension, private rooms and permissions. Mention the useful ones as "future work" in the pitch.
+Login for room guests, multi-block highlights, voice chat, showing the original site through a proxy or iframe, co-editing the document, a browser extension, private rooms and permissions. Mention the useful ones as "future work" in the pitch.
 
 ### The AI recap output
 

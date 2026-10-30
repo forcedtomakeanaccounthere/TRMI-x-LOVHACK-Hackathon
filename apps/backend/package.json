@@ -7,7 +7,11 @@
     "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
     "build": "tsup",
     "start": "node --env-file-if-exists=../../.env dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit --project integration",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "vitest run --project e2e"
   },
   "dependencies": {
     "@linkroom/shared": "*",
@@ -15,6 +19,7 @@
     "@supabase/supabase-js": "^2.57.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.7.2",
     "helmet": "^8.1.0",
     "isomorphic-dompurify": "^2.26.0",
     "jsdom": "^26.1.0",
@@ -30,8 +35,11 @@
     "@types/morgan": "^1.9.10",
     "@types/multer": "^2.0.0",
     "@types/node": "^22",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.3.1",
     "tsup": "^8.5.0",
     "tsx": "^4.20.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }
