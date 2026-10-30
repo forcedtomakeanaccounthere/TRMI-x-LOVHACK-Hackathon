@@ -218,6 +218,18 @@ describe("authenticated session", () => {
     expect(res.status).toBe(401);
   });
 
+  it("POST /refresh reports a temporary Auth failure with 503 and keeps the token usable", async () => {
+    const session = await verifiedSession();
+    supabase.failNext("POST /auth/v1/token", 429, "over_request_rate_limit");
+
+    const failed = await request(app).post("/api/auth/refresh").send({ refresh_token: session.refresh_token });
+    expect(failed.status).toBe(503);
+    expect(failed.body).toEqual({ error: "Could not refresh your session. Please try again." });
+
+    const retried = await request(app).post("/api/auth/refresh").send({ refresh_token: session.refresh_token });
+    expect(retried.status).toBe(200);
+  });
+
   it("POST /logout revokes the session", async () => {
     const session = await verifiedSession();
     const auth = `Bearer ${session.access_token}`;
