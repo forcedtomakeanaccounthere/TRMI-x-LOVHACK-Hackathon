@@ -119,3 +119,32 @@ class RoomSummary(BaseModel):
     overview: str
     sections: list[SummarySection]
     key_terms: list[KeyTerm]
+
+
+# POST /answer. apps/backend sends the question and the best chunks from match_chunks (at most 8).
+MAX_QUESTION_CHARS = 500
+MAX_ANSWER_CHUNKS = 8
+
+
+class AnswerChunk(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class AnswerRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    chunks: list[AnswerChunk] = Field(min_length=1, max_length=MAX_ANSWER_CHUNKS)
+
+
+class Citation(BaseModel):
+    # Which chunk, by its label: 1 for [C1].
+    chunk: int
+    # Copied exactly from that chunk.
+    quote: str
+
+
+class AnswerData(BaseModel):
+    """The model's answer, and the checked answer apps/backend gets (shared AnswerResponse)."""
+
+    answer: str
+    found_in_document: bool
+    citations: list[Citation]
