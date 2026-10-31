@@ -13,16 +13,16 @@ import {
 } from "../src";
 
 describe("SignupRequest", () => {
-  const valid = { email: "priya@example.com", password: "x".repeat(8), name: "Priya" };
+  const valid = { email: "abhishek@example.com", password: "x".repeat(8), name: "abhishek" };
 
   it("accepts a valid signup", () => {
     expect(SignupRequest.parse(valid)).toEqual(valid);
   });
 
   it("trims and lowercases the email and trims the name", () => {
-    expect(SignupRequest.parse({ ...valid, email: "  Priya@Example.COM ", name: "  Priya  " })).toMatchObject({
-      email: "priya@example.com",
-      name: "Priya",
+    expect(SignupRequest.parse({ ...valid, email: "  abhishek@Example.COM ", name: "  abhishek  " })).toMatchObject({
+      email: "abhishek@example.com",
+      name: "abhishek",
     });
   });
 
@@ -31,7 +31,7 @@ describe("SignupRequest", () => {
   });
 
   it.each([
-    ["email is not an email", { email: "priya" }],
+    ["email is not an email", { email: "abhishek" }],
     ["password is 7 chars", { password: "x".repeat(7) }],
     ["password is over 72 chars (bcrypt limit)", { password: "x".repeat(73) }],
     ["name is blank", { name: "   " }],
@@ -122,7 +122,7 @@ describe("room contracts", () => {
       start_offset: 4,
       end_offset: 10,
       quote: "x".repeat(1000),
-      author_name: "Priya",
+      author_name: "abhishek",
       author_color: "#3b82f6",
     };
 
@@ -150,7 +150,7 @@ describe("room contracts", () => {
     const comment = {
       room_id: "abcd1234",
       highlight_id: "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f",
-      author_name: "Priya",
+      author_name: "abhishek",
       author_color: "#3b82f6",
       body: "x".repeat(2000),
     };

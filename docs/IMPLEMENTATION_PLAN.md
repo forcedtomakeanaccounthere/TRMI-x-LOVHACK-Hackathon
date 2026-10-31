@@ -67,7 +67,7 @@ Judges reward what they can feel in the first 30 seconds, so these ideas target 
 5. **Sweat the micro-polish.**
    - Smooth cursor interpolation, and idle cursors fade after 5 seconds.
    - Each person keeps one colour across cursor, avatar and highlights.
-   - "Priya joined" toasts, skeleton loaders, good empty states, dark mode.
+   - "abhishek joined" toasts, skeleton loaders, good empty states, dark mode.
 6. **Make it fast.** A room should be ready in under 3 seconds. Pre-create demo rooms so the demo never waits on a slow site.
 7. **Tell a real story.** Open the video with a concrete group, for example a study group reading an arXiv paper the night before an exam, then show the same flow for team docs and news.
 8. **Hint at a platform.** A tiny one-line script SDK demo, or even a "coming next" slide, shows the engine can make any website multiplayer.
@@ -358,7 +358,7 @@ To render, walk the block's text nodes, find the ones covering `start_offset` to
 
 ### 5. Follow mode
 
-Each person broadcasts the block at the top of their viewport as `{ block, ratio }`. Followers call `el.scrollIntoView({ behavior: "smooth" })` on that block. Bring everyone here sends a `summon` event that every client obeys, and a banner shows "Following Priya · Stop".
+Each person broadcasts the block at the top of their viewport as `{ block, ratio }`. Followers call `el.scrollIntoView({ behavior: "smooth" })` on that block. Bring everyone here sends a `summon` event that every client obeys, and a banner shows "Following abhishek · Stop".
 
 ### 6. AI group recap (`app/api/rooms/[id]/recap/route.ts`)
 
