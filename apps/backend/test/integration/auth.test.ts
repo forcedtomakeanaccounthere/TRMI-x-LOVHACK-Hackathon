@@ -103,6 +103,17 @@ describe("POST /api/auth/signup", () => {
     expect(res.body.user.name).toBe("Second");
   });
 
+  it("never changes a verified account's password, even for a signup that raced the verification", async () => {
+    // A signup that passed its first check while the account was unverified reaches the
+    // password write only after the owner verified: the write must do nothing.
+    const email = newEmail();
+    const { user } = await verifiedSession(email);
+    expect(await supabase.setUnconfirmedPassword(user.id, `${PASSWORD}-attacker`)).toBe(false);
+
+    expect((await login(email, `${PASSWORD}-attacker`)).status).toBe(401);
+    expect((await login(email)).status).toBe(200);
+  });
+
   it.each([
     [{ email: "nope", password: PASSWORD, name: "A" }, /Invalid email/],
     [{ email: "a@b.co", password: "short", name: "A" }, /at least 8 characters/],

@@ -66,6 +66,12 @@ export async function connectSupabase() {
     async expireVerificationLink(email: string) {
       await sql`update auth.users set confirmation_sent_at = now() - interval '1 day' where email = ${email}`;
     },
+    // The signup route's guarded password write (migration 0014), called directly.
+    async setUnconfirmedPassword(userId: string, password: string) {
+      const { data, error } = await admin.rpc("set_unconfirmed_password", { p_user_id: userId, p_password: password });
+      if (error) throw error;
+      return data as boolean;
+    },
     async room(id: string) {
       const { data, error } = await admin.from("rooms").select().eq("id", id).maybeSingle();
       if (error) throw error;

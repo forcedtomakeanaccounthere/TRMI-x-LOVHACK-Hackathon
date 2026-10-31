@@ -78,19 +78,29 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
   // earlier links stop working) and name. A confirmed account is left alone and gets no email.
   const generate = () =>
     supabaseAdmin().auth.admin.generateLink({ type: "signup", email, password, options: { data: { name } } });
+  const alreadyVerified = () => res.status(201).json({ message: CHECK_EMAIL } satisfies MessageResponse);
   const first = await generate();
-  if (first.error?.code === "email_exists") {
-    return res.status(201).json({ message: CHECK_EMAIL } satisfies MessageResponse);
-  }
+  if (first.error?.code === "email_exists") return alreadyVerified();
   if (first.error) throw signupError(first.error);
 
   // generateLink keeps an unconfirmed user's old password. Set this one, so the only working
   // link always belongs to the latest signup and someone who registered the address first
-  // can't keep a password on the account its owner then verifies. Setting the password also
-  // voids the token, so the link is generated again afterwards.
-  const { error: pwError } = await supabaseAdmin().auth.admin.updateUserById(first.data.user.id, { password });
-  if (pwError) throw signupError(pwError);
+  // can't keep a password on the account its owner then verifies. The database only writes it
+  // while the email is still unconfirmed, in the same statement, so a signup racing the owner's
+  // verification can never change a verified account's password.
+  const { data: changed, error: pwError } = await supabaseAdmin().rpc("set_unconfirmed_password", {
+    p_user_id: first.data.user.id,
+    p_password: password,
+  });
+  if (pwError) {
+    console.error("[auth] could not set the signup password", pwError);
+    throw new HttpError(500, "Could not create account");
+  }
+  if (!changed) return alreadyVerified();
+
+  // A fresh link, so links from earlier signups for this address stop working.
   const { data, error } = await generate();
+  if (error?.code === "email_exists") return alreadyVerified();
   if (error) throw signupError(error);
 
   await emailVerification(email, data.properties.hashed_token, name);
