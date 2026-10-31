@@ -151,6 +151,9 @@ authRouter.post("/login", authLimiter, async (req, res) => {
 
   const { data, error } = await supabaseAuth().auth.signInWithPassword({ email, password });
   if (error?.code === "email_not_confirmed") throw new HttpError(403, "Please verify your email first");
+  if (error && error.code !== "invalid_credentials") {
+    console.error("[auth] login failed", error.code ?? error.message);
+  }
   if (error || !data.session) throw new HttpError(401, "Invalid email or password");
 
   res.json(toSession(data.session));

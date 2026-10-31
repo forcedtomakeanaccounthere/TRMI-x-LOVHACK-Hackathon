@@ -11,6 +11,8 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
         wheelMultiplier: 0.95,
         smoothWheel: true,
         anchors: { offset: -96 },
+        // Panels that scroll on their own (a room's panes, a modal's body) keep their wheel events.
+        allowNestedScroll: true,
       }}
     >
       {children}

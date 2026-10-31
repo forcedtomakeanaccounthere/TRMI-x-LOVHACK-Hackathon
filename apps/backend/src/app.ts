@@ -3,7 +3,7 @@ import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import swaggerUi from "swagger-ui-express";
-import { env } from "./env";
+import { env, webOrigins } from "./env";
 import { errorHandler, notFound } from "./middleware/error";
 import { openApiDocument } from "./openapi";
 import { authRouter } from "./routes/auth";
@@ -32,7 +32,7 @@ export function createApp() {
   if (env.NODE_ENV === "production") app.set("trust proxy", 1);
 
   app.use(helmet());
-  app.use(cors({ origin: env.WEB_ORIGIN.split(",") }));
+  app.use(cors({ origin: webOrigins }));
   app.use(express.json({ limit: "1mb" }));
   if (env.NODE_ENV !== "test") app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
