@@ -8,7 +8,6 @@ import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supa
 let supabase: TestSupabase;
 let app: Express;
 
-// Must match the redirect URLs allowed in supabase/config.toml.
 const API = "http://127.0.0.1:4000";
 const WEB = "http://web.test";
 // Generated per run: these only reach the local Supabase.
@@ -30,6 +29,9 @@ beforeAll(async () => {
 });
 
 afterAll(() => supabase?.close());
+
+// Where the emailed link lands once it verifies the account: the login page, email filled in.
+const verifiedUrl = (email: string) => `${WEB}/login?${new URLSearchParams({ verified: "1", email })}`;
 
 let n = 0;
 const newEmail = () => uniqueEmail(`user${++n}`);
@@ -81,6 +83,26 @@ describe("POST /api/auth/signup", () => {
     expect(res.body).toEqual({ message: "Check your email to verify your account." });
   });
 
+  it("signing up again before verifying: only the newest link works, with the newest password and name", async () => {
+    const email = newEmail();
+    const firstPassword = `${PASSWORD}-first`;
+    await signup(email, firstPassword, "First");
+    const firstLink = await supabase.verificationLink(email);
+    expect((await signup(email, PASSWORD, "Second")).status).toBe(201);
+    await supabase.verificationLink(email, 2);
+
+    const old = new URL(firstLink);
+    expect((await request(app).get(`${old.pathname}${old.search}`)).headers.location).toBe(
+      `${WEB}/login?verified=0&error=expired_link`,
+    );
+    expect((await verify(email, 2)).headers.location).toBe(verifiedUrl(email));
+
+    expect((await login(email, firstPassword)).status).toBe(401);
+    const res = await login(email);
+    expect(res.status).toBe(200);
+    expect(res.body.user.name).toBe("Second");
+  });
+
   it.each([
     [{ email: "nope", password: PASSWORD, name: "A" }, /Invalid email/],
     [{ email: "a@b.co", password: "short", name: "A" }, /at least 8 characters/],
@@ -102,7 +124,7 @@ describe("GET /api/auth/verify", () => {
     const res = await verify(email);
 
     expect(res.status).toBe(302);
-    expect(res.headers.location).toBe(`${WEB}/login?verified=1`);
+    expect(res.headers.location).toBe(verifiedUrl(email));
     expect((await login(email)).status).toBe(200);
   });
 
@@ -142,12 +164,27 @@ describe("POST /api/auth/resend-verification", () => {
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/sent a new email/);
 
-    expect((await verify(email, 2)).headers.location).toBe(`${WEB}/login?verified=1`);
+    expect((await verify(email, 2)).headers.location).toBe(verifiedUrl(email));
   });
 
-  it("gives the same reply for unknown emails", async () => {
-    const res = await request(app).post("/api/auth/resend-verification").send({ email: uniqueEmail("ghost") });
+  it("gives the same reply for unknown emails, without creating an account or sending anything", async () => {
+    const email = uniqueEmail("ghost");
+    const res = await request(app).post("/api/auth/resend-verification").send({ email });
     expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/sent a new email/);
+    expect(await supabase.verificationLinks(email)).toHaveLength(0);
+    expect((await login(email)).status).toBe(401);
+  });
+
+  it("sends nothing to an account that is already verified", async () => {
+    const email = newEmail();
+    await verifiedSession(email);
+    const res = await request(app).post("/api/auth/resend-verification").send({ email });
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/sent a new email/);
+    // Give a stray email time to arrive before counting.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await supabase.verificationLinks(email)).toHaveLength(1);
   });
 });
 
