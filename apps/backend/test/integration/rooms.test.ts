@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { createClient } from "@supabase/supabase-js";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -104,10 +105,67 @@ describe("GET /api/rooms/mine", () => {
 
     expect(ids(await mine(owner, { q: "Page", sort: "title" }))).toEqual([second, first]);
     expect(ids(await mine(owner, { q: "Page", sort: "oldest" }))).toEqual([first, second]);
+    expect(ids(await mine(owner, { q: "Page" }))).toEqual([second, first]);
 
     const page = await mine(owner, { q: "Page", sort: "title", limit: "1", offset: "1" });
     expect(ids(page)).toEqual([first]);
     expect(page.body.total).toBe(2);
+  });
+});
+
+describe("what a browser with the anon key sees", () => {
+  const browser = () => createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
+  const highlight = (room_id: string) => ({
+    room_id,
+    author_name: "Guest",
+    author_color: "#00ff00",
+    block_id: "b0",
+    start_offset: 0,
+    end_offset: 4,
+    quote: "Some",
+  });
+
+  it("counts highlights and comments on the dashboard", async () => {
+    const id = await createRoom("Counted");
+    const { data, error } = await browser().from("highlights").insert(highlight(id)).select("id").single();
+    expect(error).toBeNull();
+    await browser()
+      .from("comments")
+      .insert({ room_id: id, highlight_id: data!.id, author_name: "Guest", author_color: "#00ff00", body: "Nice" });
+
+    const [room] = (await mine(owner, { q: "Counted" })).body.rooms;
+    expect(room).toMatchObject({ highlight_count: 1, comment_count: 1 });
+  });
+
+  it("stops new highlights once a room closes, and allows them again when it reopens", async () => {
+    const id = await createRoom("Reopen");
+    await setStatus(owner, id, "closed");
+    expect((await browser().from("highlights").insert(highlight(id))).error?.code).toBe("42501");
+
+    await setStatus(owner, id, "running");
+    expect((await browser().from("highlights").insert(highlight(id))).error).toBeNull();
+  });
+
+  it("hides a deleted room's content, and brings it back on restore", async () => {
+    const id = await createRoom("Vanish");
+    await browser().from("highlights").insert(highlight(id));
+    await setStatus(owner, id, "deleted");
+
+    expect((await browser().from("rooms").select("id").eq("id", id)).data).toEqual([]);
+    expect((await browser().from("highlights").select("id").eq("room_id", id)).data).toEqual([]);
+
+    await setStatus(owner, id, "closed");
+    expect((await browser().from("rooms").select("id").eq("id", id)).data).toHaveLength(1);
+    expect((await browser().from("highlights").select("id").eq("room_id", id)).data).toHaveLength(1);
+  });
+
+  it("can't read visit history or change a status", async () => {
+    const id = await createRoom("Private");
+    await join(guest, id);
+
+    expect((await browser().from("room_visits").select("room_id").eq("room_id", id)).data).toEqual([]);
+    await browser().from("rooms").update({ status: "deleted" }).eq("id", id);
+    expect((await supabase.room(id))?.status).toBe("running");
   });
 });
 
