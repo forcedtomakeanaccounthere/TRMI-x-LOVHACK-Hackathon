@@ -275,6 +275,17 @@ describe("PATCH /api/rooms/:id/status", () => {
     ]);
   });
 
+  it("answers 409 and undoes its move when another change got there first", async () => {
+    results.rooms = [{ data: { status: "deleted", pdf_path: "room0001.pdf" } }, { data: null }];
+
+    expect((await patch({ status: "closed" })).status).toBe(409);
+    expect(called("rooms", "eq")).toContainEqual(["status", "deleted"]);
+    expect(moves).toEqual([
+      ["pdfs-deleted", "pdfs"],
+      ["pdfs", "pdfs-deleted"],
+    ]);
+  });
+
   it("answers 400 for a missing or unknown status", async () => {
     expect((await patch({})).status).toBe(400);
     expect((await patch({ status: "paused" })).status).toBe(400);

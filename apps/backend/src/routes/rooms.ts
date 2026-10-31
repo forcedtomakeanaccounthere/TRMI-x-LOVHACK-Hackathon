@@ -192,15 +192,19 @@ roomsRouter.patch("/:id/status", requireAuth, async (req, res) => {
   const pdfPath = (room.status === "deleted") !== hide ? (room.pdf_path as string | null) : null;
   if (pdfPath) await movePdf(pdfPath, hide);
 
+  // Saves only if the status is still the one read above: the PDF move was decided from it, so a
+  // request that lost a race must undo its move, or a deleted room's PDF could stay public.
   const { data, error: updateError } = await db
     .from("rooms")
     .update({ status })
     .eq("id", req.params.id)
+    .eq("status", room.status)
     .select("id, status")
-    .single();
-  if (updateError) {
+    .maybeSingle();
+  if (updateError || !data) {
     if (pdfPath) await movePdf(pdfPath, !hide).catch(console.error);
-    throw updateError;
+    if (updateError) throw updateError;
+    throw new HttpError(409, "The room just changed. Try again.");
   }
 
   res.json(data as RoomStatusResponse);

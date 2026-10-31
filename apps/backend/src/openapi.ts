@@ -233,6 +233,7 @@ export const openApiDocument = createDocument({
           ...invalidInput,
           ...needsVerifiedUser,
           "404": failure("Room not found, or owned by someone else"),
+          "409": failure("Another status change got there first"),
         },
       },
     },
