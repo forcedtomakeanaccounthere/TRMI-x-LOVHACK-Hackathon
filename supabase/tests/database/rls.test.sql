@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(105);
+select plan(108);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -322,7 +322,12 @@ select is_empty($$update rooms set status = 'deleted' where id = 'room0001' retu
 reset role;
 insert into rooms (id, kind, title, source_meta)
 values ('file0001', 'file', 'notes.docx', '{"format": "docx", "file_name": "notes.docx"}');
-insert into room_ai (room_id, status) values ('room0001', 'ready'), ('deleted1', 'pending');
+-- Every room got a 'pending' room_ai row when it was created (0011's trigger).
+select is(
+  (select status from room_ai where room_id = 'file0001'), 'pending',
+  'a new room is queued for indexing'
+);
+update room_ai set status = 'ready' where room_id = 'room0001';
 insert into storage.objects (bucket_id, name) values ('files', 'file0001.docx');
 
 select lives_ok($$insert into rooms (id, kind, title) values ('video001', 'youtube', 'A video')$$, 'a youtube room is accepted');
@@ -335,8 +340,16 @@ select throws_ok(
   '23514', null, 'source_meta must be an object'
 );
 select throws_ok(
-  $$insert into room_ai (room_id, status) values ('file0001', 'done')$$,
+  $$update room_ai set status = 'done' where room_id = 'file0001'$$,
   '23514', null, 'an unknown AI status is rejected'
+);
+select throws_ok(
+  $$insert into room_ai (room_id) values ('file0001')$$,
+  '23505', null, 'a room has one AI state'
+);
+select lives_ok(
+  $$insert into rooms (id, kind, title) values ('queued01', 'link', 'Queued'), ('queued02', 'link', 'Queued')$$,
+  'creating several rooms at once queues each of them'
 );
 select is((select public from storage.buckets where id = 'files'), false, 'the files bucket is private');
 select isnt_empty(

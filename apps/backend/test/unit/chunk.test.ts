@@ -85,6 +85,29 @@ describe("chunkRoom for HTML rooms", () => {
     ]);
   });
 
+  it("makes a table one block, so its text is found and cited", () => {
+    const chunks = chunkRoom(html("<p>Prices:</p><table><tr><th>Plan</th><th>Cost</th></tr><tr><td>Pro</td><td>$9</td></tr></table>"));
+    expect(chunks).toEqual([expect.objectContaining({ content: "Prices:\n\nPlan Cost Pro $9", block_ids: ["b0", "b1"] })]);
+  });
+
+  it("finds a table in an uploaded Markdown file", async () => {
+    const { parseFile } = await import("../../src/lib/files");
+    const parsed = await parseFile(Buffer.from("| Plan | Cost |\n| --- | --- |\n| Pro | $9 |\n"), "prices.md");
+    if (parsed.format === "pdf") throw new Error("expected HTML");
+    const chunks = chunkRoom({ kind: "file", content_html: parsed.html, content_text: null });
+    expect(chunks).toEqual([expect.objectContaining({ content: "Plan Cost Pro $9", block_ids: ["b0"] })]);
+  });
+
+  it("keeps text outside every block, with the block before it (rooms made before tables were blocks)", () => {
+    const old =
+      'Lead text<p data-block="b0">First</p><table><tr><td>Cell</td></tr></table>' +
+      '<div>Loose <span>words</span></div><p data-block="b1">Second</p>';
+    const chunks = chunkRoom({ kind: "link", content_html: old, content_text: null });
+    expect(chunks).toEqual([
+      expect.objectContaining({ content: "Lead text First Cell Loose words\n\nSecond", block_ids: ["b0", "b1"] }),
+    ]);
+  });
+
   it("skips empty blocks and returns nothing for an empty room", () => {
     expect(chunkRoom(html("<p> </p><p></p>"))).toEqual([]);
     expect(chunkRoom({ kind: "link", content_html: null, content_text: null })).toEqual([]);

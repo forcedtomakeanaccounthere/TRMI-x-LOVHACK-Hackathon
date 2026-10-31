@@ -42,7 +42,11 @@ export function chunkRoom(room: RoomText): Chunk[] {
 // Elements that separate words: their text must not run into the text next to them.
 const SEPARATE = "address, article, aside, blockquote, dd, div, dl, dt, figcaption, figure, footer, h1, h2, h3, h4, h5, h6, header, li, ol, p, pre, section, td, th, tr, ul";
 
-/** The top-level blocks of a room's HTML, with the headings above each. */
+/**
+ * The top-level blocks of a room's HTML, with the headings above each. Text outside every block
+ * (a table in a room made before tables were blocks, loose text in a <div>) is read with the
+ * block before it, or the first block when it comes first, so search never loses it.
+ */
 export function htmlBlocks(html: string): Block[] {
   const { document } = new JSDOM(`<body>${html}</body>`).window;
   for (const br of document.body.querySelectorAll("br")) br.replaceWith(" ");
@@ -53,10 +57,9 @@ export function htmlBlocks(html: string): Block[] {
 
   const headings: (string | null)[] = [null, null, null]; // h1, h2, h3
   const blocks: Block[] = [];
-  for (const el of document.body.querySelectorAll("[data-block]")) {
-    // A block inside another block is read as part of the outer one.
-    if (el.parentElement?.closest("[data-block]")) continue;
+  let leading = ""; // text before the first block
 
+  const addBlock = (el: Element) => {
     const text = clean(el.textContent ?? "");
     const level = /^H([1-3])$/.exec(el.tagName)?.[1];
     if (level) {
@@ -64,8 +67,9 @@ export function htmlBlocks(html: string): Block[] {
       headings[n - 1] = text || null;
       for (let i = n; i < headings.length; i++) headings[i] = null;
     }
-    if (!text) continue;
+    if (!text) return;
 
+    // A block inside another block is read as part of the outer one.
     const ids = [el, ...el.querySelectorAll("[data-block]")].map((b) => b.getAttribute("data-block")!);
     blocks.push({
       ids,
@@ -74,7 +78,25 @@ export function htmlBlocks(html: string): Block[] {
       headingPath: headings.filter((h): h is string => Boolean(h)),
       isHeading: Boolean(level),
     });
-  }
+  };
+
+  const walk = (node: Node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === child.ELEMENT_NODE) {
+        if ((child as Element).hasAttribute("data-block")) addBlock(child as Element);
+        else walk(child);
+      } else if (child.nodeType === child.TEXT_NODE) {
+        const text = clean(child.textContent ?? "");
+        if (!text) continue;
+        const last = blocks.at(-1);
+        if (last) last.text = `${last.text} ${text}`;
+        else leading = `${leading} ${text}`;
+      }
+    }
+  };
+  walk(document.body);
+
+  if (leading.trim() && blocks[0]) blocks[0].text = `${leading.trim()} ${blocks[0].text}`;
   return blocks;
 }
 

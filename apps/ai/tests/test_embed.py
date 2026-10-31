@@ -23,6 +23,7 @@ class FakeEmbeddings:
         self.shuffle = False
         self.drop_one = False
         self.bad_value = False
+        self.mutate = None  # optional function that changes the response data
 
     async def __call__(self, provider, api_key, model, texts, **kwargs):
         self.calls.append({"provider": provider, "model": model, "texts": texts, **kwargs})
@@ -38,6 +39,8 @@ class FakeEmbeddings:
             data = data[:-1]
         if self.shuffle:
             data.reverse()
+        if self.mutate:
+            data = self.mutate(data)
         return SimpleNamespace(data=data)
 
 
@@ -114,7 +117,8 @@ def test_answers_503_without_a_key_for_the_embedding_provider(
 
 
 def test_has_no_fallback_when_the_provider_fails(client, auth, fake_embeddings, caplog):
-    fake_embeddings.error = RuntimeError("down")
+    # Some providers echo the input back in their error message.
+    fake_embeddings.error = RuntimeError("invalid input: secret document text")
     with caplog.at_level(logging.WARNING):
         res = post(client, auth, ["secret document text"])
     assert res.status_code == 502
@@ -133,6 +137,39 @@ def test_refuses_vectors_that_would_not_fit_the_index(client, auth, fake_embeddi
         fake_embeddings.drop_one = True
     else:
         fake_embeddings.bad_value = True
+    res = post(client, auth, ["a", "b"])
+    assert res.status_code == 502
+
+
+def entry(index, embedding=None):
+    return SimpleNamespace(index=index, embedding=embedding or vector(1.0))
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda data: [entry(0), entry(0)],  # a duplicate index, the other text left without one
+        lambda data: [entry(0), entry(2)],  # an index past the texts
+        lambda data: [entry(-1), entry(1)],
+        lambda data: [entry("0"), entry(1)],  # not a number
+        lambda data: [entry(True), entry(1)],
+        lambda data: [SimpleNamespace(index=0), entry(1)],  # no embedding
+        lambda data: [entry(0, embedding=42), entry(1)],  # an embedding that isn't a list
+        lambda data: [entry(0), entry(1, embedding=[True] * DIM)],
+    ],
+    ids=[
+        "duplicate",
+        "out of range",
+        "negative",
+        "string index",
+        "bool index",
+        "no embedding",
+        "embedding not a list",
+        "booleans",
+    ],
+)
+def test_refuses_a_malformed_response_as_a_502(client, auth, fake_embeddings, mutate):
+    fake_embeddings.mutate = mutate
     res = post(client, auth, ["a", "b"])
     assert res.status_code == 502
 

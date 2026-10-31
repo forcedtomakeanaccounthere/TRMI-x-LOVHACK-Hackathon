@@ -92,3 +92,24 @@ $$;
 -- Backend only, like the table.
 revoke execute on function public.match_chunks(text, extensions.vector, text, int) from public, anon, authenticated;
 grant execute on function public.match_chunks(text, extensions.vector, text, int) to service_role;
+
+-- Every room is queued for indexing when it is created: its room_ai row starts as 'pending'. The
+-- row is written with the room, so a backend restart before the job runs (or while it runs) can't
+-- lose it: on startup apps/backend indexes every room still 'pending' or 'indexing'.
+create function public.queue_room_ai() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  insert into public.room_ai (room_id) values (new.id) on conflict (room_id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger rooms_queue_ai
+  after insert on rooms
+  for each row execute function public.queue_room_ai();
+
+-- Rooms made before this migration are queued too, so they get indexed on the next startup.
+insert into room_ai (room_id) select id from rooms on conflict (room_id) do nothing;
+
+-- The startup query: rooms left waiting, oldest first.
+create index room_ai_waiting_idx on room_ai (created_at) where status in ('pending', 'indexing');

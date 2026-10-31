@@ -5,7 +5,8 @@ import DOMPurify from "isomorphic-dompurify";
 import { JSDOM } from "jsdom";
 import { HttpError } from "../middleware/error";
 
-const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, figure";
+// A table is one block: its rows and cells are not, so highlights and citations point at the table.
+const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, figure, table";
 const UNREADABLE = "We couldn't read this page. Try pasting the text instead.";
 
 const FETCH_TIMEOUT_MS = 10_000;

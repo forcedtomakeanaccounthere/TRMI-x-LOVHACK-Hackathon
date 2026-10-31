@@ -90,6 +90,33 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
   }
 }
 
+// Rooms resumed per startup. More than this waiting means something else is wrong.
+export const RESUME_LIMIT = 1000;
+
+/**
+ * Indexes every room left "pending" or "indexing": rooms whose job was lost to a restart, and rooms
+ * made before indexing existed. Call once at startup. One room at a time, oldest first, so a
+ * backlog doesn't flood the embedding provider. Deleted rooms wait until they are restored.
+ * Assumes one backend instance: another one's running jobs would look interrupted here.
+ */
+export async function resumeIndexing(): Promise<number> {
+  const { data, error } = await supabaseAdmin()
+    .from("room_ai")
+    .select("room_id, rooms!inner(status)")
+    .in("status", ["pending", "indexing"])
+    .neq("rooms.status", "deleted")
+    .order("created_at")
+    .limit(RESUME_LIMIT);
+  if (error) throw error;
+
+  const rooms = (data as { room_id: string }[]).map((row) => row.room_id);
+  if (rooms.length) console.log(`[ai-jobs] resuming indexing for ${rooms.length} room(s)`);
+  for (const roomId of rooms) {
+    await indexRoom(roomId).catch((err: unknown) => markFailed(roomId, err));
+  }
+  return rooms.length;
+}
+
 /** Records a failed run in room_ai. Never throws, since it runs where nobody is waiting. */
 export async function markFailed(roomId: string, err: unknown) {
   console.error(`[ai-jobs] indexing room ${roomId} failed:`, err);

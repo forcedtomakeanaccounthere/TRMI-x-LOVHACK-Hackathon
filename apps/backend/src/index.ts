@@ -1,8 +1,14 @@
 import { createApp } from "./app";
 import { env } from "./env";
+import { resumeIndexing } from "./lib/ai-jobs";
 
 const app = createApp();
 
 app.listen(env.SERVER_PORT, () => {
   console.log(`[backend] listening on http://localhost:${env.SERVER_PORT}`);
+
+  // Rooms whose indexing was cut short by a restart, or never ran, are indexed in the background.
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
+    resumeIndexing().catch((err: unknown) => console.error("[ai-jobs] could not resume indexing:", err));
+  }
 });

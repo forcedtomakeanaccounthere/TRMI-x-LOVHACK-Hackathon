@@ -54,24 +54,19 @@ async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list
     try:
         response = await _create(provider, api_key, model, texts, **kwargs)
     except Exception as e:
-        # The texts are document content: never logged.
-        log.warning("embed %s:%s failed for %d texts: %s", provider, model, len(texts), e)
+        # Only the error's type and HTTP status: a provider may echo the texts (document content)
+        # back in its error message.
+        log.warning(
+            "embed %s:%s failed for %d texts: %s (status %s)",
+            provider,
+            model,
+            len(texts),
+            type(e).__name__,
+            getattr(e, "status_code", "-"),
+        )
         raise EmbeddingError(f"{provider}:{model} failed") from e
 
-    data = sorted(response.data, key=lambda d: d.index)
-    vectors = [list(d.embedding) for d in data]
-    if len(vectors) != len(texts):
-        raise EmbeddingError(
-            f"{provider}:{model} returned {len(vectors)} vectors for {len(texts)} texts"
-        )
-    for vector in vectors:
-        if len(vector) != dim:
-            raise EmbeddingError(
-                f"{provider}:{model} returned {len(vector)} numbers, EMBEDDING_DIM is {dim}"
-            )
-        if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in vector):
-            raise EmbeddingError(f"{provider}:{model} returned a vector that isn't all numbers")
-
+    vectors = _vectors(response, len(texts), dim, f"{provider}:{model}")
     log.info(
         "embed %s:%s %d %s texts in %.0f ms",
         provider,
@@ -81,3 +76,35 @@ async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list
         (time.monotonic() - start) * 1000,
     )
     return model, vectors
+
+
+def _vectors(response, count: int, dim: int, name: str) -> list[list[float]]:
+    """The vectors of an embeddings response in input order, after checking its whole shape: an
+    entry for every index 0..count-1 exactly once, each EMBEDDING_DIM finite numbers. Anything else
+    raises EmbeddingError, so no vector can land on the wrong chunk."""
+    try:
+        by_index: dict[int, list[float]] = {}
+        for item in response.data:
+            index = item.index
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < count:
+                raise EmbeddingError(f"{name} returned an entry with index {index!r}")
+            if index in by_index:
+                raise EmbeddingError(f"{name} returned index {index} twice")
+            by_index[index] = list(item.embedding)
+    except EmbeddingError:
+        raise
+    except Exception as e:  # missing fields, a non-list embedding, ...
+        raise EmbeddingError(f"{name} returned a malformed response ({type(e).__name__})") from e
+
+    if len(by_index) != count:
+        raise EmbeddingError(f"{name} returned {len(by_index)} vectors for {count} texts")
+    vectors = [by_index[i] for i in range(count)]
+    for vector in vectors:
+        if len(vector) != dim:
+            raise EmbeddingError(f"{name} returned {len(vector)} numbers, EMBEDDING_DIM is {dim}")
+        if not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+            for x in vector
+        ):
+            raise EmbeddingError(f"{name} returned a vector that isn't all numbers")
+    return vectors
