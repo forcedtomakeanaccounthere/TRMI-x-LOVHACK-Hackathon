@@ -23,8 +23,7 @@
     "test:db": "supabase test db",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
-    "setup:ai": "cd apps/ai && uv sync",
-    "prepare": "husky"
+    "setup:ai": "cd apps/ai && uv sync"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
