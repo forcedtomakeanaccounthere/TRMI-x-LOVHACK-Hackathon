@@ -116,6 +116,57 @@ export const RoomSummary = z.object({
 });
 export type RoomSummary = z.infer<typeof RoomSummary>;
 
+// --- Ask the room (POST /api/rooms/:id/ask) ---
+
+// The answer when the room's document doesn't answer a question (apps/ai/app/services/answer.py).
+export const NOT_IN_DOCUMENT = "I couldn't find that in this document.";
+
+// The name works like RecapRequest's: optional, and a blank one counts as none.
+export const AskRequest = z.object({
+  question: z.string().trim().min(1, "Ask a question first").max(500),
+  name: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .transform((name) => name || undefined),
+});
+export type AskRequest = z.infer<typeof AskRequest>;
+
+// POST /answer on apps/ai (apps/ai/app/schemas.py AnswerData): `chunk` is the 1-based position of
+// the chunk it quotes among the chunks that were sent.
+export const AnswerResponse = z.object({
+  answer: z.string(),
+  found_in_document: z.boolean(),
+  citations: z.array(z.object({ chunk: z.number().int(), quote: z.string() })),
+});
+export type AnswerResponse = z.infer<typeof AnswerResponse>;
+
+// A checked citation as saved and shown: where in the room the quote is. Page and times come from
+// the chunk, never from the model.
+export const AiCitation = z.object({
+  quote: z.string(),
+  block_ids: z.array(z.string()),
+  page: z.number().int().nullable(),
+  start_sec: z.number().nullable(),
+  end_sec: z.number().nullable(),
+});
+export type AiCitation = z.infer<typeof AiCitation>;
+
+// A row of ai_messages (supabase/migrations/0012_ai_messages.sql).
+export const AiMessage = z.object({
+  id: z.string().uuid(),
+  room_id: z.string(),
+  kind: z.enum(["ask", "explain"]),
+  asked_by: z.string().nullable(),
+  question: z.string(),
+  answer: z.string(),
+  found_in_document: z.boolean(),
+  citations: z.array(AiCitation),
+  created_at: z.string(),
+});
+export type AiMessage = z.infer<typeof AiMessage>;
+
 export const Recap = z.object({
   id: z.string().uuid(),
   room_id: z.string(),

@@ -1,4 +1,6 @@
 import {
+  AiMessage,
+  AskRequest,
   ApiError as ApiErrorSchema,
   AuthSession as AuthSessionSchema,
   AuthUser as AuthUserSchema,
@@ -486,6 +488,30 @@ export const openApiDocument = createDocument({
           "200": reply("Up to three people, most active first", TopMembersResponse),
           ...needsVerifiedUser,
           "404": failure("Room not found or deleted"),
+        },
+      },
+    },
+    "/api/rooms/{id}/ask": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Ask the AI a question about a room's document",
+        description:
+          "Finds the best chunks of the room (by embedding and keyword, keyword only when embeddings are " +
+          "unavailable) and answers from them alone. Every citation is checked against its chunk; pages and " +
+          "times come from the chunk. When the document doesn't answer, `found_in_document` is false and the " +
+          "answer says so. The saved message reaches everyone in the room through Supabase Realtime. Guests " +
+          "can ask; `name` (or a signed-in caller's name) is saved as `asked_by`. At most 10 questions a " +
+          "minute per IP and 30 per room.",
+        requestParams: { path: roomId },
+        requestBody: body(AskRequest),
+        responses: {
+          "201": reply("The answer, as saved", AiMessage),
+          ...invalidInput,
+          "404": failure("Room not found or deleted"),
+          "409": failure("The room is archived, or the AI is still reading it or couldn't read it"),
+          "429": failure("Too many questions from this IP or in this room in the last minute"),
+          "502": failure("The AI service failed, timed out or returned an unexpected shape"),
+          "503": failure("No AI provider is configured"),
         },
       },
     },

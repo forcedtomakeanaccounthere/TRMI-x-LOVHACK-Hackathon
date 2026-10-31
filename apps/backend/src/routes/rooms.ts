@@ -1,5 +1,11 @@
 import {
+  AnswerResponse,
+  AskRequest,
   CreateInviteRequest,
+  EmbedResponse,
+  NOT_IN_DOCUMENT,
+  type AiCitation,
+  type AiMessage,
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
   DashboardQuery,
@@ -16,6 +22,7 @@ import {
   type TopMembersResponse,
 } from "@linkroom/shared";
 import { Router, type RequestHandler } from "express";
+import { rateLimit } from "express-rate-limit";
 import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
@@ -27,6 +34,7 @@ import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
+import { env } from "../env";
 
 export const roomsRouter = Router();
 
@@ -583,4 +591,115 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
   } finally {
     recapsInFlight.delete(id);
   }
+});
+
+// --- Ask the room ---
+
+// Chunks a question is answered from (match_chunks p_k).
+const ASK_CHUNKS = 8;
+// apps/ai answers within 25 s; embedding the question is quick or not worth waiting for.
+const ANSWER_TIMEOUT_MS = 30_000;
+const QUESTION_EMBED_TIMEOUT_MS = 10_000;
+
+const tooManyQuestions = (scope: string) => ({ error: `Too many questions ${scope}. Try again in a minute.` });
+// Per person (IP), and per room across everyone, since every answer costs an AI call.
+const askPerIp = rateLimit({
+  windowMs: 60_000,
+  limit: env.ASK_RATE_LIMIT,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: tooManyQuestions("from you"),
+});
+const askPerRoom = rateLimit({
+  windowMs: 60_000,
+  limit: env.ASK_ROOM_RATE_LIMIT,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => `room:${req.params.id}`,
+  message: tooManyQuestions("in this room"),
+});
+
+type MatchedChunk = { content: string; block_ids: string[]; page: number | null; start_sec: number | null; end_sec: number | null };
+
+// POST /api/rooms/:id/ask  { question, name? }: answers a question from the room's document, with
+// citations checked against it. Guests can ask. The answer is saved in ai_messages, which reaches
+// everyone in the room over Realtime, and returned.
+roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { question, name } = AskRequest.parse(req.body ?? {});
+  const askedBy = name ?? (req.user?.name.trim().slice(0, 40) || null);
+  const db = supabaseAdmin();
+
+  const [room, ai] = await Promise.all([
+    db.from("rooms").select("status").eq("id", id).maybeSingle(),
+    db.from("room_ai").select("status").eq("room_id", id).maybeSingle(),
+  ]);
+  if (room.error) throw room.error;
+  if (ai.error) throw ai.error;
+  if (!room.data || room.data.status === "deleted") throw new HttpError(404, "Room not found");
+  if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
+  // Until the chunks are saved there is nothing to search; once they are ("summarizing" onwards)
+  // questions work, with or without the summary.
+  if (!ai.data || ai.data.status === "pending" || ai.data.status === "indexing") {
+    throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
+  }
+  // A failed indexing run may have left no chunks or only some: an empty search there would say
+  // "not in this document" about a document nobody searched.
+  if (ai.data.status === "failed") {
+    throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
+  }
+
+  // Without an embedding the search is by keyword only.
+  let embedding: number[] | null = null;
+  try {
+    const embedded = await callAi("/embed", { texts: [question], input_type: "query" }, EmbedResponse, QUESTION_EMBED_TIMEOUT_MS);
+    embedding = embedded.vectors[0] ?? null;
+  } catch {
+    console.warn(`[rooms] no embedding for a question in room ${id}, searching by keyword`);
+  }
+
+  const { data: found, error: matchError } = await db.rpc("match_chunks", {
+    p_room: id,
+    p_embedding: embedding,
+    p_query: question,
+    p_k: ASK_CHUNKS,
+  });
+  if (matchError) throw matchError;
+  const chunks = (found ?? []) as MatchedChunk[];
+
+  // Nothing matched: the document can't answer, and there is nothing to send the AI.
+  const answer: AnswerResponse = chunks.length
+    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
+    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] };
+
+  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
+  const citations = answer.citations.flatMap((citation): AiCitation[] => {
+    const chunk = chunks[citation.chunk - 1];
+    if (!chunk) return [];
+    return [{ quote: citation.quote, block_ids: chunk.block_ids, page: chunk.page, start_sec: chunk.start_sec, end_sec: chunk.end_sec }];
+  });
+  const inDocument = answer.found_in_document && citations.length > 0;
+
+  const { data: message, error } = await db
+    .from("ai_messages")
+    .insert({
+      room_id: id,
+      kind: "ask",
+      asked_by: askedBy,
+      question,
+      answer: inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
+      found_in_document: inDocument,
+      citations: inDocument ? citations : [],
+    })
+    .select()
+    .single();
+  if (error) throw error;
+
+  // A history row is nice to have but never worth failing the answer for.
+  const { error: historyError } = await db
+    .from("ai_queries")
+    .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "ask", prompt: question, response: message });
+  if (historyError) console.error("[rooms] could not record the question", historyError);
+
+  res.status(201).json(message as AiMessage);
 });

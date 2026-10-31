@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     summary_call_deadline_seconds: float = 100.0
     summary_deadline_seconds: float = 540.0
 
+    # Answers (POST /answer): someone is waiting in the room, so one call gets 25 s in all,
+    # below apps/backend's 30 s timeout for it.
+    answer_deadline_seconds: float = 25.0
+    # One provider's share, so a provider that hangs still leaves time to fall back to the next.
+    answer_attempt_seconds: float = 10.0
+
     # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
     # models can't be compared, so mixing them would break search. When it fails, apps/backend
     # falls back to keyword search. The key is the provider's *_API_KEY above.
