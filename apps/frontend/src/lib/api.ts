@@ -7,6 +7,7 @@ import type {
   CreateTextRoomRequest,
   DashboardQuery,
   DashboardResponse,
+  ExportSummaryQuery,
   LoginRequest,
   MessageResponse,
   RecapData,
@@ -110,6 +111,10 @@ export const api = {
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.
   recap: (roomId: string, name?: string) => request<RecapData>(`/api/rooms/${roomId}/recap`, json({ name })),
+
+  // A plain URL (not a fetch) so the browser downloads the file itself.
+  summaryExportUrl: (roomId: string, format: ExportSummaryQuery["format"]) =>
+    `${API_URL}/api/rooms/${encodeURIComponent(roomId)}/summary/export?format=${format}`,
 
   // Dashboard: rooms I created or joined. Deleted rooms come back only when asked for by status.
   myRooms: (query: Partial<DashboardQuery>, token: string) => {
