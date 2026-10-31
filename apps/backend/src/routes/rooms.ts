@@ -643,6 +643,11 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   if (!ai.data || ai.data.status === "pending" || ai.data.status === "indexing") {
     throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
   }
+  // A failed indexing run may have left no chunks or only some: an empty search there would say
+  // "not in this document" about a document nobody searched.
+  if (ai.data.status === "failed") {
+    throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
+  }
 
   // Without an embedding the search is by keyword only.
   let embedding: number[] | null = null;

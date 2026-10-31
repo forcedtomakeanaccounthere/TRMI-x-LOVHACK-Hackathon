@@ -19,9 +19,11 @@ class FakeAnswerAI:
             answer="Plants turn sunlight into energy.", found_in_document=True, citations=[]
         )
         self.calls: list[tuple[str, str, str]] = []
+        self.timeouts: list[float] = []
 
     async def __call__(self, provider, system, user, schema, timeout):
         self.calls.append((provider.model, system, user))
+        self.timeouts.append(timeout)
         if provider.model in self.fail:
             raise RuntimeError(f"{provider.model} is down")
         return self.answer
@@ -123,6 +125,28 @@ def test_the_answer_is_plain_text_with_no_new_links(client, auth, fake):
     assert ask(client, auth).json()["answer"] == (
         "Mitochondria power cells. https://example.com/cell [link removed]"
     )
+
+
+def test_saves_quotes_as_they_are_in_the_chunk(client, auth, fake):
+    long_quote = "Photosynthesis turns sunlight into chemical energy in plants. " * 6
+    chunks = [{"content": long_quote}, CHUNKS[1]]
+    fake.answer.citations = [
+        cite(2, "powerhouse of the cell. See https://example.com/cell"),  # a link from the chunk
+        cite(1, long_quote),  # longer than a saved quote
+    ]
+    citations = ask(client, auth, chunks=chunks).json()["citations"]
+    assert citations[0]["quote"] == "powerhouse of the cell. See https://example.com/cell"
+    assert len(citations[1]["quote"]) <= 300
+    assert "…" not in citations[1]["quote"]
+    assert citations[1]["quote"] in long_quote
+
+
+def test_gives_each_provider_a_share_of_the_time(client, auth, fake):
+    # A provider that hangs for its whole share still leaves time for the next one.
+    fake.fail = {"nv-a"}
+    fake.answer.citations = [cite(1, "turns sunlight into chemical energy")]
+    assert ask(client, auth).status_code == 200
+    assert fake.timeouts == [10.0, 10.0]
 
 
 def test_falls_back_to_the_next_provider(client, auth, fake):

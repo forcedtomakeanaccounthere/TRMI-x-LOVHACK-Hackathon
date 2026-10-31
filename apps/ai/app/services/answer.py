@@ -82,7 +82,7 @@ async def answer_question(req: AnswerRequest) -> AnswerData:
             user,
             AnswerData,
             deadline=time.monotonic() + settings.answer_deadline_seconds,
-            attempt_seconds=settings.answer_deadline_seconds,
+            attempt_seconds=settings.answer_attempt_seconds,
             min_attempt_seconds=MIN_ATTEMPT_SECONDS,
         )
     except AllProvidersFailed as e:
@@ -104,11 +104,15 @@ def verify_answer(answer: AnswerData, chunks: list[AnswerChunk]) -> AnswerData:
         if not 1 <= citation.chunk <= len(chunks):
             log.info("Dropped a citation of chunk %s, which wasn't sent", citation.chunk)
             continue
-        if not quote_in(citation.quote, chunks[citation.chunk - 1].content):
+        source = chunks[citation.chunk - 1].content
+        # Cleaned first (no tags or control characters; links from the chunk kept) and cut without
+        # an ellipsis, then checked: the quote that is saved is the one that was found in the chunk.
+        quote = clean_text(citation.quote, urls_in(source), len(citation.quote) + 1)
+        quote = quote[:MAX_QUOTE_CHARS].rstrip()
+        if not quote_in(quote, source):
             log.info("Dropped a citation whose quote isn't in chunk %d", citation.chunk)
             continue
-        quote = clean_text(citation.quote, set(), MAX_QUOTE_CHARS)
-        if quote and (citation.chunk, quote) not in seen:
+        if (citation.chunk, quote) not in seen:
             seen.add((citation.chunk, quote))
             citations.append(Citation(chunk=citation.chunk, quote=quote))
 

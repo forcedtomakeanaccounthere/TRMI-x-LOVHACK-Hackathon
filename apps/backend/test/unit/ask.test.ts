@@ -146,7 +146,16 @@ describe("POST /api/rooms/:id/ask", () => {
     expect(callAi).not.toHaveBeenCalled();
   });
 
-  it.each(["summarizing", "ready", "failed"])("answers while the room's AI state is %s", async (aiStatus) => {
+  it("answers 409 when the room's indexing failed, rather than searching missing chunks", async () => {
+    state.results.room_ai = [{ data: { status: "failed" } }];
+    const res = await ask();
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/couldn't read this room/);
+    expect(callAi).not.toHaveBeenCalled();
+    expect(state.rpc).toEqual([]);
+  });
+
+  it.each(["summarizing", "ready"])("answers while the room's AI state is %s", async (aiStatus) => {
     state.results.room_ai = [{ data: { status: aiStatus } }];
     state.matches = [];
     expect((await ask()).status).toBe(201);
