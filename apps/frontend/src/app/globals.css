@@ -351,6 +351,37 @@
   }
 }
 
+/* Paused rooms on the dashboard calendar breathe in their own colour. */
+@keyframes blink-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@utility animate-blink-soft {
+  animation: blink-soft 1.6s ease-in-out infinite;
+}
+
+/* Running rooms on the calendar: steady, with one gentle blink every 5 seconds. */
+@keyframes blink-every-5s {
+  0%,
+  84%,
+  100% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 0.35;
+  }
+}
+
+@utility animate-blink-5s {
+  animation: blink-every-5s 5s ease-in-out infinite;
+}
+
 @utility animate-marquee {
   animation: marquee 48s linear infinite;
 }
@@ -383,6 +414,8 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-marquee,
   .animate-float-slow,
+  .animate-blink-soft,
+  .animate-blink-5s,
   .text-shimmer {
     animation: none;
   }

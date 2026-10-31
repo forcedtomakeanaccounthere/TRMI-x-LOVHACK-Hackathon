@@ -4,10 +4,15 @@ import type {
   CreateLinkRoomRequest,
   CreateRoomResponse,
   CreateTextRoomRequest,
+  DashboardQuery,
+  DashboardResponse,
   LoginRequest,
   MessageResponse,
   RecapData,
+  RoomDetail,
+  RoomStatusResponse,
   SignupRequest,
+  UpdateRoomRequest,
 } from "@linkroom/shared";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -73,4 +78,27 @@ export const api = {
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.
   recap: (roomId: string, name?: string) => request<RecapData>(`/api/rooms/${roomId}/recap`, json({ name })),
+
+  // Dashboard: rooms I created or joined. Deleted rooms come back only when asked for by status.
+  myRooms: (query: Partial<DashboardQuery>, token: string) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return request<DashboardResponse>(`/api/me/rooms?${params}`, { method: "GET" }, token);
+  },
+
+  // Remembers the room for a signed-in user; 404 when it doesn't exist or was deleted.
+  joinRoom: (roomId: string, token: string) =>
+    request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/join`, { method: "POST" }, token),
+
+  // Owner only. 409 when the room is deleted (restore it first) or another change won the race.
+  updateRoom: (roomId: string, data: UpdateRoomRequest, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}`, { ...json(data), method: "PATCH" }, token),
+
+  // Owner only: soft delete. A deleted room stays restorable.
+  deleteRoom: (roomId: string, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" }, token),
+
+  // Owner only: brings a deleted room back as running.
+  restoreRoom: (roomId: string, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}/restore`, { method: "POST" }, token),
 };

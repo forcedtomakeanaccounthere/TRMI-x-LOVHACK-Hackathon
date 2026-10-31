@@ -8,7 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { EASE_OUT_EXPO } from "@/components/fx/reveal";
 import { api } from "@/lib/api";
-import { safeNext } from "@/lib/session";
+import { AFTER_LOGIN, safeNext } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { AuthHeading, Field, Notice, SubmitButton } from "./fields";
 import { ResendButton } from "./resend-button";
@@ -35,7 +35,7 @@ const STRENGTH_LABEL = ["Too short", "Fair", "Good", "Strong", "Excellent"];
 
 export function SignupForm() {
   const params = useSearchParams();
-  const next = safeNext(params.get("next"));
+  const next = safeNext(params.get("next"), AFTER_LOGIN);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -110,7 +110,7 @@ export function SignupForm() {
             </p>
           </div>
           <Link
-            href={`/login?email=${encodeURIComponent(sentTo)}${next !== "/" ? `&next=${encodeURIComponent(next)}` : ""}`}
+            href={`/login?email=${encodeURIComponent(sentTo)}${next !== AFTER_LOGIN ? `&next=${encodeURIComponent(next)}` : ""}`}
             className="mt-10 inline-flex h-12 w-full items-center justify-center rounded-full text-[0.9375rem] font-medium ring-1 ring-(--hairline) transition-colors hover:bg-foreground/4"
           >
             I&apos;ve verified — sign in
@@ -188,7 +188,7 @@ export function SignupForm() {
           <p className="mt-8 text-center text-[0.875rem] text-muted-foreground">
             Already have an account?{" "}
             <Link
-              href={`/login${next !== "/" ? `?next=${encodeURIComponent(next)}` : ""}`}
+              href={`/login${next !== AFTER_LOGIN ? `?next=${encodeURIComponent(next)}` : ""}`}
               className="font-medium text-foreground underline-offset-4 hover:underline"
             >
               Sign in

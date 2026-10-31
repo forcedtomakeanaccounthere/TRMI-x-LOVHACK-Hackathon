@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 export const PENDING_LINK_KEY = "linkroom-pending-link";
 
 // Paste a link → a room. Visitors without an account are sent to sign up, and the link waits for them.
-export function HeroLinkForm({ className }: { className?: string }) {
+// onCreated runs before the redirect, e.g. so the dashboard can remember the room's colour.
+export function HeroLinkForm({ className, onCreated }: { className?: string; onCreated?: (id: string) => void }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const urlRef = useRef<HTMLInputElement>(null);
@@ -55,6 +56,7 @@ export function HeroLinkForm({ className }: { className?: string }) {
         return;
       }
       const { id } = await create(session.access_token);
+      onCreated?.(id);
       router.push(`/r/${id}`);
     } catch (err) {
       setBusy(false);
