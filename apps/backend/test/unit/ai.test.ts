@@ -7,6 +7,9 @@ const { callAi } = await import("../../src/lib/ai");
 
 const Reply = z.object({ ok: z.boolean() });
 const fetchMock = vi.fn<typeof fetch>();
+// What Node's fetch throws when it can't connect, or when the connection drops after sending.
+const connectError = (code: string) =>
+  new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) });
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -53,8 +56,8 @@ describe("callAi", () => {
     expect(console.error).toHaveBeenCalled();
   });
 
-  it("retries once when the connection fails, with the same request id", async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(json({ ok: true }));
+  it("retries once when the connection was refused, with the same request id and deadline", async () => {
+    fetchMock.mockRejectedValueOnce(connectError("ECONNREFUSED")).mockResolvedValueOnce(json({ ok: true }));
 
     await expect(callAi("/recap", {}, Reply, 1000)).resolves.toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -63,11 +66,27 @@ describe("callAi", () => {
     expect(fetchMock.mock.calls[0]![1]!.signal).toBe(fetchMock.mock.calls[1]![1]!.signal);
   });
 
+  it("retries when every address of a host refused (an AggregateError cause)", async () => {
+    const cause = new AggregateError([Object.assign(new Error(), { code: "ECONNREFUSED" })]);
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed", { cause })).mockResolvedValueOnce(json({ ok: true }));
+    await expect(callAi("/recap", {}, Reply, 1000)).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("gives up after the one retry", async () => {
-    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    fetchMock.mockRejectedValue(connectError("ECONNREFUSED"));
     await expect(callAi("/recap", {}, Reply, 1000)).rejects.toMatchObject({ status: 502 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["UND_ERR_SOCKET", "ECONNRESET"])(
+    "doesn't retry a connection that dropped after the request went out (%s)",
+    async (code) => {
+      fetchMock.mockRejectedValue(connectError(code));
+      await expect(callAi("/recap", {}, Reply, 1000)).rejects.toMatchObject({ status: 502 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("doesn't retry once the deadline has passed", async () => {
     fetchMock.mockImplementation(

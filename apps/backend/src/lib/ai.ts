@@ -5,6 +5,16 @@ import { HttpError } from "../middleware/error";
 
 const UNAVAILABLE = "The AI couldn't answer right now. Try again in a moment.";
 
+// Connection errors that mean the request never reached apps/ai, so sending it again can't pay for a
+// second generation. A connection dropped after sending (UND_ERR_SOCKET, ECONNRESET) is not retried.
+const NOT_SENT = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH"]);
+
+function neverSent(err: unknown) {
+  const cause = (err as { cause?: { code?: string; errors?: { code?: string }[] } } | undefined)?.cause;
+  // Node reports one failed connect as the cause, or several (one per address) in an AggregateError.
+  return [cause, ...(cause?.errors ?? [])].some((e) => NOT_SENT.has(e?.code ?? ""));
+}
+
 /**
  * POSTs to apps/ai and validates the reply. Every AI call goes through here, so each one carries
  * the internal token and a request id, and any failure reaches the user as a friendly 502 or 503
@@ -28,10 +38,11 @@ export async function callAi<T>(path: string, body: unknown, schema: z.ZodType<T
         signal,
       });
     } catch (err) {
-      // A refused or dropped connection (a restart, a cold start) is worth one more try. A timeout
-      // is not: it has used up the time already.
-      if (attempt === 1 && !signal.aborted) {
-        console.warn(`AI ${path} [${requestId}] connection failed, retrying once:`, err);
+      // A connection that was never made (the service restarting or cold-starting) is worth one more
+      // try. A timeout is not, it has used up the time; nor is a connection that dropped after the
+      // request went out, since apps/ai may already be generating.
+      if (attempt === 1 && !signal.aborted && neverSent(err)) {
+        console.warn(`AI ${path} [${requestId}] connection refused, retrying once:`, err);
         continue;
       }
       console.error(`AI ${path} [${requestId}] unreachable:`, err);
