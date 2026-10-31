@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { addBlockIds, extractArticle, isPrivateHost, textToHtml } from "../../src/lib/extract";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { addBlockIds, extractArticle, isPrivateHost, openLinksInNewTab, textToHtml } from "../../src/lib/extract";
 import { HttpError } from "../../src/middleware/error";
 
 describe("isPrivateHost", () => {
@@ -37,6 +37,19 @@ describe("addBlockIds", () => {
   });
 });
 
+describe("openLinksInNewTab", () => {
+  it("opens links in a new tab without giving the page access to the room", () => {
+    expect(openLinksInNewTab('<p><a href="https://example.com/a">a</a></p>')).toBe(
+      '<p><a href="https://example.com/a" target="_blank" rel="noopener noreferrer">a</a></p>',
+    );
+  });
+
+  it("leaves in-page anchors and anchors without href alone", () => {
+    const html = '<a href="#notes">jump</a><a name="notes">notes</a>';
+    expect(openLinksInNewTab(html)).toBe(html);
+  });
+});
+
 describe("textToHtml", () => {
   it("splits paragraphs on blank lines and drops empty ones", () => {
     expect(textToHtml("one\nline two\n\n\n  \n\nthree")).toBe(
@@ -52,6 +65,30 @@ describe("textToHtml", () => {
 });
 
 describe("extractArticle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const body = "LinkRoom turns any link into a shared reading room for a group. ".repeat(12);
+  const page = `<html><head><title>Shared reading</title></head><body><article>
+    <h1>Shared reading</h1>
+    <p>${body}<a href="/wiki/Reading">relative link</a> and <a href="https://other.org/x">absolute link</a>.</p>
+    <p>${body}<img src="images/room.png" alt="room"><script>alert(1)</script></p>
+  </article></body></html>`;
+
+  it("returns sanitized article HTML with absolute URLs, new-tab links and block ids", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(page, { headers: { "Content-Type": "text/html" } })));
+
+    const { title, html } = await extractArticle("https://example.com/blog/post");
+
+    expect(title).toBe("Shared reading");
+    expect(html).toContain('<a href="https://example.com/wiki/Reading" target="_blank" rel="noopener noreferrer">');
+    expect(html).toContain('<a href="https://other.org/x" target="_blank" rel="noopener noreferrer">');
+    expect(html).toContain('src="https://example.com/blog/images/room.png"');
+    expect(html).toContain('data-block="b0"');
+    expect(html).not.toContain("<script");
+  });
+
   it.each(["ftp://example.com/file", "javascript:alert(1)", "http://localhost:4000", "http://192.168.0.10/admin"])(
     "rejects %s before fetching",
     async (url) => {
