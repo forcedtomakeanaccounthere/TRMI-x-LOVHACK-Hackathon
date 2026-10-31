@@ -32,6 +32,9 @@ export async function extractPdfText(buf: Buffer): Promise<string | null> {
     if (err instanceof Error && err.name === "PasswordException") {
       throw new HttpError(422, "This PDF is password-protected. Remove the password and try again.");
     }
+    if (err instanceof PdfTimeoutError) {
+      throw new HttpError(422, "This PDF took too long to open. Try a smaller file.");
+    }
     throw new HttpError(422, "We couldn't read this PDF. It may be damaged.");
   }
 
@@ -65,10 +68,16 @@ function cleanText(text: string) {
   return text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+class PdfTimeoutError extends Error {
+  constructor() {
+    super("PDF read timed out");
+  }
+}
+
 function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("PDF read timed out")), Math.max(0, deadline - Date.now()));
+    timer = setTimeout(() => reject(new PdfTimeoutError()), Math.max(0, deadline - Date.now()));
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }

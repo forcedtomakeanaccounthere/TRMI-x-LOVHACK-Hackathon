@@ -92,7 +92,9 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
   });
   if (error) {
     // No room points at the file, so don't leave it in the public bucket.
-    await db.storage.from("pdfs").remove([pdfPath]);
+    const { error: cleanupError } = await db.storage.from("pdfs").remove([pdfPath]);
+    // Logged with the path so the orphaned file can be found and removed by hand.
+    if (cleanupError) console.error(`Could not remove orphaned PDF ${pdfPath}:`, cleanupError);
     throw error;
   }
 
