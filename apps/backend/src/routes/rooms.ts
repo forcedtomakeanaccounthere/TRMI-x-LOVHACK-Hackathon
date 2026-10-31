@@ -91,6 +91,7 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
 
 // The most rooms a user's visit history contributes to their dashboard.
 const MAX_VISITS = 1000;
+const DELETED_PDFS = "pdfs-deleted";
 
 type RoomRow = Omit<DashboardRoom, "role" | "last_opened_at" | "highlight_count" | "comment_count"> & {
   created_by: string | null;
@@ -176,19 +177,41 @@ roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
 // PATCH /api/rooms/:id/status  { status }: owner only. Someone else's room looks like it doesn't exist.
 roomsRouter.patch("/:id/status", requireAuth, async (req, res) => {
   const { status } = UpdateRoomStatusRequest.parse(req.body);
+  const db = supabaseAdmin();
 
-  const { data, error } = await supabaseAdmin()
+  const { data: room, error } = await db
+    .from("rooms")
+    .select("status, pdf_path")
+    .eq("id", req.params.id)
+    .eq("created_by", req.user!.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room) throw new HttpError(404, "Room not found");
+
+  const hide = status === "deleted";
+  const pdfPath = (room.status === "deleted") !== hide ? (room.pdf_path as string | null) : null;
+  if (pdfPath) await movePdf(pdfPath, hide);
+
+  const { data, error: updateError } = await db
     .from("rooms")
     .update({ status })
     .eq("id", req.params.id)
-    .eq("created_by", req.user!.id)
     .select("id, status")
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) throw new HttpError(404, "Room not found");
+    .single();
+  if (updateError) {
+    if (pdfPath) await movePdf(pdfPath, !hide).catch(console.error);
+    throw updateError;
+  }
 
   res.json(data as RoomStatusResponse);
 });
+
+// Public bucket URLs skip RLS, so a deleted room's PDF has to leave the public bucket.
+async function movePdf(path: string, hide: boolean) {
+  const [from, to] = hide ? ["pdfs", DELETED_PDFS] : [DELETED_PDFS, "pdfs"];
+  const { error } = await supabaseAdmin().storage.from(from!).move(path, path, { destinationBucket: to! });
+  if (error) throw error;
+}
 
 // POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap.
 // The insert reaches every client through Supabase Realtime.

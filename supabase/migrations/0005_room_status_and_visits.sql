@@ -18,6 +18,12 @@ create table room_visits (
 create index on room_visits (user_id, last_opened_at desc);
 alter table room_visits enable row level security;
 
+-- Public bucket URLs skip RLS, so a deleted room's PDF waits here, in a private bucket, until it is
+-- restored. Only apps/backend can reach it: there are no policies.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('pdfs-deleted', 'pdfs-deleted', false, 20971520, '{application/pdf}')
+on conflict (id) do nothing;
+
 -- Deleted rooms disappear for the anon key, along with everything inside them.
 drop policy "public read" on rooms;
 drop policy "public read" on highlights;

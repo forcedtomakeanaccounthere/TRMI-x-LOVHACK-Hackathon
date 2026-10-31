@@ -11,6 +11,8 @@ type Call = [method: string, ...args: unknown[]];
 // resolves to the next result queued for that table.
 const calls: Record<string, Call[]> = {};
 const results: Record<string, Result[]> = {};
+const moves: [from: string, to: string][] = [];
+let moveError: Error | null = null;
 
 function table(name: string) {
   const log = (calls[name] ??= []);
@@ -29,6 +31,15 @@ function table(name: string) {
 vi.mock("../../src/lib/supabase", () => ({
   supabaseAdmin: () => ({
     from: table,
+    storage: {
+      from: (bucket: string) => ({
+        move: async (_from: string, _to: string, options: { destinationBucket: string }) => {
+          if (moveError) return { error: moveError };
+          moves.push([bucket, options.destinationBucket]);
+          return { error: null };
+        },
+      }),
+    },
     auth: {
       getUser: async () => ({
         data: { user: { id: USER, email: "a@example.com", email_confirmed_at: "2026-10-30T00:00:00Z", user_metadata: {} } },
@@ -62,6 +73,8 @@ const mine = (query: Record<string, string> = {}) =>
 beforeEach(() => {
   for (const key of Object.keys(calls)) delete calls[key];
   for (const key of Object.keys(results)) delete results[key];
+  moves.length = 0;
+  moveError = null;
   results.room_visits = [{ data: [] }];
   results.rooms = [{ data: [], count: 0 }];
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -199,26 +212,67 @@ describe("PATCH /api/rooms/:id/status", () => {
   const patch = (body: unknown) =>
     request(app).patch("/api/rooms/room0001/status").set("Authorization", "Bearer token").send(body as object);
 
-  it("only ever updates a room the caller owns", async () => {
-    results.rooms = [{ data: { id: "room0001", status: "closed" } }];
+  const owned = (room: { status: string; pdf_path: string | null }, after = "closed") => [
+    { data: room },
+    { data: { id: "room0001", status: after } },
+  ];
+
+  it("only looks up rooms the caller owns", async () => {
+    results.rooms = owned({ status: "running", pdf_path: null });
 
     expect((await patch({ status: "closed" })).body).toEqual({ id: "room0001", status: "closed" });
-    expect(called("rooms", "eq")).toEqual([
+    expect(called("rooms", "eq").slice(0, 2)).toEqual([
       ["id", "room0001"],
       ["created_by", USER],
     ]);
     expect(called("rooms", "update")).toEqual([[{ status: "closed" }]]);
   });
 
-  it("answers 404 when nothing matched", async () => {
+  it("answers 404 when nothing matched, without updating", async () => {
     results.rooms = [{ data: null }];
     expect((await patch({ status: "closed" })).status).toBe(404);
+    expect(called("rooms", "update")).toEqual([]);
   });
 
   it("writes nothing but the status", async () => {
-    results.rooms = [{ data: { id: "room0001", status: "closed" } }];
+    results.rooms = owned({ status: "running", pdf_path: null });
     await patch({ status: "closed", created_by: OTHER, title: "Hijacked" });
     expect(called("rooms", "update")).toEqual([[{ status: "closed" }]]);
+  });
+
+  it("moves a PDF out of the public bucket on delete, and back on restore", async () => {
+    results.rooms = owned({ status: "running", pdf_path: "room0001.pdf" }, "deleted");
+    await patch({ status: "deleted" });
+    expect(moves).toEqual([["pdfs", "pdfs-deleted"]]);
+
+    moves.length = 0;
+    results.rooms = owned({ status: "deleted", pdf_path: "room0001.pdf" });
+    await patch({ status: "closed" });
+    expect(moves).toEqual([["pdfs-deleted", "pdfs"]]);
+  });
+
+  it("leaves the PDF alone when it isn't entering or leaving deleted", async () => {
+    results.rooms = owned({ status: "running", pdf_path: "room0001.pdf" });
+    await patch({ status: "closed" });
+    results.rooms = owned({ status: "deleted", pdf_path: "room0001.pdf" }, "deleted");
+    await patch({ status: "deleted" });
+    expect(moves).toEqual([]);
+  });
+
+  it("keeps the status when the PDF can't be moved", async () => {
+    results.rooms = owned({ status: "running", pdf_path: "room0001.pdf" }, "deleted");
+    moveError = new Error("storage down");
+    expect((await patch({ status: "deleted" })).status).toBe(500);
+    expect(called("rooms", "update")).toEqual([]);
+  });
+
+  it("puts the PDF back when the status can't be saved", async () => {
+    results.rooms = [{ data: { status: "running", pdf_path: "room0001.pdf" } }, { error: new Error("boom") }];
+    expect((await patch({ status: "deleted" })).status).toBe(500);
+    expect(moves).toEqual([
+      ["pdfs", "pdfs-deleted"],
+      ["pdfs-deleted", "pdfs"],
+    ]);
   });
 
   it("answers 400 for a missing or unknown status", async () => {

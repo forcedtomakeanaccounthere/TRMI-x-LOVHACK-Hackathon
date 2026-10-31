@@ -226,6 +226,25 @@ describe("PATCH /api/rooms/:id/status", () => {
     expect(ids(await mine(guest, { q: "Trash" }))).toEqual([id]);
   });
 
+  it("takes a deleted room's PDF offline, and restores it", async () => {
+    const res = await request(app)
+      .post("/api/rooms/pdf")
+      .set(auth(owner))
+      .attach("file", Buffer.from("%PDF-1.4 test"), { filename: "paper.pdf", contentType: "application/pdf" });
+    expect(res.status).toBe(201);
+    const { id } = res.body as { id: string };
+    const download = (bucket: string) => fetch(`${supabase.url}/storage/v1/object/public/${bucket}/${id}.pdf`);
+
+    expect((await download("pdfs")).ok).toBe(true);
+
+    expect((await setStatus(owner, id, "deleted")).status).toBe(200);
+    expect((await download("pdfs")).ok).toBe(false);
+    expect((await download("pdfs-deleted")).ok).toBe(false);
+
+    expect((await setStatus(owner, id, "closed")).status).toBe(200);
+    expect((await download("pdfs")).ok).toBe(true);
+  });
+
   it("stops recaps of archived rooms", async () => {
     const id = await createRoom("Archived");
     await setStatus(owner, id, "archived");
