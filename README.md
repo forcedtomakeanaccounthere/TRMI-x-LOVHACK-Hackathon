@@ -39,7 +39,7 @@ cp .env.example .env                                     # backend + ai
 grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local     # frontend, after filling in .env
 ```
 
-Run the files in [supabase/migrations](supabase/migrations) in order (`0001` to `0004`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
+Run the files in [supabase/migrations](supabase/migrations) in order (`0001` to `0006`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
 
 ### Supabase Auth (email verification)
 

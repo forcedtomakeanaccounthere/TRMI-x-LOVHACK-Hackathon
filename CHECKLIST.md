@@ -78,7 +78,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **BE**
 - [ ] Create the Supabase project (region closest to the team, e.g. Mumbai)
-- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql`, `0003_comments_highlight_idx.sql` then `0004_pdf_text.sql` in the SQL editor *(in repo)*
+- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql`, `0003_comments_highlight_idx.sql`, `0004_browser_write_checks.sql`, `0005_room_status_and_visits.sql` then `0006_pdf_text.sql` in the SQL editor *(in repo)*
   - tables `rooms`, `highlights`, `comments`, `recaps`; realtime publication; RLS (public select, anonymous insert on highlights and comments only)
   - `pdfs` bucket: public read, 20 MB limit, `application/pdf` only
   - length checks: quote ≤ 1,000, comment body ≤ 2,000, author name ≤ 40
@@ -189,7 +189,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Upload goes through the backend (multipart `file`, service role) to the `pdfs` bucket at `{roomId}.pdf`; the file is removed again if the room insert fails *(in repo)*
 - [ ] Reject non-PDF files and files over 20 MB, on both client and server. Server side *(in repo)*: the bytes must start with `%PDF-` (Content-Type is ignored), over 20 MB is a 413, a damaged or password-protected PDF is a 422
 - [ ] `POST /api/rooms/pdf`: creates a room with `kind = 'pdf'`, `pdf_path` and the file name (UTF-8) as title *(in repo)*
-- [ ] Extract plain text of the first 50 pages (pdf.js via `unpdf`, max 60,000 chars, 10 s deadline) into `rooms.content_text` (`0004_pdf_text.sql`); the recap uses it for PDF rooms *(in repo)*
+- [ ] Extract plain text of the first 50 pages (pdf.js via `unpdf`, max 60,000 chars, 10 s deadline) into `rooms.content_text` (`0006_pdf_text.sql`); the recap uses it for PDF rooms *(in repo)*
 
 **FE**
 - [ ] `PdfDropzone` on the landing page: drag and drop or click, shows file name and progress

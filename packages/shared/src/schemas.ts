@@ -5,6 +5,10 @@ import { z } from "zod";
 export const RoomKind = z.enum(["link", "pdf"]);
 export type RoomKind = z.infer<typeof RoomKind>;
 
+// Mirrors the check constraint in supabase/migrations/0005_room_status_and_visits.sql.
+export const RoomStatus = z.enum(["running", "closed", "archived", "deleted"]);
+export type RoomStatus = z.infer<typeof RoomStatus>;
+
 export const Room = z.object({
   id: z.string(),
   kind: RoomKind,
@@ -19,15 +23,18 @@ export const Room = z.object({
 });
 export type Room = z.infer<typeof Room>;
 
+const notBlank = (s: string) => s.trim().length > 0;
+
 export const Author = z.object({
-  author_name: z.string().min(1).max(40),
+  author_name: z.string().min(1).max(40).refine(notBlank, "Name can't be blank"),
   author_color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
-// Limits match the check constraints in supabase/migrations/0002_auth_and_phase1.sql.
+// Limits match the check constraints in supabase/migrations/0002_auth_and_phase1.sql and
+// 0004_browser_write_checks.sql.
 const HighlightFields = Author.extend({
   room_id: z.string(),
-  block_id: z.string(), // link: "b12" | pdf: "p3"
+  block_id: z.string().regex(/^[bp][0-9]{1,6}$/), // link: "b12" | pdf: "p3"
   start_offset: z.number().int().nonnegative(),
   end_offset: z.number().int().nonnegative(),
   quote: z.string().min(1).max(1000),
@@ -48,7 +55,7 @@ export type Highlight = z.infer<typeof Highlight>;
 export const NewComment = Author.extend({
   room_id: z.string(),
   highlight_id: z.string().uuid(),
-  body: z.string().min(1).max(2000),
+  body: z.string().min(1).max(2000).refine(notBlank, "Comment can't be blank"),
 });
 export type NewComment = z.infer<typeof NewComment>;
 
@@ -92,6 +99,45 @@ export type CreateTextRoomRequest = z.infer<typeof CreateTextRoomRequest>;
 
 export const CreateRoomResponse = z.object({ id: z.string() });
 export type CreateRoomResponse = z.infer<typeof CreateRoomResponse>;
+
+// --- Dashboard (apps/backend /api/rooms) ---
+
+export const DashboardQuery = z.object({
+  q: z.string().trim().max(200).optional(), // matches the room title
+  status: RoomStatus.optional(), // left out: every room except deleted ones
+  kind: RoomKind.optional(),
+  role: z.enum(["owner", "member"]).optional(),
+  sort: z.enum(["newest", "oldest", "title"]).default("newest"),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type DashboardQuery = z.infer<typeof DashboardQuery>;
+
+export const DashboardRoom = z.object({
+  id: z.string(),
+  kind: RoomKind,
+  source_url: z.string().nullable(),
+  title: z.string().nullable(),
+  status: RoomStatus,
+  role: z.enum(["owner", "member"]),
+  created_at: z.string(),
+  last_opened_at: z.string().nullable(), // null until this user joins the room
+  highlight_count: z.number().int(),
+  comment_count: z.number().int(),
+});
+export type DashboardRoom = z.infer<typeof DashboardRoom>;
+
+export const DashboardResponse = z.object({
+  rooms: z.array(DashboardRoom),
+  total: z.number().int(), // matching rooms across all pages
+});
+export type DashboardResponse = z.infer<typeof DashboardResponse>;
+
+export const UpdateRoomStatusRequest = z.object({ status: RoomStatus });
+export type UpdateRoomStatusRequest = z.infer<typeof UpdateRoomStatusRequest>;
+
+export const RoomStatusResponse = z.object({ id: z.string(), status: RoomStatus });
+export type RoomStatusResponse = z.infer<typeof RoomStatusResponse>;
 
 // --- Auth (apps/backend /api/auth) ---
 
