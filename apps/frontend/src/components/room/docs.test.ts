@@ -14,3 +14,17 @@ describe("highlight remove keys", () => {
     expect(await hashRemoveKey(key)).toBe(createHash("sha256").update(key, "utf8").digest("hex"));
   });
 });
+
+describe("remembered remove keys", () => {
+  it("stay in this browser's storage, keyed by highlight id", async () => {
+    const store = new Map<string, string>();
+    globalThis.localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    } as Storage;
+    const { rememberRemoveKey, removeKeyFor } = await import("./docs");
+    rememberRemoveKey("h1", "k1");
+    expect(removeKeyFor("h1")).toBe("k1");
+    expect(removeKeyFor("h2")).toBeNull();
+  });
+});

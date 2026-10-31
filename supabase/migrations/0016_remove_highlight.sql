@@ -2,11 +2,12 @@
 -- that load the room later agree with what the room sees.
 --
 -- Highlight ids are publicly readable, so an id is no proof of the right to remove one. When a browser
--- saves a highlight it also makes a random remove key: the highlight row gets only its SHA-256 hash
--- (remove_key_hash), and the key itself travels in the room's ledger to the people in the room, who
--- may erase the mark (its author, or a manager). remove_highlight deletes a row only for the key that
--- matches its hash, and only while the room is running, the same rule as inserting. Rows saved without
--- a key can't be removed this way. The highlight's comments go with it (on delete cascade).
+-- saves a highlight it also makes a random remove key and keeps it to itself (never in the database
+-- or the room's realtime channel); the highlight row gets only the key's SHA-256 hash
+-- (remove_key_hash). remove_highlight deletes a row only for the key that matches its hash, so only
+-- the browser that saved a highlight can remove it, and only while the room is running, the same rule
+-- as inserting. Rows saved without a key can't be removed this way. The highlight's comments go with
+-- it (on delete cascade).
 alter table highlights add column remove_key_hash text
   constraint highlights_remove_key_hash_hex check (remove_key_hash ~ '^[0-9a-f]{64}$');
 

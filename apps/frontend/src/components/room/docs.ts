@@ -80,10 +80,44 @@ export async function loadSavedHighlights(docId: string): Promise<Annotation[]> 
 }
 
 // A random key for removing a saved highlight later, and the SHA-256 hash the row keeps
-// (supabase/migrations/0016_remove_highlight.sql).
+// (supabase/migrations/0016_remove_highlight.sql). The key stays in the browser that made the
+// highlight: it never goes into the ledger or the database, so only that browser can remove the row.
 export function newRemoveKey(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(24));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const KEYS = "linkroom-highlight-keys";
+
+function readKeys(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(KEYS) ?? "{}") as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function rememberRemoveKey(id: string, key: string) {
+  try {
+    localStorage.setItem(KEYS, JSON.stringify({ ...readKeys(), [id]: key }));
+  } catch {
+    // Blocked storage: the highlight can still be hidden in the room, just not removed from the table.
+  }
+}
+
+export function removeKeyFor(id: string): string | null {
+  return readKeys()[id] ?? null;
+}
+
+function forgetRemoveKey(id: string) {
+  try {
+    const keys = readKeys();
+    delete keys[id];
+    localStorage.setItem(KEYS, JSON.stringify(keys));
+  } catch {
+    // nothing to clean up
+  }
 }
 
 export async function hashRemoveKey(key: string): Promise<string> {
@@ -94,6 +128,8 @@ export async function hashRemoveKey(key: string): Promise<string> {
 // Text highlights also go to the highlights table so the backend recap sees them. Best effort: the
 // ledger already has the mark, and the insert is refused for rooms that aren't running.
 export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
+  const key = newRemoveKey();
+  rememberRemoveKey(a.id, key);
   const { error } = await getSupabase()
     .from("highlights")
     .insert({
@@ -105,16 +141,20 @@ export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" |
       quote: a.quote,
       author_name: a.author.name,
       author_color: a.color,
-      remove_key_hash: a.remove_key ? await hashRemoveKey(a.remove_key) : null,
+      remove_key_hash: await hashRemoveKey(key),
     });
   if (error) console.warn("[room] highlight not saved to the database", error.message);
 }
 
 // Erasing a text mark removes its row too, so recaps and browsers that load the room later don't
-// bring it back. Only works with the mark's remove key; best effort, like saving.
-export async function removeSavedHighlight(id: string, docId: string, key: string) {
+// bring it back. Only the browser that saved it holds the key; anywhere else the mark is hidden in
+// the room through the ledger and the row stays. Best effort, like saving.
+export async function removeSavedHighlight(id: string, docId: string) {
+  const key = removeKeyFor(id);
+  if (!key) return;
   const { error } = await getSupabase().rpc("remove_highlight", { p_id: id, p_room: docId, p_key: key });
   if (error) console.warn("[room] highlight not removed from the database", error.message);
+  else forgetRemoveKey(id);
 }
 
 export function youtubeId(url: string): string | null {
