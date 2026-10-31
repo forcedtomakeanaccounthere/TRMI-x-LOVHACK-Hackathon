@@ -282,6 +282,34 @@ export function textToHtml(text: string) {
   return addBlockIds(document.body.innerHTML);
 }
 
+// Elements that start a new paragraph in the plain text, marked as blocks or not (tables, lists, divs).
+const PARAGRAPH_SELECTOR =
+  "address, article, aside, blockquote, dd, details, div, dl, dt, figcaption, figure, footer, h1, h2, h3, " +
+  "h4, h5, h6, header, hr, li, main, nav, ol, p, pre, section, summary, table, tr, ul";
+
+// Plain text of a room's HTML for the AI, in document order: a blank line between paragraphs, a line
+// break for <br>, a space between table cells, entities decoded and whitespace squeezed. Text outside
+// the marked blocks (a table, say) is kept, and nested blocks are read once.
+export function htmlToText(html: string) {
+  // Markers instead of real newlines, since newlines in the source are just whitespace. Private-use
+  // characters, so no real text contains them.
+  const PARAGRAPH = "\uE000";
+  const LINE = "\uE001";
+  const { document } = new JSDOM(`<body>${html.replace(/[\uE000\uE001]/g, " ")}</body>`).window;
+  const marker = (text: string) => document.createTextNode(text);
+  for (const br of document.body.querySelectorAll("br")) br.replaceWith(marker(LINE));
+  for (const cell of document.body.querySelectorAll("td, th")) cell.append(marker(" "));
+  for (const el of document.body.querySelectorAll(PARAGRAPH_SELECTOR)) {
+    el.before(marker(PARAGRAPH));
+    el.after(marker(PARAGRAPH));
+  }
+  const squeeze = (text: string, separator: string, join: string, each: (part: string) => string) =>
+    text.split(separator).map(each).filter(Boolean).join(join);
+  return squeeze(document.body.textContent ?? "", PARAGRAPH, "\n\n", (paragraph) =>
+    squeeze(paragraph, LINE, "\n", (line) => line.replace(/\s+/g, " ").trim()),
+  );
+}
+
 // Every block gets a stable id ("b0", "b1", ...) used to anchor cursors and highlights.
 export function addBlockIds(html: string) {
   const { document } = new JSDOM(`<body>${html}</body>`).window;

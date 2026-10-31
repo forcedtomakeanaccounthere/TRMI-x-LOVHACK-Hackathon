@@ -4,6 +4,7 @@ import {
   addBlockIds,
   cleanArticle,
   extractArticle,
+  htmlToText,
   isPrivateHost,
   parseSrcset,
   textToHtml,
@@ -264,5 +265,35 @@ describe("parseSrcset", () => {
     ["  a.png 480w ,  ", [{ url: "a.png", descriptor: "480w" }]],
   ])("parses %j", (srcset, expected) => {
     expect(parseSrcset(srcset)).toEqual(expected);
+  });
+});
+
+describe("htmlToText", () => {
+  it("keeps text outside the marked blocks, such as a table, in document order", () => {
+    const html =
+      '<p data-block="b0">Intro</p><table><tr><th>Year</th><th>Users</th></tr>' +
+      '<tr><td>2024</td><td>5</td></tr></table><p data-block="b1">Outro</p>';
+    expect(htmlToText(html)).toBe("Intro\n\nYear Users\n\n2024 5\n\nOutro");
+  });
+
+  it("separates lines at <br> and paragraphs inside a marked block", () => {
+    expect(htmlToText('<p data-block="b0">First<br>Second</p>')).toBe("First\nSecond");
+    expect(htmlToText('<blockquote data-block="b0"><p>One</p><p>Two</p></blockquote>')).toBe("One\n\nTwo");
+  });
+
+  it("reads nested blocks once and decodes entities", () => {
+    const html = '<blockquote data-block="b0"><p data-block="b1">Fish &amp; chips</p></blockquote>';
+    expect(htmlToText(html)).toBe("Fish & chips");
+  });
+
+  it("keeps inline elements in the flow and squeezes whitespace", () => {
+    expect(htmlToText('<p data-block="b0">An <a href="#">inline</a>  <b>link</b>,\n  spaced</p>')).toBe(
+      "An inline link, spaced",
+    );
+  });
+
+  it("handles empty and unmarked input", () => {
+    expect(htmlToText("")).toBe("");
+    expect(htmlToText("just text")).toBe("just text");
   });
 });

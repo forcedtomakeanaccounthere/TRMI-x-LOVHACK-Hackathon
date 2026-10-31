@@ -70,5 +70,7 @@ export const api = {
     return request<CreateRoomResponse>("/api/rooms/pdf", { method: "POST", body: form }, token);
   },
 
-  recap: (roomId: string) => request<RecapData>(`/api/rooms/${roomId}/recap`, { method: "POST" }),
+  // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
+  // 409 = a recap is already on its way.
+  recap: (roomId: string, name?: string) => request<RecapData>(`/api/rooms/${roomId}/recap`, json({ name })),
 };

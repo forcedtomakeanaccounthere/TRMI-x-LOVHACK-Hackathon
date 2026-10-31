@@ -5,6 +5,16 @@ import { HttpError } from "../middleware/error";
 
 const UNAVAILABLE = "The AI couldn't answer right now. Try again in a moment.";
 
+// Connection errors that mean the request never reached apps/ai, so sending it again can't pay for a
+// second generation. A connection dropped after sending (UND_ERR_SOCKET, ECONNRESET) is not retried.
+const NOT_SENT = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH"]);
+
+function neverSent(err: unknown) {
+  const cause = (err as { cause?: { code?: string; errors?: { code?: string }[] } } | undefined)?.cause;
+  // Node reports one failed connect as the cause, or several (one per address) in an AggregateError.
+  return [cause, ...(cause?.errors ?? [])].some((e) => NOT_SENT.has(e?.code ?? ""));
+}
+
 /**
  * POSTs to apps/ai and validates the reply. Every AI call goes through here, so each one carries
  * the internal token and a request id, and any failure reaches the user as a friendly 502 or 503
@@ -12,21 +22,32 @@ const UNAVAILABLE = "The AI couldn't answer right now. Try again in a moment.";
  */
 export async function callAi<T>(path: string, body: unknown, schema: z.ZodType<T>, timeoutMs: number): Promise<T> {
   const requestId = randomUUID();
-  let res: Response;
-  try {
-    res = await fetch(`${env.AI_SERVICE_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Token": env.AI_INTERNAL_TOKEN ?? "",
-        "X-Request-Id": requestId,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    console.error(`AI ${path} [${requestId}] unreachable:`, err);
-    throw new HttpError(502, UNAVAILABLE);
+  // One deadline for both attempts: a retry gets only the time the first one left.
+  const signal = AbortSignal.timeout(timeoutMs);
+  let res: Response | undefined;
+  for (let attempt = 1; !res; attempt++) {
+    try {
+      res = await fetch(`${env.AI_SERVICE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Token": env.AI_INTERNAL_TOKEN ?? "",
+          "X-Request-Id": requestId,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err) {
+      // A connection that was never made (the service restarting or cold-starting) is worth one more
+      // try. A timeout is not, it has used up the time; nor is a connection that dropped after the
+      // request went out, since apps/ai may already be generating.
+      if (attempt === 1 && !signal.aborted && neverSent(err)) {
+        console.warn(`AI ${path} [${requestId}] connection refused, retrying once:`, err);
+        continue;
+      }
+      console.error(`AI ${path} [${requestId}] unreachable:`, err);
+      throw new HttpError(502, UNAVAILABLE);
+    }
   }
 
   if (!res.ok) {
