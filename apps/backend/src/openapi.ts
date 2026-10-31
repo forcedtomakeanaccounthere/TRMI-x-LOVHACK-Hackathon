@@ -7,6 +7,7 @@ import {
   CreateGroupRequest,
   CreateInviteRequest,
   CreateLinkRoomRequest,
+  CreateStudyRequest,
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
   CreateYoutubeRoomRequest,
@@ -33,6 +34,10 @@ import {
   RoomStatusResponse as RoomStatusResponseSchema,
   TopMembersResponse as TopMembersResponseSchema,
   SignupRequest,
+  StudySet as StudySetSchema,
+  StudySetsResponse as StudySetsResponseSchema,
+  StudySourcesQuery,
+  StudySourcesResponse as StudySourcesResponseSchema,
   UpdateGroupRequest,
   UpdateProfileRequest,
   UpdateRoomRequest,
@@ -64,6 +69,10 @@ const TopMembersResponse = TopMembersResponseSchema.meta({ id: "TopMembersRespon
 const RoomStatusResponse = RoomStatusResponseSchema.meta({ id: "RoomStatusResponse" });
 const UsersResponse = UsersResponseSchema.meta({ id: "UsersResponse" });
 const RecapData = RecapDataSchema.meta({ id: "RecapData" });
+const StudySet = StudySetSchema.meta({ id: "StudySet" });
+const StudySetsResponse = StudySetsResponseSchema.meta({ id: "StudySetsResponse" });
+const StudySourcesResponse = StudySourcesResponseSchema.meta({ id: "StudySourcesResponse" });
+const studySetId = z.object({ id: z.string().uuid() });
 
 const json = (schema: z.ZodType) => ({ content: { "application/json": { schema } } });
 const body = (schema: z.ZodType) => ({ required: true, ...json(schema) });
@@ -643,6 +652,85 @@ export const openApiDocument = createDocument({
           },
           "502": failure("The AI service failed, timed out or returned an unexpected shape"),
           "503": failure("No AI provider is configured"),
+        },
+      },
+    },
+    "/api/study/sources": {
+      get: {
+        tags: ["Study"],
+        summary: "Documents a user can make a study set from",
+        description:
+          "Rooms the user created or joined (not deleted), most recently active first. With `group_id`, only " +
+          "the rooms in that project of theirs.",
+        security: bearer,
+        requestParams: { query: StudySourcesQuery },
+        responses: {
+          "200": reply("The documents", StudySourcesResponse),
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("Group not found"),
+        },
+      },
+    },
+    "/api/study": {
+      get: {
+        tags: ["Study"],
+        summary: "List the user's study sets",
+        description: "Newest first, up to 100, without their content.",
+        security: bearer,
+        responses: { "200": reply("The study sets", StudySetsResponse), ...needsVerifiedUser },
+      },
+      post: {
+        tags: ["Study"],
+        summary: "Make a quiz, flashcards, a mind map or an infographic from documents",
+        description:
+          "Choose the documents with `all: true` (every document, or every one in project `group_id`; the " +
+          "20 most recently active) or a list of `room_ids` (up to 20, each one the user created or joined). " +
+          "`count` sets the number of questions or cards (default 10); `focus` narrows the topic. Every " +
+          "item carries `source_id`, the room it came from. The set is saved for the user.",
+        security: bearer,
+        requestBody: body(CreateStudyRequest),
+        responses: {
+          "201": reply("The study set", StudySet),
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("A chosen document or the group was not found"),
+          "409": failure("A study set for this user is already being made"),
+          "422": failure("There are no documents, or the chosen ones have no text"),
+          "429": {
+            ...failure("A study set was made in the last 10 s"),
+            headers: {
+              "Retry-After": { description: "Seconds until the next study set is allowed", schema: { type: "integer" } },
+            },
+          },
+          "502": failure("The AI service failed, timed out or returned an unexpected shape"),
+          "503": failure("No AI provider is configured"),
+        },
+      },
+    },
+    "/api/study/{id}": {
+      get: {
+        tags: ["Study"],
+        summary: "Get one of the user's study sets",
+        security: bearer,
+        requestParams: { path: studySetId },
+        responses: {
+          "200": reply("The study set", StudySet),
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("Study set not found"),
+        },
+      },
+      delete: {
+        tags: ["Study"],
+        summary: "Delete one of the user's study sets",
+        security: bearer,
+        requestParams: { path: studySetId },
+        responses: {
+          "204": { description: "Deleted" },
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("Study set not found"),
         },
       },
     },

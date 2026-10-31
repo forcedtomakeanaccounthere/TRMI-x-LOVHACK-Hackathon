@@ -3,6 +3,7 @@ import type {
   AuthUser,
   CreateLinkRoomRequest,
   CreateRoomResponse,
+  CreateStudyRequest,
   CreateTextRoomRequest,
   DashboardQuery,
   DashboardResponse,
@@ -12,6 +13,9 @@ import type {
   RoomDetail,
   RoomStatusResponse,
   SignupRequest,
+  StudySet,
+  StudySetsResponse,
+  StudySourcesResponse,
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
@@ -109,4 +113,26 @@ export const api = {
   // Owner only: brings a deleted room back as running.
   restoreRoom: (roomId: string, token: string) =>
     request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}/restore`, { method: "POST" }, token),
+
+  // Study tools: quiz, flashcards, mind map or infographic from the documents the user picks.
+  study: {
+    // The documents to show in the picker (optionally one project's).
+    sources: (token: string, groupId?: string) =>
+      request<StudySourcesResponse>(
+        `/api/study/sources${groupId ? `?group_id=${encodeURIComponent(groupId)}` : ""}`,
+        { method: "GET" },
+        token,
+      ),
+
+    // Select all: { kind, all: true }. Selective: { kind, room_ids: [...] }.
+    // 404 = a document wasn't found, 409 = one is already being made, 422 = no text, 429 = wait.
+    create: (data: CreateStudyRequest, token: string) => request<StudySet>("/api/study", json(data), token),
+
+    list: (token: string) => request<StudySetsResponse>("/api/study", { method: "GET" }, token),
+
+    get: (id: string, token: string) => request<StudySet>(`/api/study/${id}`, { method: "GET" }, token),
+
+    remove: (id: string, token: string) =>
+      request<unknown>(`/api/study/${id}`, { method: "DELETE" }, token).then(() => undefined),
+  },
 };

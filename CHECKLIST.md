@@ -279,6 +279,20 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 ---
 
+## Study tools (quiz, flashcards, mind map, infographic)
+
+**BE + AI** *(in repo)*
+- [ ] `GET /api/study/sources`: documents (rooms) the user created or joined, optionally one project's (`group_id`)
+- [ ] `POST /api/study`: `{ kind, all: true }` for Select all (20 most recently active) or `{ kind, room_ids }` for a hand-picked list (max 20, each checked); optional `count` (3–30) and `focus`
+- [ ] apps/ai `POST /study`: shares the text budget fairly across documents, same provider fallback and untrusted-input rules as the recap; output is cleaned (valid answers, one-tree mind map, infographic stats must appear in the documents, `source_id` only real room ids)
+- [ ] Sets saved in `study_sets` (`0016_study_sets.sql`, private); `GET /api/study`, `GET`/`DELETE /api/study/:id`
+- [ ] One set per user at a time, 10 s cooldown
+
+**FE**
+- [ ] Study page: document picker with Select all and checkboxes, kind picker, then render quiz / flashcards / mind map / infographic (client calls are in `lib/api.ts` as `api.study.*`)
+
+---
+
 ## Phase 6: Polish (Sun 4 – 8 PM IST) · P1
 
 **FE: Landing page**
