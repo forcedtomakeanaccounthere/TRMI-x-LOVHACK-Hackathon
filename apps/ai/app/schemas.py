@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -54,3 +54,22 @@ class RecapRequest(BaseModel):
     text: Annotated[str, BeforeValidator(lambda v: v[:MAX_TEXT_CHARS] if isinstance(v, str) else v)]
     highlights: list[HighlightIn] = []
     comments: list[CommentIn] = []
+
+
+# POST /embed. apps/backend sends chunks in batches of 64; a chunk is at most 4,000 characters
+# (supabase/migrations/0011_chunks.sql) and a question far less.
+MAX_EMBED_TEXTS = 128
+MAX_EMBED_CHARS = 8_000
+
+
+class EmbedRequest(BaseModel):
+    texts: list[Annotated[str, Field(min_length=1, max_length=MAX_EMBED_CHARS)]] = Field(
+        min_length=1, max_length=MAX_EMBED_TEXTS
+    )
+    # "passage" for chunks being indexed, "query" for a question being searched.
+    input_type: Literal["passage", "query"] = "passage"
+
+
+class EmbedResponse(BaseModel):
+    model: str
+    vectors: list[list[float]]

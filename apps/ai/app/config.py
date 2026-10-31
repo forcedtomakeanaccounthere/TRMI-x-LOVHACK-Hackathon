@@ -39,6 +39,17 @@ class Settings(BaseSettings):
     # Documents longer than this are cut before being sent to the model (known limit).
     max_document_chars: int = 60_000
 
+    # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
+    # models can't be compared, so mixing them would break search. When it fails, apps/backend
+    # falls back to keyword search. The key is the provider's *_API_KEY above.
+    # nvidia/nv-embedqa-e5-v5 and mistral (mistral-embed) give 1024 numbers; gemini is asked for
+    # EMBEDDING_DIM. EMBEDDING_DIM must match the vector column in
+    # supabase/migrations/0011_chunks.sql.
+    embedding_provider: Literal["nvidia", "gemini", "mistral"] = "nvidia"
+    embedding_model: str = "nvidia/nv-embedqa-e5-v5"
+    embedding_dim: int = 1024
+    embedding_timeout_seconds: float = 30.0
+
     @model_validator(mode="after")
     def _token_in_production(self) -> "Settings":
         if self.environment == "production" and not self.ai_internal_token:

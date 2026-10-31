@@ -94,6 +94,17 @@ export const RecapData = z.object({
 });
 export type RecapData = z.infer<typeof RecapData>;
 
+// A room's AI state (room_ai in supabase/migrations/0010_ai_foundation.sql).
+export const RoomAiStatus = z.enum(["pending", "indexing", "summarizing", "ready", "failed"]);
+export type RoomAiStatus = z.infer<typeof RoomAiStatus>;
+
+// POST /embed on apps/ai (apps/ai/app/schemas.py must match): one vector per text, in order.
+export const EmbedResponse = z.object({
+  model: z.string(),
+  vectors: z.array(z.array(z.number())),
+});
+export type EmbedResponse = z.infer<typeof EmbedResponse>;
+
 export const Recap = z.object({
   id: z.string().uuid(),
   room_id: z.string(),
