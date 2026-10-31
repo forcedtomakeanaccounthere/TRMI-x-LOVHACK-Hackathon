@@ -15,6 +15,7 @@ packages/
   shared/     zod schemas + types shared by frontend and backend
 supabase/
   migrations/ SQL schema, RLS policies, storage bucket
+docs/         Local setup guide and implementation plan
 ```
 
 ```
