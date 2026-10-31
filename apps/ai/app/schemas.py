@@ -73,3 +73,49 @@ class EmbedRequest(BaseModel):
 class EmbedResponse(BaseModel):
     model: str
     vectors: list[list[float]]
+
+
+# POST /summary. RoomSummary must match packages/shared/src/schemas.ts. Chunks come from the
+# chunks table (supabase/migrations/0011_chunks.sql), at most 400 per room.
+MAX_SUMMARY_CHUNKS = 400
+
+
+class SummaryChunk(BaseModel):
+    block_ids: list[Annotated[str, Field(max_length=16)]] = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=4000)
+    heading_path: list[Annotated[str, Field(max_length=500)]] = Field(default=[], max_length=10)
+    page: int | None = None
+
+
+class SummaryRequest(BaseModel):
+    title: str = Field(max_length=300)
+    chunks: list[SummaryChunk] = Field(min_length=1, max_length=MAX_SUMMARY_CHUNKS)
+
+
+class SourcedPoint(BaseModel):
+    text: str
+    # The block ids (b12, p3, t7) the point comes from.
+    source_blocks: list[str]
+
+
+class SummaryNotes(BaseModel):
+    """What one map call writes about one group of chunks."""
+
+    notes: list[SourcedPoint]
+
+
+class SummarySection(BaseModel):
+    heading: str
+    points: list[SourcedPoint]
+
+
+class KeyTerm(BaseModel):
+    term: str
+    meaning: str
+    source_blocks: list[str]
+
+
+class RoomSummary(BaseModel):
+    overview: str
+    sections: list[SummarySection]
+    key_terms: list[KeyTerm]

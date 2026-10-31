@@ -1,4 +1,4 @@
-import { EmbedResponse, type RoomAiStatus } from "@linkroom/shared";
+import { EmbedResponse, RoomSummary, type RoomAiStatus } from "@linkroom/shared";
 import { HttpError } from "../middleware/error";
 import { callAi } from "./ai";
 import { chunkRoom, embeddingText, type Chunk } from "./chunk";
@@ -10,6 +10,11 @@ import { supabaseAdmin } from "./supabase";
 export const EMBED_BATCH = 64; // chunks per POST /embed
 const EMBED_TIMEOUT_MS = 60_000; // per batch; apps/ai gives the provider 30 s
 const INSERT_BATCH = 100; // chunks per insert, so one request stays well under PostgREST's limits
+// apps/ai gives a summary 540 s in all (map calls, then the reduce call), so it answers first.
+const SUMMARY_TIMEOUT_MS = 600_000;
+// SummaryChunk.heading_path in apps/ai/app/schemas.py: at most 10 headings of 500 characters.
+const MAX_SUMMARY_HEADINGS = 10;
+const MAX_SUMMARY_HEADING_CHARS = 500;
 
 // One indexing run per room at a time in this process.
 const running = new Set<string>();
@@ -19,13 +24,16 @@ export function startIndexing(roomId: string) {
   void indexRoom(roomId).catch((err: unknown) => markFailed(roomId, err));
 }
 
+type IndexResult = { chunks: number; embedded: boolean; summarized: boolean };
+
 /**
  * Splits the room into chunks, embeds them in batches of EMBED_BATCH and saves them, replacing any
- * chunks the room had. When embeddings are unavailable the chunks are saved without them and the
- * room is still searchable by keyword. Sets room_ai.status to "indexing", then "ready".
+ * chunks the room had, then writes the detailed summary from them. When embeddings are unavailable
+ * the chunks are saved without them and the room is still searchable by keyword.
+ * room_ai.status goes "indexing", then "summarizing", then "ready" with the summary.
  */
-export async function indexRoom(roomId: string): Promise<{ chunks: number; embedded: boolean }> {
-  if (running.has(roomId)) return { chunks: 0, embedded: false };
+export async function indexRoom(roomId: string): Promise<IndexResult> {
+  if (running.has(roomId)) return { chunks: 0, embedded: false, summarized: false };
   running.add(roomId);
   try {
     const db = supabaseAdmin();
@@ -33,7 +41,7 @@ export async function indexRoom(roomId: string): Promise<{ chunks: number; embed
 
     const { data: room, error } = await db
       .from("rooms")
-      .select("kind, content_html, content_text")
+      .select("kind, title, content_html, content_text")
       .eq("id", roomId)
       .single();
     if (error) throw error;
@@ -54,12 +62,50 @@ export async function indexRoom(roomId: string): Promise<{ chunks: number; embed
       if (insertError) throw insertError;
     }
 
-    // AI step 6 runs the detailed summary from here and sets "ready" when it is saved.
-    await saveState(roomId, "ready");
-    return { chunks: chunks.length, embedded: Boolean(embeddings) };
+    if (!chunks.length) {
+      await saveState(roomId, "ready", { summary: null });
+      return { chunks: 0, embedded: false, summarized: false };
+    }
+
+    await saveState(roomId, "summarizing");
+    const summarized = await summarizeRoom(roomId, (room.title as string | null) ?? "", chunks);
+    return { chunks: chunks.length, embedded: Boolean(embeddings), summarized };
   } finally {
     running.delete(roomId);
   }
+}
+
+/**
+ * Asks apps/ai for the detailed summary and saves it with status "ready". The chunks are already
+ * saved, so a summary that can't be made doesn't fail the room: it is "ready" (searchable, Q&A
+ * works) with no summary and the reason in room_ai.error. Returns whether a summary was saved.
+ */
+export async function summarizeRoom(roomId: string, title: string, chunks: Chunk[]) {
+  let summary: RoomSummary;
+  try {
+    summary = await callAi(
+      "/summary",
+      {
+        title: title.slice(0, 300),
+        chunks: chunks.map(({ block_ids, content, heading_path, page }) => ({
+          block_ids,
+          content,
+          // Headings are context for the model, so a very long one is cut to what apps/ai accepts.
+          heading_path: heading_path.slice(0, MAX_SUMMARY_HEADINGS).map((h) => h.slice(0, MAX_SUMMARY_HEADING_CHARS)),
+          page,
+        })),
+      },
+      RoomSummary,
+      SUMMARY_TIMEOUT_MS,
+    );
+  } catch (err) {
+    console.warn(`[ai-jobs] no summary for room ${roomId}:`, errorMessage(err));
+    const reason = err instanceof HttpError ? err.message : "Something went wrong.";
+    await saveState(roomId, "ready", { summary: null, error: `The summary couldn't be made. ${reason}` });
+    return false;
+  }
+  await saveState(roomId, "ready", { summary });
+  return true;
 }
 
 /**
@@ -93,7 +139,8 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
 // Waiting rooms read per query while resuming.
 export const RESUME_BATCH = 100;
 
-const WAITING: RoomAiStatus[] = ["pending", "indexing"];
+// A room left in any of these by a restart is indexed again from the start.
+const WAITING: RoomAiStatus[] = ["pending", "indexing", "summarizing"];
 
 /**
  * Indexes every room left "pending" or "indexing": rooms whose job was lost to a restart, and rooms
@@ -148,16 +195,20 @@ export async function markFailed(roomId: string, err: unknown) {
   console.error(`[ai-jobs] indexing room ${roomId} failed:`, err);
   try {
     // A short reason for the room's page; details stay in the log.
-    await saveState(roomId, "failed", err instanceof HttpError ? err.message : "Indexing failed");
+    await saveState(roomId, "failed", { error: err instanceof HttpError ? err.message : "Indexing failed" });
   } catch (saveError) {
     console.error(`[ai-jobs] could not record the failure for room ${roomId}:`, saveError);
   }
 }
 
-async function saveState(roomId: string, status: RoomAiStatus, error: string | null = null) {
-  const { error: dbError } = await supabaseAdmin()
-    .from("room_ai")
-    .upsert({ room_id: roomId, status, error: error?.slice(0, 500) ?? null }, { onConflict: "room_id" });
+// Writes the room's AI state. The error is cleared unless given; the summary changes only when given.
+async function saveState(
+  roomId: string,
+  status: RoomAiStatus,
+  { error = null, summary }: { error?: string | null; summary?: RoomSummary | null } = {},
+) {
+  const row = { room_id: roomId, status, error: error?.slice(0, 500) ?? null, ...(summary !== undefined && { summary }) };
+  const { error: dbError } = await supabaseAdmin().from("room_ai").upsert(row, { onConflict: "room_id" });
   if (dbError) throw dbError;
 }
 
