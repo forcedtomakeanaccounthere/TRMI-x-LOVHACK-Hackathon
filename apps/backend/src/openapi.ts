@@ -121,8 +121,8 @@ export const openApiDocument = createDocument({
         responses: {
           "201": reply("Verification email sent", MessageResponse),
           ...invalidInput,
-          "403": failure("Sign up is disabled"),
           ...tooManyAttempts,
+          "502": failure("The verification email could not be sent"),
         },
       },
     },
@@ -131,7 +131,7 @@ export const openApiDocument = createDocument({
         tags: ["Auth"],
         summary: "Verify an email address",
         description:
-          "Target of the link in the verification email. Redirects to the frontend's `/login` with `verified=1`, or `verified=0` and an `error`.",
+          "Target of the link in the verification email. Redirects to the frontend's `/login` with `verified=1` and the `email`, or `verified=0` and an `error`.",
         requestParams: { query: VerifyQuery },
         responses: { "302": { description: "Redirect to the frontend" } },
       },
@@ -145,6 +145,7 @@ export const openApiDocument = createDocument({
           "200": reply("Sent, if the account needs verifying", MessageResponse),
           ...invalidInput,
           ...tooManyAttempts,
+          "502": failure("The verification email could not be sent"),
         },
       },
     },

@@ -10,11 +10,14 @@ const newPassword = () => randomBytes(12).toString("base64url");
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email: string; name: string } };
 
+// Where the emailed link lands once it verifies the account: the login page, email filled in.
+const verifiedUrl = (email: string) => `${WEB}/login?${new URLSearchParams({ verified: "1", email })}`;
+
 // Shared steps, so each story reads as the user's actions.
 async function signUpAndVerify(be: Backend, email: string, password: string, name: string) {
   expect((await be.post("/api/auth/signup", { email, password, name })).status).toBe(201);
   const click = await be.clickVerificationLink(email);
-  expect(click.headers.get("location")).toBe(`${WEB}/login?verified=1`);
+  expect(click.headers.get("location")).toBe(verifiedUrl(email));
 }
 
 async function logIn(be: Backend, email: string, password: string): Promise<Session> {
@@ -58,7 +61,7 @@ describe("user stories (production build)", () => {
     expect((await be.supabase.verificationLink(email)).startsWith(`${be.api}/api/auth/verify?`)).toBe(true);
     const verify = await be.clickVerificationLink(email);
     expect(verify.status).toBe(302);
-    expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
+    expect(verify.headers.get("location")).toBe(verifiedUrl(email));
 
     // 5. Log in.
     const session = await logIn(be, email, password);
@@ -140,7 +143,7 @@ describe("user stories (production build)", () => {
 
     // 4. The new link verifies the account.
     const verify = await be.clickVerificationLink(email, 2);
-    expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
+    expect(verify.headers.get("location")).toBe(verifiedUrl(email));
 
     // 5. Logs in and can create a room.
     const session = await logIn(be, email, password);
@@ -202,5 +205,25 @@ describe("rate limiting (default limit of 10 per 15 min)", () => {
 
     // Routes outside the limiter keep working.
     expect((await be.get("/health")).status).toBe(200);
+  });
+});
+
+describe("mail server down", () => {
+  let be: Backend;
+
+  // Nothing listens on port 1, so every email fails to send.
+  beforeAll(async () => {
+    be = await startBackend({ AUTH_RATE_LIMIT: "100", SMTP_PORT: "1" });
+  });
+  afterAll(() => be?.stop());
+
+  it("signup and resend say the email didn't go out, so the user can try again", async () => {
+    const email = uniqueEmail("no.smtp");
+    const signup = await be.post("/api/auth/signup", { email, password: newPassword(), name: "Offline" });
+    expect(signup.status).toBe(502);
+    expect(await signup.json()).toEqual({ error: "Could not send the verification email. Please try again." });
+
+    const resend = await be.post("/api/auth/resend-verification", { email });
+    expect(resend.status).toBe(502);
   });
 });

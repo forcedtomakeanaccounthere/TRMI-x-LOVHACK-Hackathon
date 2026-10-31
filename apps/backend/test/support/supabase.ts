@@ -7,7 +7,7 @@ import { inject } from "vitest";
 
 // Helpers for tests that run against the real local Supabase (`npm run supabase:start`):
 // GoTrue auth, PostgREST, Storage and Postgres with our migrations applied, and Mailpit,
-// which catches the emails Supabase sends.
+// which catches the emails the backend sends over SMTP.
 
 export type LocalSupabase = {
   url: string;
@@ -29,7 +29,7 @@ export async function connectSupabase() {
   const sql = postgres(local.dbUrl, { max: 2, onnotice: () => {} });
   const proxy = await startFaultProxy(local.url);
 
-  // Verification links from the "Confirm signup" emails sent to `email`, oldest first.
+  // Verification links from the emails the backend sent to `email`, oldest first.
   async function verificationLinks(email: string) {
     const query = encodeURIComponent(`to:"${email}"`);
     const { messages } = (await (await fetch(`${local.mailUrl}/api/v1/search?query=${query}`)).json()) as {
@@ -65,6 +65,16 @@ export async function connectSupabase() {
     // Makes the user's current verification link expired, as if it had been sent a day ago.
     async expireVerificationLink(email: string) {
       await sql`update auth.users set confirmation_sent_at = now() - interval '1 day' where email = ${email}`;
+    },
+    async userId(email: string) {
+      const [row] = await sql<{ id: string }[]>`select id from auth.users where email = ${email}`;
+      return row!.id;
+    },
+    // The signup route's guarded password write (migration 0015), called directly.
+    async setUnconfirmedPassword(userId: string, password: string) {
+      const { data, error } = await admin.rpc("set_unconfirmed_password", { p_user_id: userId, p_password: password });
+      if (error) throw error;
+      return data as boolean;
     },
     async room(id: string) {
       const { data, error } = await admin.from("rooms").select().eq("id", id).maybeSingle();
