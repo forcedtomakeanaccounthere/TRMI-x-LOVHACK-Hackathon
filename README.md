@@ -39,7 +39,7 @@ cp .env.example .env                                     # backend + ai
 grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local     # frontend, after filling in .env
 ```
 
-Run the files in [supabase/migrations](supabase/migrations) in order (`0001`, `0002`, then `0003`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
+Run the files in [supabase/migrations](supabase/migrations) in order (`0001` to `0006`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
 
 ### Supabase Auth (email verification)
 
@@ -87,7 +87,7 @@ npm run supabase:stop
 
 ### CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, database + integration + e2e (one job that starts the local Supabase once), build, and ruff for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, database + integration + e2e (one job that starts the local Supabase once), build, and ruff plus pytest for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
 
 ## API
 

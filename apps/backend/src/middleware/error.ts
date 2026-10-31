@@ -1,4 +1,5 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
+import { MulterError } from "multer";
 import { ZodError } from "zod";
 
 export class HttpError extends Error {
@@ -17,6 +18,14 @@ export const notFound: RequestHandler = (_req, res) => {
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err instanceof HttpError) {
     res.status(err.status).json({ error: err.message });
+    return;
+  }
+  if (err instanceof MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      res.status(413).json({ error: "PDF must be 20 MB or smaller" });
+    } else {
+      res.status(400).json({ error: 'Upload a single PDF in the "file" field' });
+    }
     return;
   }
   if (err instanceof ZodError) {

@@ -1,28 +1,36 @@
 import {
+  CreateInviteRequest,
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
   DashboardQuery,
   RecapData,
-  UpdateRoomStatusRequest,
+  RoomDetail,
+  UpdateRoomRequest,
   type CreateRoomResponse,
   type DashboardResponse,
   type DashboardRoom,
   type RoomStatusResponse,
+  type TopMember,
+  type TopMembersResponse,
 } from "@linkroom/shared";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { nanoid } from "nanoid";
-import { env } from "../env";
+import { callAi } from "../lib/ai";
+import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, textToHtml } from "../lib/extract";
+import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
-import { requireAuth } from "../middleware/auth";
+import { optionalAuth, requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
 
 export const roomsRouter = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: MAX_PDF_BYTES, files: 1 },
+  // Browsers send file names as raw UTF-8; multer's latin1 default garbles names like "résumé.pdf".
+  defParamCharset: "utf8",
 });
 
 // Creating a room needs a verified account; joining and reading a room stays open to guests.
@@ -67,10 +75,13 @@ roomsRouter.post("/text", requireAuth, async (req, res) => {
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
-// POST /api/rooms/pdf  multipart field "file"
+// POST /api/rooms/pdf  multipart field "file" (over 20 MB is a 413, see middleware/error.ts)
 roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) => {
   const file = req.file;
-  if (!file || file.mimetype !== "application/pdf") throw new HttpError(400, "A PDF file is required");
+  if (!file) throw new HttpError(400, "A PDF file is required");
+  if (!isPdf(file.buffer)) throw new HttpError(400, "That file is not a PDF");
+  // Before the upload, so a file pdf.js can't open never gets a room. Also the text for the recap.
+  const contentText = await extractPdfText(file.buffer);
 
   const id = nanoid(8);
   const pdfPath = `${id}.pdf`;
@@ -81,83 +92,141 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
     .upload(pdfPath, file.buffer, { contentType: "application/pdf" });
   if (uploadError) throw uploadError;
 
-  const { error } = await db
-    .from("rooms")
-    .insert({ id, kind: "pdf", title: file.originalname, pdf_path: pdfPath, created_by: req.user!.id });
-  if (error) throw error;
+  const { error } = await db.from("rooms").insert({
+    id,
+    kind: "pdf",
+    title: file.originalname.trim().slice(0, 200) || "Untitled PDF",
+    pdf_path: pdfPath,
+    content_text: contentText,
+    created_by: req.user!.id,
+  });
+  if (error) {
+    // No room points at the file, so don't leave it in the public bucket.
+    const { error: cleanupError } = await db.storage.from("pdfs").remove([pdfPath]);
+    // Logged with the path so the orphaned file can be found and removed by hand.
+    if (cleanupError) console.error(`Could not remove orphaned PDF ${pdfPath}:`, cleanupError);
+    throw error;
+  }
 
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
-// The most rooms a user's visit history contributes to their dashboard.
-const MAX_VISITS = 1000;
+// The most rooms a user's participation history contributes to their dashboard.
+export const MAX_PARTICIPATION = 1000;
 const DELETED_PDFS = "pdfs-deleted";
 
-type RoomRow = Omit<DashboardRoom, "role" | "last_opened_at" | "highlight_count" | "comment_count"> & {
-  created_by: string | null;
-  highlights: { count: number }[];
-  comments: { count: number }[];
+export const ROOM_DETAIL =
+  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, deleted_at, room_group_items(group_id)";
+
+// The filing lives in its own private table; callers see it as the room's group_id.
+type Filed = { room_group_items?: { group_id: string } | null };
+const withGroup = (row: unknown) => {
+  const { room_group_items, ...room } = row as Filed;
+  return { ...room, group_id: room_group_items?.group_id ?? null } as RoomDetail;
 };
 
-// A % or _ in a search is the literal character, not a wildcard.
-export const titlePattern = (q: string) => `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+// Kept for callers that only need the LIKE escaping.
+export const titlePattern = likePattern;
+type RoomRow = Omit<
+  DashboardRoom,
+  | "group_id"
+  | "role"
+  | "last_opened_at"
+  | "highlight_count"
+  | "comment_count"
+  | "participant_count"
+  | "live_count"
+  | "people"
+> &
+  Filed & {
+    created_by: string | null;
+    highlights: { count: number }[];
+    comments: { count: number }[];
+  };
 
-// GET /api/rooms/mine: rooms the user created or joined. Deleted rooms show up for their owner only.
-roomsRouter.get("/mine", requireAuth, async (req, res) => {
-  const { q, status, kind, role, sort, limit, offset } = DashboardQuery.parse(req.query);
+// GET /api/me/rooms: rooms the user created or joined. Deleted rooms show up for their owner only.
+export const listRooms: RequestHandler = async (req, res) => {
+  const { q, status, kind, role, group_id, sort, limit, offset } = DashboardQuery.parse(req.query);
   const userId = req.user!.id;
   const db = supabaseAdmin();
 
-  const visits = await db
-    .from("room_visits")
-    .select("room_id, last_opened_at")
+  // Memberships are capped at the most recent ones. Owned rooms are matched by created_by in the
+  // query itself, so none of them can fall outside a search, a filter or the total.
+  const joined = await db
+    .from("room_participants")
+    .select("room_id, last_seen_at")
     .eq("user_id", userId)
-    .order("last_opened_at", { ascending: false })
-    .limit(MAX_VISITS);
-  if (visits.error) throw visits.error;
-  const lastOpened = new Map(visits.data.map((v) => [v.room_id as string, v.last_opened_at as string]));
+    .order("last_seen_at", { ascending: false })
+    .limit(MAX_PARTICIPATION);
+  if (joined.error) throw joined.error;
 
-  // Room ids are nanoids and userId a uuid, so both are safe inside the filter string.
-  const visited = `id.in.(${[...lastOpened.keys()].join(",")})`;
-  const notMine = `or(created_by.is.null,created_by.neq.${userId})`;
-  const membership = `and(${visited},${notMine},status.neq.deleted)`;
+  const lastOpened = new Map(joined.data.map((v) => [v.room_id as string, v.last_seen_at as string]));
+  const joinedIds = [...lastOpened.keys()];
 
+  // Deleted rooms and projects belong to the owner alone: a member sees neither.
+  const ownerOnly = role === "owner" || status === "deleted" || Boolean(group_id);
+  if (role === "member" && (ownerOnly || !joinedIds.length)) {
+    res.json({ rooms: [], total: 0 } satisfies DashboardResponse);
+    return;
+  }
+
+  const filing = group_id ? "room_group_items!inner(group_id)" : "room_group_items(group_id)";
   let query = db
     .from("rooms")
-    .select("id, kind, source_url, title, status, created_by, created_at, highlights(count), comments(count)", {
-      count: "exact",
-    });
-  if (role === "owner") query = query.eq("created_by", userId);
-  else if (role === "member") query = query.or(membership);
-  else query = query.or(`created_by.eq.${userId},${membership}`);
+    .select(
+      `id, kind, source_url, title, status, created_at, last_activity_at, created_by, highlights(count), comments(count), ${filing}`,
+      { count: "exact" },
+    );
+
+  const joinedList = joinedIds.map((id) => `"${id}"`).join(",");
+  if (ownerOnly || !joinedIds.length) query = query.eq("created_by", userId);
+  // A room you own never counts as a membership, and a room can outlive its owner's account.
+  else if (role === "member") query = query.in("id", joinedIds).or(`created_by.neq.${userId},created_by.is.null`);
+  else query = query.or(`created_by.eq.${userId},id.in.(${joinedList})`);
 
   if (status) query = query.eq("status", status);
   else query = query.neq("status", "deleted");
   if (kind) query = query.eq("kind", kind);
+  if (group_id) query = query.eq("room_group_items.group_id", group_id);
   if (q) query = query.ilike("title", titlePattern(q));
 
   query =
     sort === "title"
       ? query.order("title", { ascending: true, nullsFirst: false })
-      : query.order("created_at", { ascending: sort === "oldest" });
+      : sort === "active"
+        ? query.order("last_activity_at", { ascending: false })
+        : query.order("created_at", { ascending: sort === "oldest" });
 
   // The id tiebreak keeps pages stable when rooms share a title or timestamp.
   const { data, count, error } = await query.order("id").range(offset, offset + limit - 1);
   if (error) throw error;
 
-  const rooms = (data as unknown as RoomRow[]).map(
-    ({ created_by, highlights, comments, ...room }): DashboardRoom => ({
+  const rows = data as unknown as RoomRow[];
+  const blocks = await participantBlocks(
+    db,
+    rows.map((room) => room.id),
+  );
+
+  const rooms = rows.map(({ created_by, highlights, comments, room_group_items, ...room }): DashboardRoom => {
+    const block = blockFor(blocks, room.id);
+    const isOwner = created_by === userId;
+    return {
       ...room,
-      role: created_by === userId ? "owner" : "member",
+      group_id: isOwner ? (room_group_items?.group_id ?? null) : null,
+      role: isOwner ? "owner" : "member",
       last_opened_at: lastOpened.get(room.id) ?? null,
       highlight_count: highlights[0]?.count ?? 0,
       comment_count: comments[0]?.count ?? 0,
-    }),
-  );
+      participant_count: block.participant_count,
+      live_count: block.live_count,
+      people: block.people,
+    };
+  });
   res.json({ rooms, total: count ?? 0 } satisfies DashboardResponse);
-});
+};
 
-// POST /api/rooms/:id/join: remembers the room for a logged-in user. Guests just open the link.
+// POST /api/rooms/:id/join: remembers the room for a logged-in user and doubles as the heartbeat
+// that drives "live now". Guests just open the link.
 roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
   const { id } = req.params;
   const db = supabaseAdmin();
@@ -166,49 +235,209 @@ roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
   if (error) throw error;
   if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
 
-  const { error: visitError } = await db
-    .from("room_visits")
-    .upsert({ room_id: id, user_id: req.user!.id, last_opened_at: new Date().toISOString() });
-  if (visitError) throw visitError;
+  const { error: joinError } = await db
+    .from("room_participants")
+    .upsert(
+      { room_id: id, user_id: req.user!.id, last_seen_at: new Date().toISOString() },
+      { onConflict: "room_id,user_id" },
+    );
+  if (joinError) throw joinError;
 
   res.json(room as RoomStatusResponse);
 });
 
-// PATCH /api/rooms/:id/status  { status }: owner only. Someone else's room looks like it doesn't exist.
-roomsRouter.patch("/:id/status", requireAuth, async (req, res) => {
-  const { status } = UpdateRoomStatusRequest.parse(req.body);
+// PATCH /api/rooms/:id  { status?, group_id? }: owner only. Someone else's room looks like it
+// doesn't exist. Deleting has its own endpoints so a PDF is never left public by accident.
+roomsRouter.patch("/:id", requireAuth, async (req, res) => {
+  const body = UpdateRoomRequest.parse(req.body);
   const db = supabaseAdmin();
 
   const { data: room, error } = await db
     .from("rooms")
-    .select("status, pdf_path")
+    .select("status")
     .eq("id", req.params.id)
     .eq("created_by", req.user!.id)
     .maybeSingle();
   if (error) throw error;
   if (!room) throw new HttpError(404, "Room not found");
+  if (room.status === "deleted") throw new HttpError(409, "Restore the room before changing it");
 
-  const hide = status === "deleted";
-  const pdfPath = (room.status === "deleted") !== hide ? (room.pdf_path as string | null) : null;
-  if (pdfPath) await movePdf(pdfPath, hide);
+  if (body.group_id !== undefined && body.group_id !== null) {
+    const { data: group, error: groupError } = await db
+      .from("room_groups")
+      .select("id")
+      .eq("id", body.group_id)
+      .eq("owner_id", req.user!.id)
+      .maybeSingle();
+    if (groupError) throw groupError;
+    if (!group) throw new HttpError(404, "Group not found");
+  }
+
+  // Both changes save together or not at all. The status is re-checked in the write: a delete that
+  // landed after the read must not be undone here, or the room would run again with its PDF still
+  // in the hidden bucket.
+  const id = req.params.id as string;
+  const { data: saved, error: updateError } = await db.rpc("update_room", {
+    target_room: id,
+    new_status: body.status ?? null,
+    change_group: body.group_id !== undefined,
+    new_group: body.group_id ?? null,
+  });
+  if (updateError) {
+    if (updateError.code === "23503") throw new HttpError(404, "Group not found");
+    throw updateError;
+  }
+  if (!saved) throw new HttpError(409, "The room just changed. Try again.");
+
+  res.json(await roomDetail(db, id));
+});
+
+// DELETE /api/rooms/:id: soft delete. The room disappears for everyone but its owner, who can
+// restore it. A PDF also leaves the public bucket, because public URLs skip RLS.
+roomsRouter.delete("/:id", requireAuth, async (req, res) => {
+  const db = supabaseAdmin();
+  const id = req.params.id as string;
+
+  const { data: room, error } = await db
+    .from("rooms")
+    .select("status, pdf_path")
+    .eq("id", id)
+    .eq("created_by", req.user!.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room) throw new HttpError(404, "Room not found");
+  if (room.status === "deleted") return res.json(await roomDetail(db, id));
 
   // Saves only if the status is still the one read above: the PDF move was decided from it, so a
   // request that lost a race must undo its move, or a deleted room's PDF could stay public.
-  const { data, error: updateError } = await db
-    .from("rooms")
-    .update({ status })
-    .eq("id", req.params.id)
-    .eq("status", room.status)
-    .select("id, status")
-    .maybeSingle();
+  const { data, error: updateError } = await saveStatus(db, id, room.status, "deleted", room.pdf_path, true);
   if (updateError || !data) {
-    if (pdfPath) await movePdf(pdfPath, !hide).catch(console.error);
     if (updateError) throw updateError;
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
-  res.json(data as RoomStatusResponse);
+  res.json(withGroup(data));
 });
+
+// POST /api/rooms/:id/restore: brings a soft-deleted room back, readable and running again.
+roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
+  const db = supabaseAdmin();
+  const id = req.params.id as string;
+
+  const { data: room, error } = await db
+    .from("rooms")
+    .select("status, pdf_path")
+    .eq("id", id)
+    .eq("created_by", req.user!.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room) throw new HttpError(404, "Room not found");
+  if (room.status !== "deleted") throw new HttpError(409, "The room is not deleted");
+
+  const { data, error: updateError } = await saveStatus(db, id, "deleted", "running", room.pdf_path, false);
+  if (updateError || !data) {
+    if (updateError) throw updateError;
+    throw new HttpError(409, "The room just changed. Try again.");
+  }
+
+  res.json(withGroup(data));
+});
+
+// POST /api/rooms/:id/invites  { user_id }: owner only.
+roomsRouter.post("/:id/invites", requireAuth, async (req, res) => {
+  const { user_id } = CreateInviteRequest.parse(req.body);
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db
+    .from("rooms")
+    .select("id, title, status")
+    .eq("id", req.params.id)
+    .eq("created_by", req.user!.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+  if (user_id === req.user!.id) throw new HttpError(400, "You are already in this room");
+
+  const { data: invitee, error: inviteeError } = await db
+    .from("profiles")
+    .select("id")
+    .eq("id", user_id)
+    .maybeSingle();
+  if (inviteeError) throw inviteeError;
+  if (!invitee) throw new HttpError(404, "User not found");
+
+  const { data: participant, error: participantError } = await db
+    .from("room_participants")
+    .select("user_id")
+    .eq("room_id", req.params.id)
+    .eq("user_id", user_id)
+    .maybeSingle();
+  if (participantError) throw participantError;
+  if (participant) throw new HttpError(409, "They are already in this room");
+
+  const { data, error: insertError } = await db
+    .from("room_invites")
+    .insert({ room_id: req.params.id, inviter_id: req.user!.id, invitee_id: user_id })
+    .select("id, room_id, inviter_id, invitee_id, status, created_at, responded_at")
+    .single();
+  if (insertError) {
+    if (insertError.code === "23505") throw new HttpError(409, "There is already a pending invite");
+    throw insertError;
+  }
+
+  const [invite] = await inviteViews(db, [data], new Map([[room.id, room.title]]), req.user!.id);
+  res.status(201).json(invite);
+});
+
+// GET /api/rooms/:id/top-members: the three most active people, by highlights plus comments.
+roomsRouter.get("/:id/top-members", requireAuth, async (req, res) => {
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("status").eq("id", req.params.id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const { data, error: rankError } = await db.rpc("room_top_members", { target_room: req.params.id });
+  if (rankError) throw rankError;
+
+  const members = (data as Omit<TopMember, "activity">[]).map(
+    (member): TopMember => ({ ...member, activity: member.highlight_count + member.comment_count }),
+  );
+  res.json({ members } satisfies TopMembersResponse);
+});
+
+// Reads the room's current shape after an idempotent delete.
+async function roomDetail(db: ReturnType<typeof supabaseAdmin>, id: string) {
+  const { data, error } = await db.from("rooms").select(ROOM_DETAIL).eq("id", id).single();
+  if (error) throw error;
+  return withGroup(data);
+}
+
+// Moves the PDF (if any) and saves the status only if it is still the one that was read.
+async function saveStatus(
+  db: ReturnType<typeof supabaseAdmin>,
+  id: string,
+  from: string,
+  to: string,
+  pdfPath: string | null,
+  hidePdf: boolean,
+) {
+  if (pdfPath) await movePdf(pdfPath, hidePdf);
+
+  const result = await db
+    .from("rooms")
+    .update({ status: to })
+    .eq("id", id)
+    .eq("status", from)
+    .select(ROOM_DETAIL)
+    .maybeSingle();
+
+  if (result.error || !result.data) {
+    // Undo the move: the database still says `from`, so the PDF belongs on that side.
+    if (pdfPath) await movePdf(pdfPath, !hidePdf).catch(console.error);
+  }
+  return result;
+}
 
 // Public bucket URLs skip RLS, so a deleted room's PDF has to leave the public bucket.
 async function movePdf(path: string, hide: boolean) {
@@ -217,36 +446,42 @@ async function movePdf(path: string, hide: boolean) {
   if (error) throw error;
 }
 
-// POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap.
+// POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap. Guests can
+// ask too; a signed-in caller is recorded as the author in the history.
 // The insert reaches every client through Supabase Realtime.
-roomsRouter.post("/:id/recap", async (req, res) => {
+roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
   const { id } = req.params;
   const db = supabaseAdmin();
 
   const [room, highlights, comments] = await Promise.all([
-    db.from("rooms").select("title, content_html, status").eq("id", id).single(),
+    db.from("rooms").select("title, content_html, content_text, status").eq("id", id).single(),
     db.from("highlights").select("author_name, block_id, quote").eq("room_id", id),
     db.from("comments").select("author_name, highlight_id, body").eq("room_id", id),
   ]);
   if (room.error || room.data.status === "deleted") throw new HttpError(404, "Room not found");
   if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
 
-  const aiRes = await fetch(`${env.AI_SERVICE_URL}/recap`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  // apps/ai stops trying providers after 100 s, so it answers before this gives up.
+  const data = await callAi(
+    "/recap",
+    {
       title: room.data.title ?? "",
-      text: stripHtml(room.data.content_html ?? ""),
+      // PDF rooms have no HTML: their text was extracted on upload.
+      text: room.data.content_text ?? stripHtml(room.data.content_html ?? ""),
       highlights: highlights.data ?? [],
       comments: comments.data ?? [],
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!aiRes.ok) throw new HttpError(502, "Recap failed");
-
-  const data = RecapData.parse(await aiRes.json());
+    },
+    RecapData,
+    120_000,
+  );
   const { error } = await db.from("recaps").insert({ room_id: id, data });
   if (error) throw error;
+
+  // A history row is nice to have but never worth failing the recap for.
+  const { error: historyError } = await db
+    .from("ai_queries")
+    .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "recap", response: data });
+  if (historyError) console.error("[rooms] could not record the recap query", historyError);
 
   res.json(data);
 });

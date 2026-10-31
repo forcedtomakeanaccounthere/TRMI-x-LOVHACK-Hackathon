@@ -43,7 +43,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm run test:unit
+      # The Python service's tests run in the ai job below, which has uv.
+      - run: npx turbo run test:unit --filter='!@linkroom/ai'
 
   # Database (pgTAP), integration and e2e tests share one real local Supabase, started once.
   supabase:
@@ -82,7 +83,7 @@ jobs:
       - run: npm run build
 
   ai:
-    name: AI service (ruff)
+    name: AI service (ruff, pytest)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -97,6 +98,7 @@ jobs:
           cache-dependency-glob: apps/ai/uv.lock
       - run: uv sync --locked
       - run: uv run ruff check .
+      - run: uv run pytest
 
   # Single required check for branch protection: passes only if every job above passed.
   ci-passed:
