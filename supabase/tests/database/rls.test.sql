@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(62);
+select plan(78);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -24,7 +24,19 @@ set local storage.allow_delete_query = 'true';
 -- RLS is on for every table the browser can reach.
 select ok(relrowsecurity, format('RLS is enabled on %s', relname))
 from pg_class
-where oid in ('public.rooms'::regclass, 'public.highlights'::regclass, 'public.comments'::regclass, 'public.recaps'::regclass)
+where oid in (
+  'public.rooms'::regclass,
+  'public.highlights'::regclass,
+  'public.comments'::regclass,
+  'public.recaps'::regclass,
+  'public.profiles'::regclass,
+  'public.room_groups'::regclass,
+  'public.room_group_items'::regclass,
+  'public.room_participants'::regclass,
+  'public.follows'::regclass,
+  'public.room_invites'::regclass,
+  'public.ai_queries'::regclass
+)
 order by relname;
 
 -- Guests (anon key, not logged in) -------------------------------------------------------------
@@ -227,8 +239,10 @@ select is_empty(
 -- Room status ------------------------------------------------------------------------------------
 reset role;
 insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000aa');
+insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000bb');
 insert into rooms (id, kind, title, status) values
   ('closed01', 'link', 'Closed', 'closed'),
+  ('paused01', 'link', 'Paused', 'paused'),
   ('archive1', 'link', 'Archived', 'archived'),
   ('deleted1', 'link', 'Deleted', 'deleted');
 insert into highlights (id, room_id, author_name, author_color, block_id, start_offset, end_offset, quote) values
@@ -237,10 +251,30 @@ insert into highlights (id, room_id, author_name, author_color, block_id, start_
 insert into comments (room_id, highlight_id, author_name, author_color, body)
 values ('deleted1', '00000000-0000-0000-0000-000000000012', 'Ana', '#ff0000', 'Nice');
 insert into recaps (room_id, data) values ('deleted1', '{"summary": "fixture"}');
-insert into room_visits (room_id, user_id) values ('room0001', '00000000-0000-0000-0000-0000000000aa');
+insert into room_participants (room_id, user_id) values ('room0001', '00000000-0000-0000-0000-0000000000aa');
+insert into room_groups (id, owner_id, name)
+values ('00000000-0000-0000-0000-0000000000cc', '00000000-0000-0000-0000-0000000000aa', 'Fixture group');
+insert into room_group_items (room_id, group_id)
+values ('room0001', '00000000-0000-0000-0000-0000000000cc');
+insert into follows (follower_id, followee_id)
+values ('00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000bb');
+insert into room_invites (room_id, inviter_id, invitee_id)
+values ('room0001', '00000000-0000-0000-0000-0000000000aa', '00000000-0000-0000-0000-0000000000bb');
+insert into ai_queries (room_id, user_id, kind, prompt)
+values ('room0001', '00000000-0000-0000-0000-0000000000aa', 'recap', 'summarise');
 set local role anon;
 
+-- Every dashboard table is reached through apps/backend only.
+select is_empty($$select 1 from profiles$$, 'profiles are private');
+select is_empty($$select 1 from room_groups$$, 'groups are private');
+select is_empty($$select 1 from room_group_items$$, 'which project a room is in is private');
+select hasnt_column('public', 'rooms', 'group_id', 'the public rooms table says nothing about projects');
+select is_empty($$select 1 from follows$$, 'follows are private');
+select is_empty($$select 1 from room_invites$$, 'invites are private');
+select is_empty($$select 1 from ai_queries$$, 'AI history is private');
+
 select isnt_empty($$select 1 from rooms where id = 'closed01'$$, 'closed rooms stay readable');
+select isnt_empty($$select 1 from rooms where id = 'paused01'$$, 'paused rooms stay readable');
 select is_empty($$select 1 from rooms where id = 'deleted1'$$, 'deleted rooms are hidden');
 select is_empty($$select 1 from highlights where room_id = 'deleted1'$$, 'highlights of deleted rooms are hidden');
 select is_empty($$select 1 from comments where room_id = 'deleted1'$$, 'comments of deleted rooms are hidden');
@@ -249,6 +283,11 @@ select throws_ok(
   $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
     values ('closed01', 'Guest', '#00ff00', 'b1', 2, 6, 'text')$$,
   '42501', null, 'closed rooms take no new highlights'
+);
+select throws_ok(
+  $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
+    values ('paused01', 'Guest', '#00ff00', 'b1', 2, 6, 'text')$$,
+  '42501', null, 'paused rooms take no new highlights'
 );
 select throws_ok(
   $$insert into comments (room_id, highlight_id, author_name, author_color, body)
@@ -260,7 +299,7 @@ select throws_ok(
     values ('archive1', 'Guest', '#00ff00', 'b1', 2, 6, 'text')$$,
   '42501', null, 'archived rooms take no new highlights'
 );
-select is_empty($$select 1 from room_visits$$, 'visit history is private');
+select is_empty($$select 1 from room_participants$$, 'participation history is private');
 select is_empty($$update rooms set status = 'deleted' where id = 'room0001' returning 1$$, 'anon cannot change a room''s status');
 
 select * from finish();
