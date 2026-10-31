@@ -1,4 +1,5 @@
 import type {
+  AiMessage,
   AuthSession,
   AuthUser,
   CreateLinkRoomRequest,
@@ -15,7 +16,19 @@ import type {
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// What the room workspace asks the AI: the question plus the documents, passage, snapshot and recent
+// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, which answers
+// one document per call from `question` (and `name`) only.
+export type AskRequest = {
+  question: string;
+  sources: string[]; // room ids of the documents to answer from
+  quote?: string | null; // the selected text an AI box was opened on
+  image?: string | null; // a lens snapshot as a JPEG data URL
+  history?: { role: "user" | "ai"; text: string }[];
+  name?: string; // shown as "asked by"
+};
+
+const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
@@ -74,6 +87,25 @@ export const api = {
     form.append("file", file);
     return request<CreateRoomResponse>("/api/rooms/pdf", { method: "POST", body: form }, token);
   },
+
+  // PDF, DOCX, PPTX, Markdown or text; the backend detects the format from the bytes.
+  createFileRoom: (file: File, token: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<CreateRoomResponse>("/api/rooms/file", { method: "POST", body: form }, token);
+  },
+
+  // Proposed (CHECKLIST.md "Link rooms workspace"): turns a video's transcript into t{n} blocks.
+  createYoutubeRoom: (url: string, token: string) =>
+    request<CreateRoomResponse>("/api/rooms/youtube", json({ url }), token),
+
+  // Answers a question about one room's document, with citations into its blocks.
+  ask: (roomId: string, body: { question: string; name?: string }) =>
+    request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
+
+  // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
+  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
 
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.

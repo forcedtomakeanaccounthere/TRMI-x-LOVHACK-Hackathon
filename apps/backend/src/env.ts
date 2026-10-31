@@ -41,5 +41,7 @@ const Env = z
 
 export const env = Env.parse(process.env);
 
+export const webOrigins = env.WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+
 // First entry of WEB_ORIGIN is the frontend we redirect users back to.
-export const webOrigin = (env.WEB_ORIGIN.split(",")[0] ?? env.WEB_ORIGIN).trim();
+export const webOrigin = webOrigins[0] ?? env.WEB_ORIGIN;
