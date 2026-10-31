@@ -2,7 +2,8 @@
   "$schema": "https://turbo.build/schema.json",
   "ui": "tui",
   "globalDependencies": [
-    ".env"
+    ".env",
+    "eslint.config.mjs"
   ],
   "tasks": {
     "dev": {
@@ -29,7 +30,7 @@
       "outputs": []
     },
     "test:integration": {
-      "outputs": []
+      "cache": false
     },
     "test:e2e": {
       "dependsOn": [

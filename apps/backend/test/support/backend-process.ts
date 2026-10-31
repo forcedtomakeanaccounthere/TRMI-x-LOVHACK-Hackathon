@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { startFakeSupabase } from "./fake-supabase";
+import { connectSupabase } from "./supabase";
 
 // Starts the production build (`npm run build`) as its own process, the way it is deployed,
-// wired to a fresh fake Supabase. Each call gets its own process, so its own rate-limit budget.
+// wired to the real local Supabase. Each call gets its own process, so its own rate-limit budget.
 
 const DIST = fileURLToPath(new URL("../../dist/index.js", import.meta.url));
 export const WEB = "http://web.e2e";
@@ -21,7 +21,7 @@ async function freePort() {
 export async function startBackend(extraEnv: Record<string, string> = {}) {
   if (!existsSync(DIST)) throw new Error("dist/index.js is missing: run `npm run build` first");
 
-  const supabase = await startFakeSupabase();
+  const supabase = await connectSupabase();
   const port = await freePort();
   const api = `http://127.0.0.1:${port}`;
   let logs = "";
@@ -34,8 +34,8 @@ export async function startBackend(extraEnv: Record<string, string> = {}) {
       WEB_ORIGIN: WEB,
       API_PUBLIC_URL: api,
       SUPABASE_URL: supabase.url,
-      SUPABASE_ANON_KEY: "anon-key",
-      SUPABASE_SERVICE_ROLE_KEY: "service-key",
+      SUPABASE_ANON_KEY: supabase.anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: supabase.serviceRoleKey,
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -70,7 +70,8 @@ export async function startBackend(extraEnv: Record<string, string> = {}) {
       fetch(`${api}${path}`, { method: "POST", headers: headers(token), body: form }),
     get: (path: string, token?: string) => fetch(`${api}${path}`, { headers: headers(token) }),
     // Opens the link from the latest verification email without following the redirect.
-    clickVerificationLink: (email: string) => fetch(supabase.verificationLink(email), { redirect: "manual" }),
+    clickVerificationLink: async (email: string, count?: number) =>
+      fetch(await supabase.verificationLink(email, count), { redirect: "manual" }),
     stop: async () => {
       server.kill();
       await supabase.close();

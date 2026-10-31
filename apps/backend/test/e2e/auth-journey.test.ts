@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startBackend, WEB, type Backend } from "../support/backend-process";
+import { uniqueEmail } from "../support/supabase";
 
 // User stories run against the production build as a separate process, over HTTP.
-// Passwords are generated per run: they only ever reach the fake Supabase.
+// Passwords are generated per run: they only ever reach the local Supabase.
 const newPassword = () => randomBytes(12).toString("base64url");
 
 type Session = { access_token: string; refresh_token: string; user: { id: string; email: string; name: string } };
@@ -25,7 +26,7 @@ async function createTextRoom(be: Backend, token: string, title: string) {
   const res = await be.post("/api/rooms/text", { title, text: "para one\n\npara two" }, token);
   expect(res.status).toBe(201);
   const { id } = (await res.json()) as { id: string };
-  return be.supabase.rows("rooms").find((r) => r.id === id);
+  return be.supabase.room(id);
 }
 
 describe("user stories (production build)", () => {
@@ -38,13 +39,13 @@ describe("user stories (production build)", () => {
   afterAll(() => be?.stop());
 
   it("new user: sign up → verify by email → log in → create a room → log out", async () => {
-    const email = "new.user@example.com";
+    const email = uniqueEmail("new.user");
     const password = newPassword();
 
     // 1. Sign up: a verification email is sent, no session yet.
     const signup = await be.post("/api/auth/signup", { email, password, name: "New User" });
     expect(signup.status).toBe(201);
-    expect(be.supabase.outbox.filter((m) => m.to === email)).toHaveLength(1);
+    expect(await be.supabase.verificationLinks(email)).toHaveLength(1);
 
     // 2. Logging in before verifying is refused.
     expect((await be.post("/api/auth/login", { email, password })).status).toBe(403);
@@ -53,7 +54,7 @@ describe("user stories (production build)", () => {
     expect((await be.post("/api/rooms/text", { text: "hello" })).status).toBe(401);
 
     // 4. Clicking the emailed link verifies the account and lands on the frontend login page.
-    expect(be.supabase.verificationLink(email).startsWith(`${be.api}/api/auth/verify?`)).toBe(true);
+    expect((await be.supabase.verificationLink(email)).startsWith(`${be.api}/api/auth/verify?`)).toBe(true);
     const verify = await be.clickVerificationLink(email);
     expect(verify.status).toBe(302);
     expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
@@ -79,14 +80,13 @@ describe("user stories (production build)", () => {
   });
 
   it("returning user: log in → create rooms → log out → log in again on a new session", async () => {
-    const email = "returning.user@example.com";
+    const email = uniqueEmail("returning.user");
     const password = newPassword();
     await signUpAndVerify(be, email, password, "Returning User");
-    const emailsBefore = be.supabase.outbox.length;
 
     // 1. Comes back later and logs in; no new verification email is needed.
     const first = await logIn(be, email, password);
-    expect(be.supabase.outbox).toHaveLength(emailsBefore);
+    expect(await be.supabase.verificationLinks(email)).toHaveLength(1);
 
     // 2. Creates a text room and a PDF room; both belong to them.
     expect((await createTextRoom(be, first.access_token, "Notes"))?.created_by).toBe(first.user.id);
@@ -96,8 +96,8 @@ describe("user stories (production build)", () => {
     const pdf = await be.postForm("/api/rooms/pdf", form, first.access_token);
     expect(pdf.status).toBe(201);
     const { id: pdfId } = (await pdf.json()) as { id: string };
-    expect(be.supabase.objects.has(`pdfs/${pdfId}.pdf`)).toBe(true);
-    expect(be.supabase.rows("rooms").find((r) => r.id === pdfId)).toMatchObject({
+    expect(await (await be.supabase.pdf(`${pdfId}.pdf`))?.text()).toBe("%PDF-1.4 e2e");
+    expect(await be.supabase.room(pdfId)).toMatchObject({
       kind: "pdf",
       title: "paper.pdf",
       created_by: first.user.id,
@@ -115,13 +115,13 @@ describe("user stories (production build)", () => {
   });
 
   it("lost email: sign up → link expires → resend → verify with the new link → log in", async () => {
-    const email = "lost.email@example.com";
+    const email = uniqueEmail("lost.email");
     const password = newPassword();
 
     // 1. Signs up but doesn't click the link in time.
     expect((await be.post("/api/auth/signup", { email, password, name: "Lost Email" })).status).toBe(201);
-    const oldLink = be.supabase.verificationLink(email);
-    be.supabase.expireVerificationTokens();
+    const oldLink = await be.supabase.verificationLink(email);
+    await be.supabase.expireVerificationLink(email);
 
     // 2. The old link no longer works and says why.
     const expired = await be.clickVerificationLink(email);
@@ -131,11 +131,11 @@ describe("user stories (production build)", () => {
     // 3. Asks for a new email.
     const resend = await be.post("/api/auth/resend-verification", { email });
     expect(resend.status).toBe(200);
-    const newLink = be.supabase.verificationLink(email);
+    const newLink = await be.supabase.verificationLink(email, 2);
     expect(newLink).not.toBe(oldLink);
 
     // 4. The new link verifies the account.
-    const verify = await be.clickVerificationLink(email);
+    const verify = await be.clickVerificationLink(email, 2);
     expect(verify.headers.get("location")).toBe(`${WEB}/login?verified=1`);
 
     // 5. Logs in and can create a room.
@@ -143,22 +143,21 @@ describe("user stories (production build)", () => {
     expect((await createTextRoom(be, session.access_token, "Finally"))?.created_by).toBe(session.user.id);
 
     // 6. The new link can't be reused.
-    const reused = await be.clickVerificationLink(email);
+    const reused = await be.clickVerificationLink(email, 2);
     expect(reused.headers.get("location")).toBe(`${WEB}/login?verified=0&error=expired_link`);
   });
 
   it("taken email: signing up again can't take over an existing account", async () => {
-    const email = "owner@example.com";
+    const email = uniqueEmail("owner");
     const ownerPassword = newPassword();
     const intruderPassword = newPassword();
     await signUpAndVerify(be, email, ownerPassword, "Owner");
-    const emailsBefore = be.supabase.outbox.length;
 
     // 1. Someone signs up with the same email: same reply as a fresh signup, so the account isn't revealed.
     const again = await be.post("/api/auth/signup", { email, password: intruderPassword, name: "Intruder" });
     expect(again.status).toBe(201);
     expect(await again.json()).toEqual({ message: "Check your email to verify your account." });
-    expect(be.supabase.outbox).toHaveLength(emailsBefore);
+    expect(await be.supabase.verificationLinks(email)).toHaveLength(1);
 
     // 2. Their password doesn't work; the owner's still does, with the owner's name.
     expect((await be.post("/api/auth/login", { email, password: intruderPassword })).status).toBe(401);
@@ -181,7 +180,7 @@ describe("rate limiting (default limit of 10 per 15 min)", () => {
   afterAll(() => be?.stop());
 
   it("blocks the 11th auth request from the same IP across signup, login and resend", async () => {
-    const email = "brute.force@example.com";
+    const email = uniqueEmail("brute.force");
     const statuses: number[] = [];
     for (let i = 0; i < 10; i++) {
       statuses.push((await be.post("/api/auth/login", { email, password: newPassword() })).status);
