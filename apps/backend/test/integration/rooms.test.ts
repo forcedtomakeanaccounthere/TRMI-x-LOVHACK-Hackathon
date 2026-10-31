@@ -502,6 +502,8 @@ describe("indexing a new room (chunks for search)", () => {
     const { id } = res.body as { id: string };
 
     await ready(id);
+    // Without an AI service the summary can't be made either: the room is still ready to search.
+    expect(await supabase.aiState(id)).toEqual({ status: "ready", error: expect.stringContaining("summary") });
     const chunks = await supabase.chunks(id);
     expect(chunks).toEqual([
       expect.objectContaining({ idx: 0, block_ids: ["b0", "b1", "b2"], embedding: null, embedding_model: null }),

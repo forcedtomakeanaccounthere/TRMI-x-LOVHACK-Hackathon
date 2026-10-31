@@ -105,6 +105,17 @@ export const EmbedResponse = z.object({
 });
 export type EmbedResponse = z.infer<typeof EmbedResponse>;
 
+// Detailed summary of a room, saved in room_ai.summary (POST /summary on apps/ai; apps/ai/app/schemas.py
+// must match). Every point and term cites the blocks (b12, p3, t7) it comes from.
+const SourcedPoint = z.object({ text: z.string(), source_blocks: z.array(z.string()) });
+
+export const RoomSummary = z.object({
+  overview: z.string(),
+  sections: z.array(z.object({ heading: z.string(), points: z.array(SourcedPoint) })),
+  key_terms: z.array(z.object({ term: z.string(), meaning: z.string(), source_blocks: z.array(z.string()) })),
+});
+export type RoomSummary = z.infer<typeof RoomSummary>;
+
 export const Recap = z.object({
   id: z.string().uuid(),
   room_id: z.string(),

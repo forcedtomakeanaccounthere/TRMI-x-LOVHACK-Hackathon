@@ -49,11 +49,20 @@ const vectorsFor = (body: { texts: string[] }) => ({
   vectors: body.texts.map((_, i) => [i, 0.5]),
 });
 
+const SUMMARY = {
+  overview: "Overview",
+  sections: [{ heading: "Part", points: [{ text: "Point", source_blocks: ["b0"] }] }],
+  key_terms: [],
+};
+
+// apps/ai: vectors for /embed, the summary for /summary.
+const fakeAi = async (path: string, body: { texts: string[] }) => (path === "/embed" ? vectorsFor(body) : SUMMARY);
+
 beforeEach(() => {
   for (const key of Object.keys(calls)) delete calls[key];
   for (const key of Object.keys(results)) delete results[key];
   callAi.mockReset();
-  callAi.mockImplementation(async (_path: string, body: { texts: string[] }) => vectorsFor(body));
+  callAi.mockImplementation(fakeAi);
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -63,10 +72,10 @@ describe("indexRoom", () => {
   it("chunks the room, embeds the chunks in batches and saves them with their vectors", async () => {
     results.rooms = [{ data: roomWith(EMBED_BATCH + 6) }];
 
-    expect(await indexRoom("room0001")).toEqual({ chunks: EMBED_BATCH + 6, embedded: true });
+    expect(await indexRoom("room0001")).toEqual({ chunks: EMBED_BATCH + 6, embedded: true, summarized: true });
 
-    // Two /embed calls: a full batch, then the rest, as passages.
-    expect(callAi).toHaveBeenCalledTimes(2);
+    // Two /embed calls (a full batch, then the rest, as passages), then /summary.
+    expect(callAi.mock.calls.map(([path]) => path)).toEqual(["/embed", "/embed", "/summary"]);
     const [path, body, , timeout] = callAi.mock.calls[0]!;
     expect(path).toBe("/embed");
     expect(body.input_type).toBe("passage");
@@ -84,32 +93,32 @@ describe("indexRoom", () => {
     expect(rows[EMBED_BATCH]).toMatchObject({ idx: EMBED_BATCH, embedding: [0, 0.5] });
     expect(rows[EMBED_BATCH + 1]).toMatchObject({ embedding: [1, 0.5] });
 
-    expect(statuses()).toEqual(["indexing", "ready"]);
+    expect(statuses()).toEqual(["indexing", "summarizing", "ready"]);
   });
 
   it("saves the chunks without vectors when embeddings fail, so keyword search still works", async () => {
     results.rooms = [{ data: roomWith(EMBED_BATCH + 1) }];
     // The first batch works, the second fails: no vectors at all rather than a mix.
     callAi
-      .mockImplementationOnce(async (_p: string, body: { texts: string[] }) => vectorsFor(body))
+      .mockImplementationOnce(fakeAi)
       .mockRejectedValueOnce(new HttpError(502, "The AI couldn't answer right now."));
 
-    expect(await indexRoom("room0001")).toEqual({ chunks: EMBED_BATCH + 1, embedded: false });
+    expect(await indexRoom("room0001")).toEqual({ chunks: EMBED_BATCH + 1, embedded: false, summarized: true });
     expect(inserted().every((row) => row.embedding === null && row.embedding_model === null)).toBe(true);
-    expect(statuses()).toEqual(["indexing", "ready"]);
+    expect(statuses()).toEqual(["indexing", "summarizing", "ready"]);
   });
 
   it("refuses vectors that don't match the chunks", async () => {
     results.rooms = [{ data: roomWith(2) }];
     callAi.mockResolvedValueOnce({ model: "m", vectors: [[1]] }); // one vector for two chunks
-    expect(await indexRoom("room0001")).toEqual({ chunks: 2, embedded: false });
+    expect(await indexRoom("room0001")).toEqual({ chunks: 2, embedded: false, summarized: true });
     expect(inserted().every((row) => row.embedding === null)).toBe(true);
   });
 
   it("doesn't mix vectors from two models", async () => {
     results.rooms = [{ data: roomWith(EMBED_BATCH + 1) }];
     callAi
-      .mockImplementationOnce(async (_p: string, body: { texts: string[] }) => vectorsFor(body))
+      .mockImplementationOnce(fakeAi)
       .mockImplementationOnce(async (_p: string, body: { texts: string[] }) => ({ ...vectorsFor(body), model: "other" }));
     expect((await indexRoom("room0001")).embedded).toBe(false);
   });
@@ -124,10 +133,11 @@ describe("indexRoom", () => {
 
   it("saves nothing and calls no AI for a room without text, and is still ready", async () => {
     results.rooms = [{ data: { kind: "pdf", content_html: null, content_text: null } }];
-    expect(await indexRoom("room0001")).toEqual({ chunks: 0, embedded: false });
+    expect(await indexRoom("room0001")).toEqual({ chunks: 0, embedded: false, summarized: false });
     expect(callAi).not.toHaveBeenCalled();
     expect(called("chunks", "insert")).toEqual([]);
     expect(statuses()).toEqual(["indexing", "ready"]);
+    expect(called("room_ai", "upsert").at(-1)![0]).toMatchObject({ status: "ready", summary: null });
   });
 
   it("inserts many chunks in several requests", async () => {
@@ -149,6 +159,59 @@ describe("indexRoom", () => {
     expect(first.chunks).toBe(1);
     expect(second.chunks).toBe(0);
     expect(called("chunks", "insert")).toHaveLength(1);
+  });
+});
+
+describe("the detailed summary", () => {
+  it("sends the room's title and chunks to /summary and saves the summary with status ready", async () => {
+    results.rooms = [{ data: { ...roomWith(2), title: "My doc" } }];
+    expect((await indexRoom("room0001")).summarized).toBe(true);
+
+    const [, body, schema, timeout] = callAi.mock.calls.find(([path]) => path === "/summary")!;
+    expect(body.title).toBe("My doc");
+    expect(body.chunks).toEqual([
+      { block_ids: ["b0"], content: expect.stringMatching(/^0000 x+$/), heading_path: [], page: null },
+      { block_ids: ["b1"], content: expect.stringMatching(/^0001 x+$/), heading_path: [], page: null },
+    ]);
+    expect(schema).toBeDefined();
+    expect(timeout).toBe(600_000);
+    expect(called("room_ai", "upsert").at(-1)![0]).toEqual({
+      room_id: "room0001",
+      status: "ready",
+      error: null,
+      summary: SUMMARY,
+    });
+  });
+
+  it("keeps a room ready (searchable) when its summary can't be made, with the reason", async () => {
+    results.rooms = [{ data: roomWith(1) }];
+    callAi.mockImplementation(async (path: string, body: { texts: string[] }) => {
+      if (path === "/summary") throw new HttpError(502, "The AI couldn't answer right now.");
+      return vectorsFor(body);
+    });
+
+    expect(await indexRoom("room0001")).toEqual({ chunks: 1, embedded: true, summarized: false });
+    expect(inserted()).toHaveLength(1);
+    expect(called("room_ai", "upsert").at(-1)![0]).toEqual({
+      room_id: "room0001",
+      status: "ready",
+      error: "The summary couldn't be made. The AI couldn't answer right now.",
+      summary: null,
+    });
+  });
+
+  it("doesn't touch a saved summary while indexing", async () => {
+    results.rooms = [{ data: roomWith(1) }];
+    await indexRoom("room0001");
+    const [indexing, summarizing] = called("room_ai", "upsert").map(([row]) => row as Record<string, unknown>);
+    expect(indexing).not.toHaveProperty("summary");
+    expect(summarizing).not.toHaveProperty("summary");
+  });
+
+  it("cuts a long title to what apps/ai accepts", async () => {
+    results.rooms = [{ data: { ...roomWith(1), title: "t".repeat(400) } }];
+    await indexRoom("room0001");
+    expect(callAi.mock.calls.find(([path]) => path === "/summary")![1].title).toHaveLength(300);
   });
 });
 
@@ -186,7 +249,7 @@ describe("resumeIndexing", () => {
     const reads = calls.room_ai!.filter(([m]) => m !== "upsert");
     expect(reads.slice(0, 7)).toEqual([
       ["select", "room_id, rooms!inner(status)"],
-      ["in", "status", ["pending", "indexing"]],
+      ["in", "status", ["pending", "indexing", "summarizing"]],
       ["neq", "rooms.status", "deleted"],
       ["gt", "room_id", ""],
       ["order", "room_id"],
@@ -212,7 +275,7 @@ describe("resumeIndexing", () => {
     results.rooms = [{ error: new Error("gone") }, { data: roomWith(1) }];
 
     expect(await resumeIndexing()).toBe(2);
-    expect(statuses()).toEqual(["indexing", "failed", "indexing", "ready"]);
+    expect(statuses()).toEqual(["indexing", "failed", "indexing", "summarizing", "ready"]);
   });
 
   it("does nothing when no room is waiting", async () => {
@@ -228,11 +291,11 @@ describe("resumeIndexing", () => {
 });
 
 describe("startIndexingIfWaiting (a restored room)", () => {
-  it.each(["pending", "indexing"])("indexes a room still %s", async (status) => {
+  it.each(["pending", "indexing", "summarizing"])("indexes a room still %s", async (status) => {
     results.room_ai = [{ data: { status } }];
     results.rooms = [{ data: roomWith(1) }];
     startIndexingIfWaiting("room0001");
-    await vi.waitFor(() => expect(statuses()).toEqual(["indexing", "ready"]));
+    await vi.waitFor(() => expect(statuses()).toEqual(["indexing", "summarizing", "ready"]));
   });
 
   it.each([["ready"], ["failed"], [null]])("leaves a room whose state is %s alone", async (status) => {

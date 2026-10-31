@@ -245,6 +245,10 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] AI service `POST /embed` (`passage` / `query`): one provider and model, no fallback, every vector checked against `EMBEDDING_DIM` *(in repo)*
 - [ ] Backend `lib/chunk.ts` (~1,500–2,000 chars per chunk, ends on a block, with `block_ids`, page and headings) and `lib/ai-jobs.ts` `indexRoom` (embeds 64 at a time, keyword-only if embeddings fail), started after every room is created *(in repo)*
 
+**AI: Detailed summary**
+- [ ] AI service `POST /summary`: map-reduce over a room's chunks (groups of ~8k tokens, at most 3 at once, 12 groups max), with provider fallback per call; every point cites its blocks, and ids the room doesn't have are removed *(in repo)*
+- [ ] Backend: after indexing, `summarizeRoom` saves `room_ai.summary` with status `ready` (Realtime tells the page); a summary that fails leaves the room ready to search, with the reason in `room_ai.error` *(in repo)*
+
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once
 

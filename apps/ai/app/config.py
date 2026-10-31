@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # Documents longer than this are cut before being sent to the model (known limit).
     max_document_chars: int = 60_000
 
+    # Detailed summary (POST /summary): one map call per group of chunks, then one reduce call.
+    # Each call is capped like a recap call and falls back across providers within
+    # summary_call_deadline_seconds; the whole summary must finish within summary_deadline_seconds,
+    # below apps/backend's 600 s timeout for it.
+    summary_call_timeout_seconds: float = 60.0
+    summary_call_deadline_seconds: float = 100.0
+    summary_deadline_seconds: float = 540.0
+
     # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
     # models can't be compared, so mixing them would break search. When it fails, apps/backend
     # falls back to keyword search. The key is the provider's *_API_KEY above.
