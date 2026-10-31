@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRightIcon } from "@phosphor-icons/react";
+import { ArrowUpRightIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import { useLenis } from "lenis/react";
 import { AnimatePresence, motion, useMotionValueEvent, useScroll } from "motion/react";
 import Link from "next/link";
@@ -141,6 +141,26 @@ export function SiteNav() {
 
           <div className="flex items-center gap-1">
             <ThemeToggle />
+            <AnimatePresence initial={false}>
+              {session && (
+                <motion.div
+                  key="dashboard"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.35, ease: EASE_OUT_EXPO }}
+                  className="hidden sm:block"
+                >
+                  <Link
+                    href="/dashboard"
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[0.8125rem] font-medium text-foreground/85 ring-1 ring-(--hairline) hover:bg-foreground/5 hover:text-foreground"
+                  >
+                    <SquaresFourIcon weight="light" className="size-4" />
+                    Dashboard
+                  </Link>
+                </motion.div>
+              )}
+            </AnimatePresence>
             {session ? (
               <button
                 type="button"
@@ -256,7 +276,15 @@ function MobileMenu({
     };
   }, [open, toggleRef]);
 
-  const links = [...MOBILE_LINKS, signedIn ? { href: "#hero", label: "New room" } : { href: "/login", label: "Sign in" }];
+  const links = [
+    ...MOBILE_LINKS,
+    ...(signedIn
+      ? [
+          { href: "/dashboard", label: "Dashboard" },
+          { href: "#hero", label: "New room" },
+        ]
+      : [{ href: "/login", label: "Sign in" }]),
+  ];
 
   return (
     <AnimatePresence>

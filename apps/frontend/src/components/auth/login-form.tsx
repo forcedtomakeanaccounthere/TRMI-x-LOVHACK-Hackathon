@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
-import { safeNext, setSession } from "@/lib/session";
+import { AFTER_LOGIN, safeNext, setSession } from "@/lib/session";
 import { AuthHeading, Field, Notice, SubmitButton } from "./fields";
 import { ResendButton } from "./resend-button";
 
@@ -15,7 +15,7 @@ type Errors = Partial<Record<"email" | "password", string>>;
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = safeNext(params.get("next"));
+  const next = safeNext(params.get("next"), AFTER_LOGIN);
   const [email, setEmail] = useState(params.get("email") ?? "");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<Errors>({});
@@ -105,7 +105,7 @@ export function LoginForm() {
       <p className="mt-8 text-center text-[0.875rem] text-muted-foreground">
         New to LinkRoom?{" "}
         <Link
-          href={`/signup${next !== "/" ? `?next=${encodeURIComponent(next)}` : ""}`}
+          href={`/signup${next !== AFTER_LOGIN ? `?next=${encodeURIComponent(next)}` : ""}`}
           className="font-medium text-foreground underline-offset-4 hover:underline"
         >
           Create an account

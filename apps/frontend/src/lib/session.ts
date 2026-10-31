@@ -114,6 +114,9 @@ export async function signOut() {
   if (session) await api.auth.logout(session.access_token).catch(() => {});
 }
 
+// Where sign-in lands when no ?next= was given.
+export const AFTER_LOGIN = "/dashboard";
+
 const SAME_SITE = "https://linkroom.invalid";
 
 // Only allow same-site relative paths as post-login destinations. Resolving the path catches
