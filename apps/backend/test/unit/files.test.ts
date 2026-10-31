@@ -1,3 +1,4 @@
+import JSZip from "jszip";
 import mammoth from "mammoth";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,10 +9,11 @@ import {
   MAX_UNZIPPED_BYTES,
   MAX_ZIP_ENTRIES,
   parseFile,
+  slideOrder,
   slideParagraphs,
   UNSUPPORTED,
 } from "../../src/lib/files";
-import { makeClaimedSizeZip, makeDocx, makePptx, makeZip } from "../support/files";
+import { forgeSizes, makeClaimedSizeZip, makeDocx, makePptx, makeZip } from "../support/files";
 import { makePdf } from "../support/pdf";
 
 const html = async (buf: Buffer, name: string) => {
@@ -106,15 +108,42 @@ describe("parseFile: DOCX", () => {
 });
 
 describe("parseFile: PPTX", () => {
-  it("gives each slide a p{n} block, in slide order", async () => {
+  it("gives each slide a p{n} block, in the order the deck shows them", async () => {
+    // Slides were moved around: the deck shows slide3.xml first and slide1.xml last.
+    const buf = await makePptx([["Made first"], ["Made second"], ["Made third"]], { order: [3, 2, 1] });
+    const { html: out } = await html(buf, "deck.pptx");
+    expect(out).toBe(
+      '<section data-block="p1"><h2>Slide 1</h2><p>Made third</p></section>' +
+        '<section data-block="p2"><h2>Slide 2</h2><p>Made second</p></section>' +
+        '<section data-block="p3"><h2>Slide 3</h2><p>Made first</p></section>',
+    );
+  });
+
+  it("leaves out slide files the deck doesn't list", async () => {
+    const buf = await makePptx([["Shown"], ["Not in the deck"]], { order: [1] });
+    const { html: out } = await html(buf, "deck.pptx");
+    expect(out).toBe('<section data-block="p1"><h2>Slide 1</h2><p>Shown</p></section>');
+  });
+
+  it("falls back to the file numbers when the deck has no slide list", async () => {
     // slide10.xml sorts before slide2.xml as text; it must still come last.
-    const buf = await makePptx([["One"], ["Two"], ["Ten"]], [1, 2, 10]);
+    const buf = await makePptx([["One"], ["Two"], ["Ten"]], { numbers: [1, 2, 10], list: false });
     const { html: out } = await html(buf, "deck.pptx");
     expect(out).toBe(
       '<section data-block="p1"><h2>Slide 1</h2><p>One</p></section>' +
         '<section data-block="p2"><h2>Slide 2</h2><p>Two</p></section>' +
         '<section data-block="p3"><h2>Slide 3</h2><p>Ten</p></section>',
     );
+  });
+
+  it("resolves absolute and ../ relationship targets", async () => {
+    const zip = await JSZip.loadAsync(await makePptx([["A"], ["B"]], { order: [2, 1] }));
+    const rels = await zip.file("ppt/_rels/presentation.xml.rels")!.async("string");
+    zip.file(
+      "ppt/_rels/presentation.xml.rels",
+      rels.replace("slides/slide2.xml", "/ppt/slides/slide2.xml").replace("slides/slide1.xml", "../ppt/slides/slide1.xml"),
+    );
+    expect(await slideOrder(zip)).toEqual(["ppt/slides/slide2.xml", "ppt/slides/slide1.xml"]);
   });
 
   it("skips slides without text but keeps the others' numbers", async () => {
@@ -222,6 +251,17 @@ describe("inspectZip (zip bomb guard)", () => {
     const bomb = await makeClaimedSizeZip({ "word/document.xml": "x", "b.xml": "y" }, half);
     await expect(inspectZip(bomb)).rejects.toMatchObject({ status: 400, message: expect.stringContaining("50 MB") });
     await expect(parseFile(bomb, "a.docx")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("unpacks every entry and refuses one that is bigger than the ZIP says", async () => {
+    // A real document whose directory claims each part unpacks to 1 byte: the claimed total passes,
+    // so only counting the bytes as they unpack catches it, before mammoth reads the file.
+    const docx = await makeDocx(["Hello ".repeat(2000)]);
+    const forged = forgeSizes(docx, 1);
+    await expect(inspectZip(forged)).rejects.toMatchObject({ status: 400 });
+    await expect(parseFile(forged, "a.docx")).rejects.toMatchObject({ status: 400 });
+    // The same file with honest sizes is fine.
+    expect((await inspectZip(docx)).has("word/document.xml")).toBe(true);
   });
 
   it("refuses a ZIP with too many files", async () => {

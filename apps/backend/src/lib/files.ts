@@ -85,43 +85,67 @@ export async function parseFile(buf: Buffer, fileName: string): Promise<ParsedFi
 }
 
 /**
- * Zip bomb guard. Reads only the central directory, so nothing is unpacked: refuses more than
- * MAX_ZIP_ENTRIES files or more than MAX_UNZIPPED_BYTES unpacked, and returns the file names.
+ * Zip bomb guard, run before any parser sees the file. Refuses more than MAX_ZIP_ENTRIES files or
+ * more than MAX_UNZIPPED_BYTES unpacked, and returns the file names.
+ *
+ * The sizes in a ZIP's directory are whatever the uploader wrote, so they are only a quick first
+ * check. Every entry is then really unpacked and its bytes counted against the same limit; an
+ * entry that unpacks to more than it claims is refused too (validateEntrySizes). The parsers then
+ * read the same bytes, so they never unpack more than was counted here.
  */
-export function inspectZip(buf: Buffer): Promise<Set<string>> {
+export async function inspectZip(buf: Buffer): Promise<Set<string>> {
   const damaged = () => new HttpError(400, "That file is damaged or isn't a valid .docx/.pptx file.");
   const tooBig = () => new HttpError(400, "That file unpacks to more than 50 MB. Try a smaller file.");
 
-  return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(buf, { lazyEntries: true, validateEntrySizes: true }, (err, zip) => {
-      if (err || !zip) return reject(damaged());
-      if (zip.entryCount > MAX_ZIP_ENTRIES) {
-        zip.close();
-        return reject(tooBig());
-      }
-
-      const names = new Set<string>();
-      let total = 0;
-      let done = false;
-      const finish = (error: HttpError | null) => {
-        if (done) return;
-        done = true;
-        zip.close();
-        if (error) reject(error);
-        else resolve(names);
-      };
-
-      zip.on("entry", (entry: yauzl.Entry) => {
-        total += entry.uncompressedSize;
-        if (total > MAX_UNZIPPED_BYTES || names.size >= MAX_ZIP_ENTRIES) return finish(tooBig());
-        names.add(entry.fileName);
-        zip.readEntry();
-      });
-      zip.on("end", () => finish(null));
-      zip.on("error", () => finish(damaged()));
-      zip.readEntry();
+  const zip = await new Promise<yauzl.ZipFile>((resolve, reject) => {
+    yauzl.fromBuffer(buf, { lazyEntries: true, autoClose: false, validateEntrySizes: true }, (err, file) => {
+      if (err || !file) reject(damaged());
+      else resolve(file);
     });
   });
+
+  try {
+    if (zip.entryCount > MAX_ZIP_ENTRIES) throw tooBig();
+
+    // 1. The directory: names, count and claimed sizes, before anything is unpacked.
+    const entries = await new Promise<yauzl.Entry[]>((resolve, reject) => {
+      const list: yauzl.Entry[] = [];
+      let declared = 0;
+      zip.on("entry", (entry: yauzl.Entry) => {
+        declared += entry.uncompressedSize;
+        if (declared > MAX_UNZIPPED_BYTES || list.length >= MAX_ZIP_ENTRIES) return reject(tooBig());
+        list.push(entry);
+        zip.readEntry();
+      });
+      zip.on("end", () => resolve(list));
+      zip.on("error", () => reject(damaged()));
+      zip.readEntry();
+    });
+
+    // 2. The data: every entry really unpacked, its bytes counted against the same limit.
+    let unpacked = 0;
+    for (const entry of entries) {
+      if (entry.fileName.endsWith("/")) continue; // folders have no data
+      await new Promise<void>((resolve, reject) => {
+        zip.openReadStream(entry, (err, stream) => {
+          if (err || !stream) return reject(damaged()); // encrypted, unknown compression, ...
+          stream.on("data", (chunk: Buffer) => {
+            unpacked += chunk.length;
+            if (unpacked > MAX_UNZIPPED_BYTES) {
+              stream.destroy();
+              reject(tooBig());
+            }
+          });
+          stream.on("error", () => reject(damaged())); // includes more or fewer bytes than declared
+          stream.on("end", () => resolve());
+        });
+      });
+    }
+
+    return new Set(entries.map((entry) => entry.fileName));
+  } finally {
+    zip.close();
+  }
 }
 
 /** Strict UTF-8: a file in another encoding is refused rather than shown garbled. */
@@ -166,16 +190,18 @@ async function pptxToHtml(buf: Buffer) {
     throw damaged();
   }
 
-  const slides = Object.keys(zip.files)
-    .map((name) => ({ name, n: Number(/^ppt\/slides\/slide(\d+)\.xml$/.exec(name)?.[1]) }))
-    .filter((slide) => Number.isInteger(slide.n))
-    .sort((a, b) => a.n - b.n);
+  let slides: string[];
+  try {
+    slides = await slideOrder(zip);
+  } catch {
+    throw damaged();
+  }
 
   const { document } = new JSDOM("<body></body>").window;
-  for (const [i, slide] of slides.entries()) {
+  for (const [i, name] of slides.entries()) {
     let xml: string;
     try {
-      xml = await zip.file(slide.name)!.async("string");
+      xml = await zip.file(name)!.async("string");
     } catch {
       throw damaged();
     }
@@ -196,6 +222,50 @@ async function pptxToHtml(buf: Buffer) {
     document.body.append(section);
   }
   return document.body.innerHTML;
+}
+
+/**
+ * The slide files in the order the deck shows them. That order is the slide list (p:sldIdLst) in
+ * ppt/presentation.xml, whose relationship ids point at the files; the numbers in the file names
+ * keep the order slides were created in, not where they were moved. Files the list doesn't name
+ * are hidden from the show too. Without a list, falls back to the file numbers.
+ */
+export async function slideOrder(zip: JSZip): Promise<string[]> {
+  const isSlide = (name: string) => /^ppt\/slides\/slide\d+\.xml$/.test(name) && Boolean(zip.file(name));
+
+  const presentation = (await zip.file("ppt/presentation.xml")?.async("string")) ?? "";
+  const rels = (await zip.file("ppt/_rels/presentation.xml.rels")?.async("string")) ?? "";
+  const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+
+  const targets = new Map<string, string>();
+  for (const [tag] of rels.matchAll(/<(?:\w+:)?Relationship\b[^>]*>/g)) {
+    const id = attr(tag, "Id");
+    const target = attr(tag, "Target");
+    if (id && target) targets.set(id, resolvePart("ppt/", target));
+  }
+
+  const listed: string[] = [];
+  for (const [tag] of presentation.matchAll(/<(?:\w+:)?sldId\b[^>]*>/g)) {
+    const name = targets.get(attr(tag, "\\w+:id") ?? "");
+    if (name && isSlide(name) && !listed.includes(name)) listed.push(name);
+  }
+  if (listed.length) return listed;
+
+  return Object.keys(zip.files)
+    .filter(isSlide)
+    .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)![1]) - Number(/(\d+)\.xml$/.exec(b)![1]));
+}
+
+// A relationship target is relative to the folder of the part that names it, or absolute from the
+// package root when it starts with "/".
+function resolvePart(folder: string, target: string) {
+  const parts = (target.startsWith("/") ? target.slice(1) : folder + target).split("/");
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === "..") out.pop();
+    else if (part && part !== ".") out.push(part);
+  }
+  return out.join("/");
 }
 
 /** The text of each <a:p> paragraph in a slide's XML, with line breaks as spaces. */
