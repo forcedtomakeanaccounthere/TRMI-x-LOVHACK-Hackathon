@@ -42,6 +42,8 @@ class FakeSummaryAI:
         self.calls: list[tuple[str, str, str]] = []  # (model, schema, user prompt)
         self.running = 0
         self.max_running = 0
+        # When set, the other map calls wait until the failing part's last attempt has failed.
+        self.hold_others: asyncio.Event | None = None
 
     async def __call__(self, provider, system, user, schema, timeout):
         self.calls.append((provider.model, schema.__name__, user))
@@ -54,7 +56,11 @@ class FakeSummaryAI:
             if schema is SummaryNotes:
                 part = int(user.split("Part ")[1].split(" ")[0])
                 if part == self.fail_map_part:
+                    if self.hold_others and provider.model == "gm-a":  # the last provider
+                        self.hold_others.set()
                     raise RuntimeError("this part always fails")
+                if self.hold_others:
+                    await self.hold_others.wait()
                 first = user.split("[")[1].split("]")[0].split(",")[0]
                 return SummaryNotes(
                     notes=[SourcedPoint(text=f"Note {part}", source_blocks=[first])]
@@ -138,6 +144,19 @@ def test_fails_the_whole_summary_when_one_part_fails(client, auth, fake):
     fake.fail_map_part = 2
     res = post(client, auth, groups_of_chunks(3))
     assert res.status_code == 502
+    assert fake.of("RoomSummary") == []
+
+
+def test_stops_the_other_parts_when_one_fails(client, auth, fake):
+    fake.fail_map_part = 1
+    fake.hold_others = asyncio.Event()
+    res = post(client, auth, groups_of_chunks(7))
+    assert res.status_code == 502
+    # Part 1 fails on every provider while parts 2 and 3 are running. They are cancelled, and
+    # parts 4-7, still waiting their turn, never call a provider.
+    parts = {int(user.split("Part ")[1].split(" ")[0]) for _, _, user in fake.calls}
+    assert parts == {1, 2, 3}
+    assert fake.running == 0
     assert fake.of("RoomSummary") == []
 
 

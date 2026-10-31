@@ -112,9 +112,14 @@ async def generate_summary(req: SummaryRequest) -> RoomSummary:
 
     flag_injection("document", "\n".join(c.content for g in groups for c in g))
     semaphore = asyncio.Semaphore(MAP_CONCURRENCY)
+    # Set when a part fails. A failed part frees its place before the TaskGroup cancels the rest,
+    # so a part that gets that place checks this first instead of calling a provider.
+    failed = asyncio.Event()
 
     async def map_group(i: int, group: list[SummaryChunk]) -> SummaryNotes:
         async with semaphore:
+            if failed.is_set():
+                return SummaryNotes(notes=[])  # never used: the summary is failing
             user = "\n\n".join(
                 [
                     wrap_untrusted("title", req.title),
@@ -122,12 +127,23 @@ async def generate_summary(req: SummaryRequest) -> RoomSummary:
                     wrap_untrusted("document", format_chunks(group)),
                 ]
             )
-            return await _complete(
-                f"map {i + 1}/{len(groups)}", MAP_PROMPT, user, SummaryNotes, deadline
-            )
+            try:
+                return await _complete(
+                    f"map {i + 1}/{len(groups)}", MAP_PROMPT, user, SummaryNotes, deadline
+                )
+            except SummaryError:
+                failed.set()
+                raise
 
-    # Every part is needed for a faithful summary: one part that fails fails the summary.
-    notes = await asyncio.gather(*(map_group(i, g) for i, g in enumerate(groups)))
+    # Every part is needed for a faithful summary: one part that fails fails the summary. The
+    # TaskGroup then cancels the other parts, running or still waiting their turn, so no more
+    # provider calls are paid for a summary that can't be finished.
+    try:
+        async with asyncio.TaskGroup() as tasks:
+            mapped = [tasks.create_task(map_group(i, g)) for i, g in enumerate(groups)]
+    except* SummaryError as failed:
+        raise failed.exceptions[0] from None
+    notes = [task.result() for task in mapped]
 
     all_notes = [note.model_dump() for part in notes for note in part.notes]
     user = "\n\n".join(

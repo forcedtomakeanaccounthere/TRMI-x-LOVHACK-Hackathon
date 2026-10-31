@@ -208,6 +208,16 @@ describe("the detailed summary", () => {
     expect(summarizing).not.toHaveProperty("summary");
   });
 
+  it("cuts long headings to what apps/ai accepts", async () => {
+    const long = "H".repeat(800);
+    results.rooms = [{ data: { kind: "link", content_text: null, content_html: `<h1 data-block="b0">${long}</h1><p data-block="b1">Text</p>` } }];
+    await indexRoom("room0001");
+    const [chunk] = callAi.mock.calls.find(([path]) => path === "/summary")![1].chunks;
+    expect(chunk.heading_path).toEqual(["H".repeat(500)]);
+    // The saved chunk keeps the whole heading.
+    expect(inserted()[0]!.heading_path).toEqual([long]);
+  });
+
   it("cuts a long title to what apps/ai accepts", async () => {
     results.rooms = [{ data: { ...roomWith(1), title: "t".repeat(400) } }];
     await indexRoom("room0001");

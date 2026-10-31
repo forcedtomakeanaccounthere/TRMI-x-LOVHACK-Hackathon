@@ -12,6 +12,9 @@ const EMBED_TIMEOUT_MS = 60_000; // per batch; apps/ai gives the provider 30 s
 const INSERT_BATCH = 100; // chunks per insert, so one request stays well under PostgREST's limits
 // apps/ai gives a summary 540 s in all (map calls, then the reduce call), so it answers first.
 const SUMMARY_TIMEOUT_MS = 600_000;
+// SummaryChunk.heading_path in apps/ai/app/schemas.py: at most 10 headings of 500 characters.
+const MAX_SUMMARY_HEADINGS = 10;
+const MAX_SUMMARY_HEADING_CHARS = 500;
 
 // One indexing run per room at a time in this process.
 const running = new Set<string>();
@@ -84,7 +87,13 @@ export async function summarizeRoom(roomId: string, title: string, chunks: Chunk
       "/summary",
       {
         title: title.slice(0, 300),
-        chunks: chunks.map(({ block_ids, content, heading_path, page }) => ({ block_ids, content, heading_path, page })),
+        chunks: chunks.map(({ block_ids, content, heading_path, page }) => ({
+          block_ids,
+          content,
+          // Headings are context for the model, so a very long one is cut to what apps/ai accepts.
+          heading_path: heading_path.slice(0, MAX_SUMMARY_HEADINGS).map((h) => h.slice(0, MAX_SUMMARY_HEADING_CHARS)),
+          page,
+        })),
       },
       RoomSummary,
       SUMMARY_TIMEOUT_MS,
