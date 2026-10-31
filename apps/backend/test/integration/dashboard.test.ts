@@ -157,6 +157,32 @@ describe("projects (groups of rooms)", () => {
     expect((await get(cara, "/api/me/rooms").query({ group_id: id })).body).toEqual({ rooms: [], total: 0 });
   });
 
+  it("changes nothing when a room's status and project can't both be saved", async () => {
+    const room = await createRoom("All or nothing");
+    const { error } = await admin().rpc("update_room", {
+      target_room: room,
+      new_status: "closed",
+      change_group: true,
+      new_group: "22222222-2222-4222-8222-222222222222",
+    });
+    expect(error?.code).toBe("23503");
+
+    const [unchanged] = (await get(ana, "/api/me/rooms").query({ q: "All or nothing" })).body.rooms;
+    expect(unchanged).toMatchObject({ id: room, status: "running", group_id: null });
+  });
+
+  it("refuses to change a deleted room, and is closed to browsers", async () => {
+    const room = await createRoom("Stays deleted");
+    await remove(ana, `/api/rooms/${room}`);
+    const args = { target_room: room, new_status: "running", change_group: false, new_group: null };
+
+    expect((await admin().rpc("update_room", args)).data).toBe(false);
+    const browser = createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
+    expect((await browser.rpc("update_room", args)).error?.code).toBe("42501");
+    const [still] = (await get(ana, "/api/me/rooms").query({ q: "Stays deleted", status: "deleted" })).body.rooms;
+    expect(still.id).toBe(room);
+  });
+
   it("keeps a room's project out of reach of the public key", async () => {
     const { id } = (await post(ana, "/api/groups", { name: "Hidden" })).body;
     const room = await createRoom("Hidden room");

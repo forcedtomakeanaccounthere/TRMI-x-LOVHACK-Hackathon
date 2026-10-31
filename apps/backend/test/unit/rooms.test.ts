@@ -307,6 +307,7 @@ describe("PATCH /api/rooms/:id", () => {
 
   it("only looks up rooms the caller owns and writes just the change", async () => {
     results.rooms = [{ data: { status: "running" } }, { data: detail({ status: "paused" }) }];
+    results.rpc = [{ data: true }];
 
     const res = await patch({ status: "paused", created_by: OTHER, title: "Hijacked" });
     expect(res.body).toMatchObject({ id: "room0001", status: "paused" });
@@ -314,32 +315,37 @@ describe("PATCH /api/rooms/:id", () => {
       ["id", "room0001"],
       ["created_by", USER],
     ]);
-    expect(called("rooms", "update")).toEqual([[{ status: "paused" }]]);
+    expect(calls.rpc).toEqual([
+      ["update_room", { target_room: "room0001", new_status: "paused", change_group: false, new_group: null }],
+    ]);
   });
 
   it("moves a room into a group the caller owns", async () => {
-    results.rooms = [{ data: { status: "running" } }, { data: detail() }];
-
-    const res = await patch({ group_id: GROUP });
-    expect(res.status).toBe(200);
-    expect(res.body.group_id).toBe(GROUP);
-    expect(called("room_groups", "eq")).toContainEqual(["owner_id", USER]);
-    expect(called("room_group_items", "upsert")).toEqual([
-      [{ room_id: "room0001", group_id: GROUP }, { onConflict: "room_id" }],
-    ]);
-    expect(called("rooms", "update")).toEqual([]);
-  });
-
-  it("moves a room out of its group", async () => {
     results.rooms = [
       { data: { status: "running" } },
       { data: { ...detail(), room_group_items: { group_id: GROUP } } },
     ];
+    results.rpc = [{ data: true }];
+
+    const res = await patch({ group_id: GROUP });
+    expect(res.status).toBe(200);
+    expect(res.body.group_id).toBe(GROUP);
+    expect(res.body).not.toHaveProperty("room_group_items");
+    expect(called("room_groups", "eq")).toContainEqual(["owner_id", USER]);
+    expect(calls.rpc).toEqual([
+      ["update_room", { target_room: "room0001", new_status: null, change_group: true, new_group: GROUP }],
+    ]);
+  });
+
+  it("moves a room out of its group", async () => {
+    results.rooms = [{ data: { status: "running" } }, { data: detail() }];
+    results.rpc = [{ data: true }];
 
     const res = await patch({ group_id: null });
     expect(res.body.group_id).toBeNull();
-    expect(res.body).not.toHaveProperty("room_group_items");
-    expect(called("room_group_items", "delete")).toHaveLength(1);
+    expect(calls.rpc).toEqual([
+      ["update_room", { target_room: "room0001", new_status: null, change_group: true, new_group: null }],
+    ]);
   });
 
   it("reports the room's group when only the status changes", async () => {
@@ -347,16 +353,23 @@ describe("PATCH /api/rooms/:id", () => {
       { data: { status: "running" } },
       { data: { ...detail({ status: "paused" }), room_group_items: { group_id: GROUP } } },
     ];
+    results.rpc = [{ data: true }];
 
     expect((await patch({ status: "paused" })).body).toMatchObject({ status: "paused", group_id: GROUP });
-    expect(called("room_group_items", "upsert")).toEqual([]);
   });
 
   it("answers 404 when the group is deleted during the move", async () => {
-    results.rooms = [{ data: { status: "running" } }, { data: detail() }];
-    results.room_group_items = [{ error: { code: "23503" } }];
+    results.rooms = [{ data: { status: "running" } }];
+    results.rpc = [{ data: null, error: { code: "23503" } }];
 
     expect((await patch({ group_id: GROUP })).status).toBe(404);
+  });
+
+  it("answers 500 for any other database failure", async () => {
+    results.rooms = [{ data: { status: "running" } }];
+    results.rpc = [{ data: null, error: new Error("boom") }];
+
+    expect((await patch({ status: "paused" })).status).toBe(500);
   });
 
   it("answers 404 for a group owned by someone else, without updating", async () => {
@@ -381,11 +394,10 @@ describe("PATCH /api/rooms/:id", () => {
 
   // A delete landing between the read and the write must not be undone by this update.
   it("never writes over a room deleted mid-request", async () => {
-    results.rooms = [{ data: { status: "running" } }, { data: null }];
+    results.rooms = [{ data: { status: "running" } }];
+    results.rpc = [{ data: false }];
 
-    const res = await patch({ status: "paused" });
-    expect(res.status).toBe(409);
-    expect(called("rooms", "neq")).toContainEqual(["status", "deleted"]);
+    expect((await patch({ status: "paused" })).status).toBe(409);
   });
 
   it.each([[{}], [{ status: "deleted" }], [{ status: "paused", group_id: "nope" }]])(

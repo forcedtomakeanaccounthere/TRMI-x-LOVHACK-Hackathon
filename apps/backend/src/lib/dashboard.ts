@@ -84,11 +84,12 @@ export async function participantBlocks(db: SupabaseClient, roomIds: string[]) {
         .from("room_participants")
         .select("room_id, user_id, joined_at, last_seen_at")
         .in("room_id", roomIds)
-        .order("last_seen_at", { ascending: false })
         .order("room_id")
         .order("user_id")
         .range(from, to),
   );
+  // Sorted here, not in the query: a heartbeat during paging would move a row between pages.
+  rows.sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at));
   const profiles = await profilesByIds(db, [...new Set(rows.map((row) => row.user_id))]);
 
   for (const row of rows) {

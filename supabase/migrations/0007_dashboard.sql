@@ -200,3 +200,37 @@ set last_activity_at = greatest(
   coalesce((select max(created_at) from comments c where c.room_id = r.id), r.created_at)
 );
 alter table rooms alter column last_activity_at set not null;
+
+-- Saves a room's status and project together, so a failed move never leaves a status change behind.
+-- Returns false, changing nothing, if the room is deleted or gone. It takes no owner: the API checks
+-- that first, so only the service role may run it.
+create function public.update_room(
+  target_room text,
+  new_status text,
+  change_group boolean,
+  new_group uuid
+) returns boolean
+language plpgsql set search_path = public as $$
+begin
+  if new_status is not null then
+    update rooms set status = new_status where id = target_room and status <> 'deleted';
+  else
+    perform 1 from rooms where id = target_room and status <> 'deleted' for update;
+  end if;
+  if not found then
+    return false;
+  end if;
+
+  if change_group and new_group is null then
+    delete from room_group_items where room_id = target_room;
+  elsif change_group then
+    insert into room_group_items (room_id, group_id) values (target_room, new_group)
+    on conflict (room_id) do update set group_id = excluded.group_id;
+  end if;
+
+  return true;
+end;
+$$;
+
+revoke execute on function public.update_room(text, text, boolean, uuid) from public, anon, authenticated;
+grant execute on function public.update_room(text, text, boolean, uuid) to service_role;

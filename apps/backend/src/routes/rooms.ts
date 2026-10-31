@@ -273,29 +273,23 @@ roomsRouter.patch("/:id", requireAuth, async (req, res) => {
     if (!group) throw new HttpError(404, "Group not found");
   }
 
-  // Re-checked in the write: a delete that landed after the read must not be undone here, or the
-  // room would run again with its PDF still in the hidden bucket.
+  // Both changes save together or not at all. The status is re-checked in the write: a delete that
+  // landed after the read must not be undone here, or the room would run again with its PDF still
+  // in the hidden bucket.
   const id = req.params.id as string;
-  const { data, error: updateError } = await (body.status !== undefined
-    ? db.from("rooms").update({ status: body.status }).eq("id", id).neq("status", "deleted").select(ROOM_DETAIL)
-    : db.from("rooms").select(ROOM_DETAIL).eq("id", id).neq("status", "deleted")
-  ).maybeSingle();
-  if (updateError) throw updateError;
-  if (!data) throw new HttpError(409, "The room just changed. Try again.");
-
-  if (body.group_id === undefined) return res.json(withGroup(data));
-
-  const items = db.from("room_group_items");
-  const { error: fileError } =
-    body.group_id === null
-      ? await items.delete().eq("room_id", id)
-      : await items.upsert({ room_id: id, group_id: body.group_id }, { onConflict: "room_id" });
-  if (fileError) {
-    if (fileError.code === "23503") throw new HttpError(404, "Group not found");
-    throw fileError;
+  const { data: saved, error: updateError } = await db.rpc("update_room", {
+    target_room: id,
+    new_status: body.status ?? null,
+    change_group: body.group_id !== undefined,
+    new_group: body.group_id ?? null,
+  });
+  if (updateError) {
+    if (updateError.code === "23503") throw new HttpError(404, "Group not found");
+    throw updateError;
   }
+  if (!saved) throw new HttpError(409, "The room just changed. Try again.");
 
-  res.json({ ...withGroup(data), group_id: body.group_id });
+  res.json(await roomDetail(db, id));
 });
 
 // DELETE /api/rooms/:id: soft delete. The room disappears for everyone but its owner, who can

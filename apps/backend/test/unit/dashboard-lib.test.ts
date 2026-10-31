@@ -137,6 +137,16 @@ describe("participantBlocks", () => {
     expect(block.people.map((p) => p.live)).toEqual([true, false]);
   });
 
+  it("shows the most recently seen people first", async () => {
+    const { db } = fakeDb({
+      room_participants: [row("older", "r1", ago(5000)), row("newest", "r1", ago(0)), row("middle", "r1", ago(1000))],
+      profiles: [person("older"), person("newest"), person("middle")],
+    });
+
+    const { people } = blockFor(await participantBlocks(db, ["r1"]), "r1");
+    expect(people.map((p) => p.user_id)).toEqual(["newest", "middle", "older"]);
+  });
+
   it("leaves out an account with no profile", async () => {
     const { db } = fakeDb({ room_participants: [row("ghost"), row("a")], profiles: [person("a")] });
 
