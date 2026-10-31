@@ -286,6 +286,38 @@ describe("PATCH /api/rooms/:id/status", () => {
     ]);
   });
 
+  it("undoes the delete move when its save loses the race", async () => {
+    results.rooms = [{ data: { status: "running", pdf_path: "room0001.pdf" } }, { data: null }];
+
+    expect((await patch({ status: "deleted" })).status).toBe(409);
+    expect(moves).toEqual([
+      ["pdfs", "pdfs-deleted"],
+      ["pdfs-deleted", "pdfs"],
+    ]);
+  });
+
+  it("moves nothing public when a restore and a delete overlap on a deleted room", async () => {
+    // Both requests read `deleted`, as they can while the restore hasn't saved yet: the
+    // delete skips its move, and both saves are guarded on the status that was read.
+    results.rooms = [
+      { data: { status: "deleted", pdf_path: "room0001.pdf" } },
+      { data: { status: "deleted", pdf_path: "room0001.pdf" } },
+      { data: { id: "room0001", status: "deleted" } },
+      { data: { id: "room0001", status: "closed" } },
+    ];
+
+    const [restore, remove] = await Promise.all([patch({ status: "closed" }), patch({ status: "deleted" })]);
+    expect(restore.status).toBe(200);
+    expect(remove.status).toBe(200);
+    expect(called("rooms", "eq").filter(([col]) => col === "status")).toEqual([
+      ["status", "deleted"],
+      ["status", "deleted"],
+    ]);
+    const saved = called("rooms", "update").map(([patch]) => (patch as { status: string }).status).sort();
+    expect(saved).toEqual(["closed", "deleted"]);
+    expect(moves).toEqual([["pdfs-deleted", "pdfs"]]);
+  });
+
   it("answers 400 for a missing or unknown status", async () => {
     expect((await patch({})).status).toBe(400);
     expect((await patch({ status: "paused" })).status).toBe(400);
