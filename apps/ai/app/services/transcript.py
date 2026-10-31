@@ -107,10 +107,32 @@ def parse_vtt(text: str) -> list[TranscriptSegment]:
     return segments
 
 
+Tracks = dict[str, list[dict]]
+
+
+def _pick_track(subs: Tracks, auto_subs: Tracks, languages: list[str]):
+    """(language, formats, is_generated). The requested languages come first, each preferring
+    manual captions over automatic ones; only then any manual track, then any automatic one."""
+    for lang in languages:
+        if subs.get(lang):
+            return lang, subs[lang], False
+        if auto_subs.get(lang):
+            return lang, auto_subs[lang], True
+    for tracks, generated in ((subs, False), (auto_subs, True)):
+        for lang, formats in tracks.items():
+            if formats:
+                return lang, formats, generated
+    return None, None, False
+
+
 def _fetch_with_ytdlp(video_id: str, languages: list[str]) -> TranscriptResponse:
     url = f"https://www.youtube.com/watch?v={video_id}"
+    settings = get_settings()
+    proxy = settings.yt_proxy_url
     ydl_opts = {
         "skip_download": True,
+        "socket_timeout": settings.transcript_timeout_seconds,
+        **({"proxy": proxy} if proxy else {}),
         "writesubtitles": True,
         "writeautomaticsub": True,
         "quiet": True,
@@ -128,29 +150,7 @@ def _fetch_with_ytdlp(video_id: str, languages: list[str]) -> TranscriptResponse
         subs = info.get("subtitles") or {}
         auto_subs = info.get("automatic_captions") or {}
 
-        chosen_lang = None
-        is_generated = False
-        track_formats = None
-
-        for lang in languages:
-            if lang in subs:
-                chosen_lang = lang
-                track_formats = subs[lang]
-                break
-        if not track_formats and subs:
-            chosen_lang = next(iter(subs))
-            track_formats = subs[chosen_lang]
-
-        if not track_formats:
-            is_generated = True
-            for lang in languages:
-                if lang in auto_subs:
-                    chosen_lang = lang
-                    track_formats = auto_subs[lang]
-                    break
-            if not track_formats and auto_subs:
-                chosen_lang = next(iter(auto_subs))
-                track_formats = auto_subs[chosen_lang]
+        chosen_lang, track_formats, is_generated = _pick_track(subs, auto_subs, languages)
 
         if not track_formats:
             raise NoTranscript("This video has no captions")
@@ -161,7 +161,11 @@ def _fetch_with_ytdlp(video_id: str, languages: list[str]) -> TranscriptResponse
         if not target_url:
             raise NoTranscript("No caption track URL available")
 
-        resp = requests.get(target_url, timeout=10)
+        resp = requests.get(
+            target_url,
+            timeout=settings.transcript_timeout_seconds,
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+        )
         resp.raise_for_status()
 
         segments = []

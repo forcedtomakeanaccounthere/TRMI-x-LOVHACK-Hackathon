@@ -17,6 +17,8 @@ from app.services.transcript import (
     NoTranscript,
     TranscriptError,
     _client,
+    _fetch_with_ytdlp,
+    _pick_track,
     _TimeoutSession,
     fetch_transcript,
     parse_vtt,
@@ -251,3 +253,59 @@ def test_parse_vtt_gives_timed_segments():
 
 def test_parse_vtt_skips_cues_without_text_or_timing():
     assert parse_vtt("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c></c>\n\nnot a cue\n") == []
+
+
+def test_pick_track_prefers_the_requested_language_even_when_only_automatic():
+    manual = {"fr": [{"ext": "vtt"}]}
+    auto = {"en": [{"ext": "json3"}]}
+    assert _pick_track(manual, auto, ["en"]) == ("en", auto["en"], True)
+
+
+def test_pick_track_prefers_manual_within_a_language_then_any_manual_then_any_auto():
+    manual = {"en": [{"ext": "vtt"}], "de": [{"ext": "vtt"}]}
+    auto = {"en": [{"ext": "json3"}], "es": [{"ext": "json3"}]}
+    assert _pick_track(manual, auto, ["en"]) == ("en", manual["en"], False)
+    assert _pick_track(manual, auto, ["ja"]) == ("en", manual["en"], False)
+    assert _pick_track({}, auto, ["ja"]) == ("en", auto["en"], True)
+    assert _pick_track({}, {}, ["en"]) == (None, None, False)
+
+
+def test_ytdlp_fallback_uses_the_configured_proxy(monkeypatch):
+    proxy = "http://user:pw@proxy.example:8080"
+    monkeypatch.setenv("YT_PROXY_URL", proxy)
+    get_settings.cache_clear()
+    seen = {}
+
+    class FakeYDL:
+        def __init__(self, opts):
+            seen["ydl"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            return {"subtitles": {"en": [{"ext": "vtt", "url": "https://captions.example/en.vtt"}]}}
+
+    class FakeResponse:
+        text = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHi\n"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kwargs):
+        seen["get"] = kwargs
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.transcript.yt_dlp.YoutubeDL", FakeYDL)
+    monkeypatch.setattr("app.services.transcript.requests.get", fake_get)
+    try:
+        result = _fetch_with_ytdlp("dQw4w9WgXcQ", ["en"])
+    finally:
+        get_settings.cache_clear()
+
+    assert seen["ydl"]["proxy"] == proxy
+    assert seen["get"]["proxies"] == {"http": proxy, "https": proxy}
+    assert [s.text for s in result.segments] == ["Hi"]
