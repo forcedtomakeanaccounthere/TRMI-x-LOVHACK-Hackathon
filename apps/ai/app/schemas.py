@@ -1,7 +1,12 @@
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, BeforeValidator, Field
 
 # RecapData must match packages/shared/src/schemas.ts. Input limits match the database checks
 # (supabase/migrations 0002 and 0004), so anything apps/backend reads from the database fits.
+
+
+MAX_TEXT_CHARS = 1_000_000
 
 
 class HealthResponse(BaseModel):
@@ -44,7 +49,8 @@ class CommentIn(BaseModel):
 
 class RecapRequest(BaseModel):
     title: str = Field(max_length=300)
-    # Cut to max_document_chars before it reaches a model; this only bounds the request itself.
-    text: str = Field(max_length=1_000_000)
+    # Cut to max_document_chars before it reaches a model. Longer text is cut here, not refused:
+    # an article the backend accepted must still get a recap.
+    text: Annotated[str, BeforeValidator(lambda v: v[:MAX_TEXT_CHARS] if isinstance(v, str) else v)]
     highlights: list[HighlightIn] = []
     comments: list[CommentIn] = []

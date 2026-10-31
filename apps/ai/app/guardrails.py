@@ -66,7 +66,16 @@ def quote_in(quote: str, *sources: str) -> bool:
     q = normalize(quote)
     if not q:
         return False
-    return any(fuzz.partial_ratio(q, normalize(s)) >= QUOTE_MATCH for s in sources if s)
+    return any(_covers(normalize(s), q) for s in sources if s)
+
+
+def _covers(source: str, quote: str) -> bool:
+    # partial_ratio matches the shorter string inside the longer one, whichever it is. A quote
+    # longer than its source can't be wholly inside it, so compare it whole instead: otherwise a
+    # short highlight ("Read more") would vouch for an invented quote that merely contains it.
+    if len(quote) > len(source):
+        return fuzz.ratio(quote, source) >= QUOTE_MATCH
+    return fuzz.partial_ratio(quote, source) >= QUOTE_MATCH
 
 
 def urls_in(*sources: str) -> set[str]:

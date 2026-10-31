@@ -75,6 +75,12 @@ class TestQuoteIn:
     def test_rejects_quotes_not_in_the_source(self, quote):
         assert not quote_in(quote, self.SOURCE)
 
+    def test_a_short_source_does_not_vouch_for_a_longer_invented_quote(self):
+        assert not quote_in("Read more about how RNNs beat transformers easily", "Read more")
+
+    def test_a_quote_a_little_longer_than_its_source_still_matches(self):
+        assert quote_in("Transformers use attention!", "Transformers use attention.")
+
     def test_checks_every_source_and_skips_empty_ones(self):
         assert quote_in("sunny day", "", "nothing here", self.SOURCE)
         assert not quote_in("sunny day")

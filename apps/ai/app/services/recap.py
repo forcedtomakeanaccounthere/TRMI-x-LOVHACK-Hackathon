@@ -156,11 +156,16 @@ def sanitize_recap(
         if not quote_in(item.quote, *quotes) and not quote_in(item.quote, document):
             log.info("Dropped a recap quote that isn't in the highlights or the document")
             continue
-        who = [people[normalize(name)] for name in item.who if normalize(name) in people]
+        # Matched against the names as written, then cleaned like any other text for display.
+        who = [
+            clean_text(people[normalize(name)], set(), 40)
+            for name in item.who
+            if normalize(name) in people
+        ]
         focus.append(
             GroupFocus(
                 quote=clean(item.quote, MAX_QUOTE_CHARS),
-                who=list(dict.fromkeys(who)),
+                who=list(dict.fromkeys(name for name in who if name)),
                 why=clean(item.why),
             )
         )

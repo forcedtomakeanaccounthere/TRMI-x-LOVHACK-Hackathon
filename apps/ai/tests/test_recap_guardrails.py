@@ -2,7 +2,7 @@ import json
 import re
 
 from app.guardrails import LINK_REMOVED, UNTRUSTED_RULE
-from app.schemas import GroupFocus, RecapData
+from app.schemas import MAX_TEXT_CHARS, GroupFocus, RecapData
 from app.services.recap import MAX_HIGHLIGHTS, MAX_ITEMS
 
 DOCUMENT = "Transformers use attention. Read more at https://arxiv.org/abs/1706.03762 today."
@@ -76,6 +76,11 @@ class TestPrompt:
 
 
 class TestInput:
+    def test_text_longer_than_the_request_limit_is_cut_not_refused(self, client, auth, fake_ai):
+        request = {**REQUEST, "text": "x" * (MAX_TEXT_CHARS + 10)}
+        assert post(client, auth, request).status_code == 200
+
+
     def test_a_comment_without_a_highlight_is_accepted(self, client, auth, fake_ai):
         request = {**REQUEST, "comments": [{"author_name": "Sam", "body": "General note"}]}
         assert post(client, auth, request).status_code == 200
@@ -108,6 +113,11 @@ class TestOutput:
                 GroupFocus(quote="transformers  use attention", who=[], why="kept: a highlight"),
                 GroupFocus(quote="Read more at", who=[], why="kept: in the document"),
                 GroupFocus(quote="RNNs are all you need", who=[], why="dropped: made up"),
+                GroupFocus(
+                    quote="Read more about how RNNs beat transformers",
+                    who=[],
+                    why="dropped: a short highlight inside an invented quote",
+                ),
             ]
         )
         focus = post(client, auth).json()["what_the_group_cared_about"]
@@ -136,3 +146,22 @@ class TestOutput:
         body = post(client, auth).json()
         assert len(body["open_questions"]) == MAX_ITEMS
         assert len(body["one_line_summary"]) <= 300
+
+    def test_names_are_cleaned_like_other_text(self, client, auth, fake_ai):
+        request = {
+            **REQUEST,
+            "highlights": [
+                {
+                    "author_name": "<b>Eve</b>",
+                    "block_id": "b0",
+                    "quote": "Transformers use attention.",
+                }
+            ],
+        }
+        fake_ai.answer = recap_with(
+            what_the_group_cared_about=[
+                GroupFocus(quote="Transformers use attention.", who=["<b>Eve</b>"], why="w")
+            ]
+        )
+        focus = post(client, auth, request).json()["what_the_group_cared_about"]
+        assert focus[0]["who"] == ["Eve"]

@@ -763,6 +763,12 @@ describe("POST /api/rooms/:id/recap", () => {
     expect(aiBody().highlights).toEqual([highlight]);
   });
 
+  it("sends at most 200,000 characters of a long article", async () => {
+    results.rooms = [{ data: room({ content_html: `<p data-block="b0">${"word ".repeat(100_000)}</p>` }) }];
+    expect((await recap()).status).toBe(200);
+    expect(aiBody().text).toHaveLength(200_000);
+  });
+
   it("sends a PDF room's extracted text as it is", async () => {
     results.rooms = [{ data: room({ content_html: null, content_text: "[Page 1] Hello" }) }];
     expect((await recap()).status).toBe(200);
