@@ -109,6 +109,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 - [ ] Make relative image and link URLs absolute; open links in a new tab with `rel="noopener"`
 - [ ] Insert the room with `nanoid(8)` and return `{ id }`
 - [ ] `POST /api/rooms/text`: create a room from pasted text (split by blank lines into `<p data-block>`)
+- [ ] HTML-escape pasted text (`&`, `<`, `>`, `"`, `'`) before wrapping it in `<p>`, so it always shows as plain text
 - [ ] Check the function size on Vercel; switch `jsdom` to `linkedom` if it is too big
 
 **FE**
@@ -125,6 +126,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 - [ ] Each of the 5 demo links creates a clean room
 - [ ] A broken URL, a private IP and a JavaScript-only site all show the error state, not a crash
 - [ ] Extracted pages contain no `<script>` tags
+- [ ] Pasting `<div>hi</div> & <script>alert(1)</script>` shows that exact text in the room, with no HTML rendered
 
 **Done when:** pasting a Wikipedia link opens a clean, readable room on the live URL.
 
