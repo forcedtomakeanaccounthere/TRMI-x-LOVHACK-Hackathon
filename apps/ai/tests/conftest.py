@@ -79,13 +79,16 @@ class FakeAI:
         self.fail: set[str] = set()
         self.cost: dict[str, float] = {}
         self.calls: list[tuple[str, float]] = []
+        self.answer = RECAP  # what a working model returns
+        self.system = self.user = ""  # the last prompt sent
 
     async def __call__(self, provider, system, user, schema, timeout):
         self.calls.append((provider.model, timeout))
+        self.system, self.user = system, user
         self.clock.now += self.cost.get(provider.model, 0.0)
         if provider.model in self.fail:
             raise RuntimeError(f"{provider.model} is down")
-        return RECAP
+        return self.answer
 
     @property
     def models(self):
