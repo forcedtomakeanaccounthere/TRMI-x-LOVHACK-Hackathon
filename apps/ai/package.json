@@ -7,6 +7,8 @@
     "dev": "uv run uvicorn app.main:app --reload --port 8000 --env-file ../../.env",
     "start": "uv run uvicorn app.main:app --host 0.0.0.0 --port 8000",
     "lint": "uv run ruff check .",
-    "typecheck": "uv run ruff check ."
+    "typecheck": "uv run ruff check .",
+    "test": "uv run pytest",
+    "test:unit": "uv run pytest"
   }
 }

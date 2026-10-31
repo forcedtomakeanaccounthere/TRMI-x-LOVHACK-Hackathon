@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -21,6 +22,11 @@ SUPPORTED_PROVIDERS = (*OPENAI_COMPATIBLE_BASE_URLS, "anthropic")
 
 MAX_TOKENS = 16000
 
+# Circuit breaker: a model that failed this many times within the window is skipped until the
+# window has passed, so every request doesn't sit through its timeout first.
+BREAKER_FAILURES = 3
+BREAKER_WINDOW_SECONDS = 120.0
+
 
 class ProviderError(Exception):
     pass
@@ -31,6 +37,35 @@ class Provider:
     name: str
     model: str
     api_key: str
+
+
+_failures: dict[tuple[str, str], list[float]] = {}
+
+
+def _recent_failures(provider: Provider) -> list[float]:
+    key = (provider.name, provider.model)
+    cutoff = time.monotonic() - BREAKER_WINDOW_SECONDS
+    _failures[key] = [t for t in _failures.get(key, []) if t > cutoff]
+    return _failures[key]
+
+
+def is_open(provider: Provider) -> bool:
+    """True while the provider's model has failed too often recently to be worth trying."""
+    return len(_recent_failures(provider)) >= BREAKER_FAILURES
+
+
+def record_failure(provider: Provider) -> None:
+    _recent_failures(provider).append(time.monotonic())
+
+
+def record_success(provider: Provider) -> None:
+    _failures.pop((provider.name, provider.model), None)
+
+
+def available(providers: list[Provider]) -> list[Provider]:
+    """Providers whose breaker is closed. If every breaker is open, try them all anyway:
+    an outage that has ended should not keep the feature down until the window passes."""
+    return [p for p in providers if not is_open(p)] or providers
 
 
 def _split(value: str) -> list[str]:
@@ -79,13 +114,14 @@ def _extract_json(text: str) -> str:
 
 
 async def _complete_openai_compatible[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T]
+    provider: Provider, system: str, user: str, schema: type[T], timeout: float
 ) -> T:
     system += (
         "\n\nRespond with only a JSON object (no markdown, no extra text) matching this "
         f"JSON Schema:\n{json.dumps(schema.model_json_schema())}"
     )
-    response = await _openai_client(provider.name, provider.api_key).chat.completions.create(
+    client = _openai_client(provider.name, provider.api_key).with_options(timeout=timeout)
+    response = await client.chat.completions.create(
         model=provider.model,
         max_tokens=MAX_TOKENS,
         response_format={"type": "json_object"},
@@ -98,9 +134,10 @@ async def _complete_openai_compatible[T: BaseModel](
 
 
 async def _complete_anthropic[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T]
+    provider: Provider, system: str, user: str, schema: type[T], timeout: float
 ) -> T:
-    response = await _anthropic_client(provider.api_key).beta.messages.parse(
+    client = _anthropic_client(provider.api_key).with_options(timeout=timeout)
+    response = await client.beta.messages.parse(
         model=provider.model,
         max_tokens=MAX_TOKENS,
         output_config={"effort": "low"},
@@ -117,9 +154,9 @@ async def _complete_anthropic[T: BaseModel](
 
 
 async def complete_json[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T]
+    provider: Provider, system: str, user: str, schema: type[T], timeout: float
 ) -> T:
-    """Ask one provider for a JSON answer validated against `schema`."""
+    """Ask one provider for a JSON answer validated against `schema`, within `timeout` seconds."""
     if provider.name == "anthropic":
-        return await _complete_anthropic(provider, system, user, schema)
-    return await _complete_openai_compatible(provider, system, user, schema)
+        return await _complete_anthropic(provider, system, user, schema, timeout)
+    return await _complete_openai_compatible(provider, system, user, schema, timeout)

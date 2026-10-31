@@ -16,7 +16,7 @@ import {
 import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { nanoid } from "nanoid";
-import { env } from "../env";
+import { callAi } from "../lib/ai";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, textToHtml } from "../lib/extract";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
@@ -461,21 +461,19 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
   if (room.error || room.data.status === "deleted") throw new HttpError(404, "Room not found");
   if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
 
-  const aiRes = await fetch(`${env.AI_SERVICE_URL}/recap`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  // apps/ai stops trying providers after 100 s, so it answers before this gives up.
+  const data = await callAi(
+    "/recap",
+    {
       title: room.data.title ?? "",
       // PDF rooms have no HTML: their text was extracted on upload.
       text: room.data.content_text ?? stripHtml(room.data.content_html ?? ""),
       highlights: highlights.data ?? [],
       comments: comments.data ?? [],
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!aiRes.ok) throw new HttpError(502, "Recap failed");
-
-  const data = RecapData.parse(await aiRes.json());
+    },
+    RecapData,
+    120_000,
+  );
   const { error } = await db.from("recaps").insert({ room_id: id, data });
   if (error) throw error;
 

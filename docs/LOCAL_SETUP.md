@@ -64,6 +64,8 @@ This replaces any existing `.env`. Both files are gitignored. The keys are the s
 
 To use the AI recap, also set at least one of `NVIDIA_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` or `ANTHROPIC_API_KEY` in `.env`. Everything else works without it.
 
+`AI_INTERNAL_TOKEN` is optional locally. If you set it, the backend sends it to the AI service as `X-Internal-Token` and the AI service refuses requests without it. In production it is required on both hosts (`ENVIRONMENT=production` on the AI host), with the same value: generate one with `openssl rand -hex 32`.
+
 **Verify:**
 
 ```bash
