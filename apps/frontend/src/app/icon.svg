@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- LinkRoom mark: the LogoMark rings, chain-linked, on the --ink-tile. favicon.ico and apple-icon.png are rasters of this. -->
+  <defs>
+    <radialGradient id="tile" cx="64" cy="0" r="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b2f8a"/>
+      <stop offset=".38" stop-color="#0c1440"/>
+      <stop offset=".72" stop-color="#05070d"/>
+    </radialGradient>
+    <radialGradient id="orb" cx="10" cy="64" r="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f5bff" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#2f5bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity=".4"/>
+      <stop offset=".32" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".68" stop-color="#6d8fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6d8fff" stop-opacity=".5"/>
+    </linearGradient>
+    <linearGradient id="pearl" x1="12" y1="19" x2="38" y2="45" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#cfd9ff"/>
+    </linearGradient>
+    <linearGradient id="azure" x1="26" y1="46" x2="52" y2="18" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f5bff"/>
+      <stop offset=".55" stop-color="#6d8fff"/>
+      <stop offset="1" stop-color="#b7c7ff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.6"/>
+    </filter>
+    <mask id="under-pearl" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M36.82 44.31A12.5 12.5 0 0 1 28.39 38.61" stroke="#000" stroke-width="7.8" fill="none"/>
+    </mask>
+    <mask id="under-azure" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M27.18 19.69A12.5 12.5 0 0 1 35.61 25.39" stroke="#000" stroke-width="7.8" fill="none"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+  <rect width="64" height="64" rx="14" fill="url(#orb)"/>
+  <rect x=".75" y=".75" width="62.5" height="62.5" rx="13.25" fill="none" stroke="url(#rim)" stroke-width="1.5"/>
+  <g fill="none" stroke-width="4.4" stroke-linecap="round">
+    <circle cx="39" cy="32" r="12.5" stroke="#2f5bff" stroke-opacity=".55" filter="url(#glow)"/>
+    <circle cx="25" cy="32" r="12.5" stroke="url(#pearl)" mask="url(#under-pearl)"/>
+    <circle cx="39" cy="32" r="12.5" stroke="url(#azure)" mask="url(#under-azure)"/>
+  </g>
+</svg>
