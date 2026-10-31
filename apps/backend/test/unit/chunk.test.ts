@@ -24,6 +24,8 @@ describe("chunkRoom for HTML rooms", () => {
         block_ids: ["b0", "b1"],
         page: null,
         heading_path: [],
+        start_sec: null,
+        end_sec: null,
       },
     ]);
   });
@@ -81,7 +83,7 @@ describe("chunkRoom for HTML rooms", () => {
       '<section data-block="p3"><h2>Slide 3</h2><p>Details</p></section>';
     const chunks = chunkRoom({ kind: "file", content_html: pptx, content_text: null });
     expect(chunks).toEqual([
-      { idx: 0, content: "Slide 1 Intro\n\nSlide 3 Details", block_ids: ["p1", "p3"], page: 1, heading_path: [] },
+      { idx: 0, content: "Slide 1 Intro\n\nSlide 3 Details", block_ids: ["p1", "p3"], page: 1, heading_path: [], start_sec: null, end_sec: null },
     ]);
   });
 
@@ -127,7 +129,7 @@ describe("chunkRoom for PDF rooms", () => {
   it("makes p{n} blocks from the extracted pages and records the first page", () => {
     const chunks = chunkRoom({ kind: "pdf", content_html: null, content_text: pdfText(["One.", "Two.", "Three."]) });
     expect(chunks).toEqual([
-      { idx: 0, content: "One.\n\nTwo.\n\nThree.", block_ids: ["p1", "p2", "p3"], page: 1, heading_path: [] },
+      { idx: 0, content: "One.\n\nTwo.\n\nThree.", block_ids: ["p1", "p2", "p3"], page: 1, heading_path: [], start_sec: null, end_sec: null },
     ]);
   });
 
@@ -172,9 +174,56 @@ describe("splitText", () => {
   });
 });
 
+describe("chunkRoom for video rooms", () => {
+  it("records where each chunk starts and ends in the video, from its t{n} blocks", () => {
+    const para = (n: number, start: number, end: number) =>
+      `<p data-block="t${n}" data-start="${start}" data-end="${end}">${"word ".repeat(320).trim()}</p>`;
+    const chunks = chunkRoom({
+      kind: "youtube",
+      content_html: para(0, 0, 61.5) + para(1, 61.5, 120) + para(2, 120, 185.2),
+      content_text: null,
+    });
+    expect(chunks.map(({ block_ids, start_sec, end_sec, page }) => ({ block_ids, start_sec, end_sec, page }))).toEqual([
+      { block_ids: ["t0"], start_sec: 0, end_sec: 61.5, page: null },
+      { block_ids: ["t1"], start_sec: 61.5, end_sec: 120, page: null },
+      { block_ids: ["t2"], start_sec: 120, end_sec: 185.2, page: null },
+    ]);
+  });
+
+  it("joins short blocks and spans their times; leaves times null without them", () => {
+    const [chunk] = chunkRoom({
+      kind: "youtube",
+      content_html:
+        '<p data-block="t0" data-start="5" data-end="9">Hi.</p><p data-block="t1" data-start="9" data-end="14.5">Bye.</p>',
+      content_text: null,
+    });
+    expect(chunk).toMatchObject({ block_ids: ["t0", "t1"], start_sec: 5, end_sec: 14.5 });
+
+    const [pasted] = chunkRoom({ kind: "youtube", content_html: '<p data-block="t0">No times</p>', content_text: null });
+    expect(pasted).toMatchObject({ start_sec: null, end_sec: null });
+  });
+
+  it("ignores time attributes that aren't numbers", () => {
+    const [chunk] = chunkRoom({
+      kind: "youtube",
+      content_html: '<p data-block="t0" data-start="soon" data-end="-3">Text</p>',
+      content_text: null,
+    });
+    expect(chunk).toMatchObject({ start_sec: null, end_sec: null });
+  });
+});
+
 describe("embeddingText", () => {
   it("puts the headings before the text", () => {
-    const chunk = { idx: 0, content: "Body", block_ids: ["b1"], page: null, heading_path: ["Guide", "Setup"] };
+    const chunk = {
+      idx: 0,
+      content: "Body",
+      block_ids: ["b1"],
+      page: null,
+      heading_path: ["Guide", "Setup"],
+      start_sec: null,
+      end_sec: null,
+    };
     expect(embeddingText(chunk)).toBe("Guide > Setup\n\nBody");
     expect(embeddingText({ ...chunk, heading_path: [] })).toBe("Body");
   });

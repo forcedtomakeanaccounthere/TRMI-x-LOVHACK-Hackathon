@@ -1,4 +1,6 @@
 import {
+  AiMessage,
+  AskRequest,
   ApiError as ApiErrorSchema,
   AuthSession as AuthSessionSchema,
   AuthUser as AuthUserSchema,
@@ -7,6 +9,11 @@ import {
   CreateLinkRoomRequest,
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
+  CreateYoutubeRoomRequest,
+  CatchupRequest,
+  CatchupResponse,
+  ExplainRequest,
+  QuizResponse,
   DashboardQuery,
   DashboardResponse as DashboardResponseSchema,
   FollowStateResponse as FollowStateResponseSchema,
@@ -374,6 +381,27 @@ export const openApiDocument = createDocument({
         },
       },
     },
+    "/api/rooms/youtube": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Create a room from a YouTube video's transcript",
+        description:
+          "The transcript is fetched from YouTube's captions (preferring English, then Hindi, then any " +
+          "language), or taken from `transcript` when given: text copied from YouTube's \"Show " +
+          "transcript\", with or without its timestamps. Paragraphs become t{n} blocks that keep their " +
+          "time range in `data-start` / `data-end`, so answers and summaries can point into the video. " +
+          "The detailed summary is written in the background.",
+        security: bearer,
+        requestBody: body(CreateYoutubeRoomRequest),
+        responses: {
+          ...roomCreated,
+          "400": failure("Not a YouTube video link, or an invalid body"),
+          ...needsVerifiedUser,
+          "422": failure("No readable captions, YouTube blocked the fetch, or the transcript is empty: paste it instead"),
+          "502": failure("Fetching the transcript failed or timed out"),
+        },
+      },
+    },
     "/api/rooms/file": {
       post: {
         tags: ["Rooms"],
@@ -457,6 +485,34 @@ export const openApiDocument = createDocument({
         },
       },
     },
+    "/api/rooms/{id}/activity": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Record keystrokes, mouse events, or interaction in a room",
+        description:
+          "Updates the room's last_activity_at timestamp to prevent auto-pausing. " +
+          "When authenticated, also refreshes participant last_seen_at.",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("Activity recorded", RoomStatusResponse),
+          "404": failure("Room not found or deleted"),
+          "409": failure("Room is not running (e.g. paused, closed, archived)"),
+        },
+      },
+    },
+    "/api/rooms/{id}/heartbeat": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Record reader presence heartbeat",
+        description:
+          "Records presence for both signed-in readers and guests without resetting the idle activity timer.",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("Presence recorded", RoomStatusResponse),
+          "404": failure("Room not found or deleted"),
+        },
+      },
+    },
     "/api/rooms/{id}/invites": {
       post: {
         tags: ["Rooms"],
@@ -486,6 +542,79 @@ export const openApiDocument = createDocument({
           "200": reply("Up to three people, most active first", TopMembersResponse),
           ...needsVerifiedUser,
           "404": failure("Room not found or deleted"),
+        },
+      },
+    },
+    "/api/rooms/{id}/catchup": {
+      post: {
+        tags: ["AI"],
+        summary: "Catch me up: what the group did since a time",
+        description: "Only for the caller, so nothing is saved. With nothing new since `since`, the AI isn't called.",
+        requestParams: { path: roomId },
+        requestBody: body(CatchupRequest),
+        responses: {
+          "200": reply("The catch-up", CatchupResponse),
+          ...invalidInput,
+          "404": failure("Room not found or deleted"),
+          "429": failure("Too many AI requests from this IP or in this room in the last minute"),
+          "502": failure("The AI service failed"),
+        },
+      },
+    },
+    "/api/rooms/{id}/explain": {
+      post: {
+        tags: ["AI"],
+        summary: "Explain a highlight, simply or in Hinglish",
+        description: "Saved as an ai_messages row (kind explain) that the whole room sees. A moderated-out explanation is saved as withheld.",
+        requestParams: { path: roomId },
+        requestBody: body(ExplainRequest),
+        responses: {
+          "201": reply("The saved explanation", AiMessage),
+          ...invalidInput,
+          "404": failure("Room or highlight not found"),
+          "409": failure("The room is archived"),
+          "429": failure("Too many AI requests from this IP or in this room in the last minute"),
+          "502": failure("The AI service failed"),
+        },
+      },
+    },
+    "/api/rooms/{id}/quiz": {
+      post: {
+        tags: ["AI"],
+        summary: "A five-question quiz on the room",
+        description: "Each question cites the blocks it comes from. Not saved: answers go over Realtime broadcast.",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("The quiz", QuizResponse),
+          "404": failure("Room not found or deleted"),
+          "409": failure("The room has no chunks yet"),
+          "429": failure("Too many AI requests from this IP or in this room in the last minute"),
+          "502": failure("The AI service failed"),
+        },
+      },
+    },
+    "/api/rooms/{id}/ask": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Ask the AI a question about a room's document",
+        description:
+          "Finds the best chunks of the room (by embedding and keyword, keyword only when embeddings are " +
+          "unavailable) and answers from them alone. Every citation is checked against its chunk; pages and " +
+          "times come from the chunk. When the document doesn't answer, `found_in_document` is false and the " +
+          "answer says so. The saved message reaches everyone in the room through Supabase Realtime. Guests " +
+          "can ask; `name` (or a signed-in caller's name) is saved as `asked_by`. At most 10 questions a " +
+          "minute per IP and 30 per room.",
+        requestParams: { path: roomId },
+        requestBody: body(AskRequest),
+        responses: {
+          "201": reply("The answer, as saved", AiMessage),
+          ...invalidInput,
+          "404": failure("Room not found or deleted"),
+          "409": failure("The room is archived, or the AI is still reading it or couldn't read it"),
+          "422": failure("Moderation refused the question; it is not saved or shown to the room"),
+          "429": failure("Too many questions from this IP or in this room in the last minute"),
+          "502": failure("The AI service failed, timed out or returned an unexpected shape"),
+          "503": failure("No AI provider is configured"),
         },
       },
     },

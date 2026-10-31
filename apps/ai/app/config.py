@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     summary_call_deadline_seconds: float = 100.0
     summary_deadline_seconds: float = 540.0
 
+    # Answers (POST /answer): someone is waiting in the room, so one call gets 25 s in all,
+    # below apps/backend's 30 s timeout for it.
+    answer_deadline_seconds: float = 25.0
+    # One provider's share, so a provider that hangs still leaves time to fall back to the next.
+    answer_attempt_seconds: float = 10.0
+
     # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
     # models can't be compared, so mixing them would break search. When it fails, apps/backend
     # falls back to keyword search. The key is the provider's *_API_KEY above.
@@ -57,6 +63,20 @@ class Settings(BaseSettings):
     embedding_model: str = "nvidia/nv-embedqa-e5-v5"
     embedding_dim: int = 1024
     embedding_timeout_seconds: float = 30.0
+
+    # Moderation of questions and answers shown to the whole room, through Mistral's moderation
+    # API when MISTRAL_API_KEY is set. A failure lets the text through (and is logged): it must
+    # never take Ask down. Only these categories block; "dangerous" or "criminal" would also catch a
+    # study group's ordinary questions about history or the news.
+    moderation_enabled: bool = True
+    moderation_model: str = "mistral-moderation-latest"
+    moderation_timeout_seconds: float = 5.0
+    moderation_categories: str = "sexual,hate_and_discrimination,violence_and_threats,selfharm"
+
+    # YouTube transcripts. YouTube often blocks requests from cloud hosts; set YT_PROXY_URL (an
+    # http(s) proxy URL, credentials included) to fetch through a proxy in production.
+    yt_proxy_url: str | None = None
+    transcript_timeout_seconds: float = 20.0
 
     @model_validator(mode="after")
     def _token_in_production(self) -> "Settings":

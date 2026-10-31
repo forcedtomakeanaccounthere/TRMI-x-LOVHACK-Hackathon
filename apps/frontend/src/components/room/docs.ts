@@ -26,7 +26,10 @@ export function toContent(
   return {
     id: room.id,
     kind: room.kind,
-    title: room.title?.trim() || room.source_meta?.file_name || "Untitled",
+    title:
+      room.title?.trim() ||
+      (room.source_meta && "file_name" in room.source_meta ? room.source_meta.file_name : undefined) ||
+      "Untitled",
     source_url: room.source_url,
     content_html: room.content_html,
     pdf_url:

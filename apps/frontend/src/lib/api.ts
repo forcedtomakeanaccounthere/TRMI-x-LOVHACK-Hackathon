@@ -118,6 +118,14 @@ export const api = {
   joinRoom: (roomId: string, token: string) =>
     request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/join`, { method: "POST" }, token),
 
+  // Records reader presence heartbeat (both signed-in and guest readers) without updating activity timer.
+  heartbeat: (roomId: string, token?: string) =>
+    request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/heartbeat`, { method: "POST" }, token),
+
+  // Records user activity (keystrokes, mouse events, scroll) to keep the room running.
+  recordActivity: (roomId: string, token?: string) =>
+    request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/activity`, { method: "POST" }, token),
+
   // Owner only. 409 when the room is deleted (restore it first) or another change won the race.
   updateRoom: (roomId: string, data: UpdateRoomRequest, token: string) =>
     request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}`, { ...json(data), method: "PATCH" }, token),

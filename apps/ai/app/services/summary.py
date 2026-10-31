@@ -33,13 +33,8 @@ from app.schemas import (
     SummaryRequest,
     SummarySection,
 )
-from app.services.providers import (
-    available,
-    complete_json,
-    configured_providers,
-    record_failure,
-    record_success,
-)
+from app.services.fallback import AllProvidersFailed, complete_with_fallback
+from app.services.providers import configured_providers
 
 log = logging.getLogger(__name__)
 
@@ -184,46 +179,21 @@ def format_chunks(chunks: list[SummaryChunk]) -> str:
 async def _complete[T: BaseModel](
     label: str, system: str, user: str, schema: type[T], deadline: float
 ) -> T:
-    """One call that falls back across providers, like a recap, within its own deadline and the
-    summary's overall one."""
+    """One call that falls back across providers, within its own deadline and the summary's
+    overall one."""
     settings = get_settings()
-    call_deadline = min(deadline, time.monotonic() + settings.summary_call_deadline_seconds)
-    failures = []
-    for provider in available(configured_providers()):
-        remaining = call_deadline - time.monotonic()
-        if remaining < MIN_ATTEMPT_SECONDS:
-            failures.append("deadline reached")
-            break
-        started = time.monotonic()
-        attempt_seconds = min(settings.summary_call_timeout_seconds, remaining)
-        try:
-            result = await asyncio.wait_for(
-                complete_json(provider, system, user, schema, timeout=attempt_seconds),
-                timeout=attempt_seconds,
-            )
-        except Exception as e:
-            record_failure(provider)
-            log.warning(
-                "Summary %s via %s (%s) failed after %.1f s: %s",
-                label,
-                provider.name,
-                provider.model,
-                time.monotonic() - started,
-                type(e).__name__,
-            )
-            failures.append(f"{provider.name}: {type(e).__name__}")
-            continue
-        record_success(provider)
-        log.info(
-            "Summary %s by %s (%s) in %.1f s after %d fallback(s)",
-            label,
-            provider.name,
-            provider.model,
-            time.monotonic() - started,
-            len(failures),
+    try:
+        return await complete_with_fallback(
+            f"Summary {label}",
+            system,
+            user,
+            schema,
+            deadline=min(deadline, time.monotonic() + settings.summary_call_deadline_seconds),
+            attempt_seconds=settings.summary_call_timeout_seconds,
+            min_attempt_seconds=MIN_ATTEMPT_SECONDS,
         )
-        return result
-    raise SummaryError(f"Summary {label}: all AI providers failed ({', '.join(failures)})")
+    except AllProvidersFailed as e:
+        raise SummaryError(str(e)) from e
 
 
 def sanitize_summary(summary: RoomSummary, chunks: list[SummaryChunk]) -> RoomSummary:

@@ -250,6 +250,10 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] AI service `POST /summary`: map-reduce over a room's chunks (groups of ~8k tokens, at most 3 at once, 12 groups max), with provider fallback per call; every point cites its blocks, and ids the room doesn't have are removed *(in repo)*
 - [ ] Backend: after indexing, `summarizeRoom` saves `room_ai.summary` with status `ready` (Realtime tells the page); a summary that fails leaves the room ready to search, with the reason in `room_ai.error` *(in repo)*
 
+**AI: Ask the room** (migration `0012_ai_messages.sql`)
+- [ ] `ai_messages` table (public read like the room, backend-only write, Realtime) *(in repo)*
+- [ ] `POST /api/rooms/:id/ask { question, name? }`: 10 questions a minute per IP and 30 per room; embeds the question (`query`), falls back to keyword search, `match_chunks` top 8, AI service `POST /answer` with `[C1]…[C8]` chunks; citations whose quote isn't in their chunk are dropped, none left means "not in this document"; pages and times come from the chunks *(in repo)*
+
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once
 

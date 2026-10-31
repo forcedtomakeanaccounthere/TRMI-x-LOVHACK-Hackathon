@@ -1,12 +1,29 @@
 import {
+  AnswerResponse,
+  CatchupRequest,
+  CatchupResponse,
+  ExplainRequest,
+  ExplainResponse,
+  NOTHING_NEW,
+  QuizResponse,
+  AskRequest,
   CreateInviteRequest,
+  EmbedResponse,
+  ANSWER_WITHHELD,
+  ModerateResponse,
+  NOT_IN_DOCUMENT,
+  type AiCitation,
+  type AiMessage,
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
+  CreateYoutubeRoomRequest,
   DashboardQuery,
   RecapData,
   RecapRequest,
   RoomDetail,
+  TranscriptResponse,
   UpdateRoomRequest,
+  roomChannel,
   type SourceMeta,
   type CreateRoomResponse,
   type DashboardResponse,
@@ -16,17 +33,21 @@ import {
   type TopMembersResponse,
 } from "@linkroom/shared";
 import { Router, type RequestHandler } from "express";
+import { rateLimit } from "express-rate-limit";
 import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
 import { startIndexing, startIndexingIfWaiting } from "../lib/ai-jobs";
+import { htmlBlocks, pdfBlocks } from "../lib/chunk";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
+import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
+import { env } from "../env";
 
 export const roomsRouter = Router();
 
@@ -92,6 +113,70 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
 
 // POST /api/rooms/file  multipart field "file": a PDF, DOCX, PPTX, Markdown or text file. The format
 // comes from the bytes (see lib/files.ts). PDFs become PDF rooms; the rest become file rooms with the
+// POST /api/rooms/youtube  { url, transcript? }: a room from a video's transcript. The transcript is
+// fetched by apps/ai, or pasted by the creator when YouTube's captions can't be fetched. Its
+// paragraphs are t{n} blocks that keep their time range. The room shows the transcript at first;
+// once the detailed doc is written from it (lib/ai-jobs.ts) the doc replaces it, and the
+// transcript stays in room_sources for chunks and citations.
+roomsRouter.post("/youtube", requireAuth, async (req, res) => {
+  const { url, transcript } = CreateYoutubeRoomRequest.parse(req.body);
+  const videoId = videoIdOf(url);
+  const [title, source] = await Promise.all([fetchVideoTitle(videoId), transcriptFor(videoId, transcript)]);
+  const { html, durationSec } = transcriptToHtml(source.segments);
+  if (!html) throw new HttpError(422, "The transcript has no text in it.");
+
+  const id = nanoid(8);
+  const { error } = await supabaseAdmin()
+    .from("rooms")
+    .insert({
+      id,
+      kind: "youtube",
+      source_url: watchUrl(videoId),
+      title: title ?? "YouTube video",
+      content_html: html,
+      source_meta: {
+        format: "youtube",
+        video_id: videoId,
+        language: source.language,
+        transcript: source.transcript,
+        duration_sec: durationSec,
+      } satisfies SourceMeta,
+      created_by: req.user!.id,
+    });
+  if (error) throw error;
+
+  // The transcript stays the source of chunks and citations after the doc replaces content_html.
+  const { error: sourceError } = await supabaseAdmin()
+    .from("room_sources")
+    .insert({ room_id: id, data: { kind: "transcript", segments: source.segments, html } });
+  if (sourceError) {
+    await supabaseAdmin().from("rooms").delete().eq("id", id);
+    throw sourceError;
+  }
+
+  startIndexing(id); // chunks with their times, then the detailed doc, in the background
+  res.status(201).json({ id } satisfies CreateRoomResponse);
+});
+
+// apps/ai gives YouTube 20 s.
+const TRANSCRIPT_TIMEOUT_MS = 30_000;
+const PASTE_INSTEAD = "Paste the transcript instead (on YouTube: ⋯ under the video → Show transcript).";
+
+async function transcriptFor(videoId: string, pasted: string | undefined) {
+  if (pasted?.trim()) {
+    return { segments: parsePastedTranscript(pasted), language: null, transcript: "pasted" as const };
+  }
+  const fetched = await callAi("/transcript", { video_id: videoId }, TranscriptResponse, TRANSCRIPT_TIMEOUT_MS, {
+    404: new HttpError(422, `This video has no captions we can read. ${PASTE_INSTEAD}`),
+    403: new HttpError(422, `YouTube didn't let us fetch this transcript right now. ${PASTE_INSTEAD}`),
+  });
+  return {
+    segments: fetched.segments,
+    language: fetched.language,
+    transcript: fetched.is_generated ? ("auto" as const) : ("manual" as const),
+  };
+}
+
 // same block HTML as a link room, and the original is kept in the private "files" bucket.
 roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) => {
   const file = req.file;
@@ -171,7 +256,7 @@ export const MAX_PARTICIPATION = 1000;
 const DELETED_PDFS = "pdfs-deleted";
 
 export const ROOM_DETAIL =
-  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, deleted_at, room_group_items(group_id)";
+  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, archived_at, deleted_at, room_group_items(group_id)";
 
 // The filing lives in its own private table; callers see it as the room's group_id.
 type Filed = { room_group_items?: { group_id: string } | null };
@@ -301,6 +386,100 @@ roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
   res.json(room as RoomStatusResponse);
 });
 
+// POST /api/rooms/:id/activity: records active user interaction (keystrokes, mouse events, scrolls).
+// Resets the 2-hour idle pause countdown. If authenticated, also updates participant last_seen_at.
+roomsRouter.post("/:id/activity", optionalAuth, async (req, res) => {
+  const { id } = req.params;
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("id, status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+  if (room.status !== "running") throw new HttpError(409, `Room is ${room.status}`);
+
+  const now = new Date().toISOString();
+  const { data: updated, error: touchError } = await db
+    .from("rooms")
+    .update({ last_activity_at: now })
+    .eq("id", id)
+    .eq("status", "running")
+    .select("id, status, last_activity_at")
+    .maybeSingle();
+  if (touchError) throw touchError;
+  if (!updated) {
+    const { data: current } = await db.from("rooms").select("status").eq("id", id).maybeSingle();
+    if (!current || current.status === "deleted") throw new HttpError(404, "Room not found");
+    throw new HttpError(409, `Room is ${current.status}`);
+  }
+
+  if (req.user) {
+    const { error: joinError } = await db
+      .from("room_participants")
+      .upsert(
+        { room_id: id, user_id: req.user.id, last_seen_at: now },
+        { onConflict: "room_id,user_id" },
+      );
+    if (joinError) throw joinError;
+  }
+
+  res.json({ id: updated.id, status: updated.status, last_activity_at: updated.last_activity_at });
+});
+
+// POST /api/rooms/:id/heartbeat: records reader presence (both authenticated users and guests).
+// Keeps last_presence_at current without resetting the 2-hour idle pause activity timer.
+roomsRouter.post("/:id/heartbeat", optionalAuth, async (req, res) => {
+  const { id } = req.params;
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("id, status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const now = new Date().toISOString();
+  if (room.status === "running") {
+    const { error: touchError } = await db
+      .from("rooms")
+      .update({ last_presence_at: now })
+      .eq("id", id)
+      .eq("status", "running");
+    if (touchError) throw touchError;
+  }
+
+  if (req.user) {
+    const { error: joinError } = await db
+      .from("room_participants")
+      .upsert(
+        { room_id: id, user_id: req.user.id, last_seen_at: now },
+        { onConflict: "room_id,user_id" },
+      );
+    if (joinError) throw joinError;
+  }
+
+  res.json(room as RoomStatusResponse);
+});
+
+async function broadcastRoomStatus(
+  db: ReturnType<typeof supabaseAdmin>,
+  roomId: string,
+  status: string,
+  reason: string,
+) {
+  if (typeof db.channel !== "function") return;
+  try {
+    const channel = db.channel(roomChannel(roomId));
+    await channel.send({
+      type: "broadcast",
+      event: "status",
+      payload: { id: roomId, status, reason },
+    });
+    if (typeof db.removeChannel === "function") {
+      await db.removeChannel(channel);
+    }
+  } catch (err) {
+    console.warn(`[rooms] Failed to broadcast status update for room ${roomId}:`, err);
+  }
+}
+
 // PATCH /api/rooms/:id  { status?, group_id? }: owner only. Someone else's room looks like it
 // doesn't exist. Deleting has its own endpoints so a PDF is never left public by accident.
 roomsRouter.patch("/:id", requireAuth, async (req, res) => {
@@ -344,6 +523,10 @@ roomsRouter.patch("/:id", requireAuth, async (req, res) => {
   }
   if (!saved) throw new HttpError(409, "The room just changed. Try again.");
 
+  if (body.status && body.status !== room.status) {
+    await broadcastRoomStatus(db, id, body.status, "owner_update");
+  }
+
   res.json(await roomDetail(db, id));
 });
 
@@ -371,6 +554,8 @@ roomsRouter.delete("/:id", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  await broadcastRoomStatus(db, id, "deleted", "owner_delete");
+
   res.json(withGroup(data));
 });
 
@@ -395,6 +580,7 @@ roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  await broadcastRoomStatus(db, id, "running", "owner_restore");
   // Indexing skips deleted rooms, so a room deleted before its chunks were made gets them now.
   startIndexingIfWaiting(id);
   res.json(withGroup(data));
@@ -583,4 +769,233 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
   } finally {
     recapsInFlight.delete(id);
   }
+});
+
+// --- Ask the room ---
+
+// Chunks a question is answered from (match_chunks p_k).
+const ASK_CHUNKS = 8;
+// apps/ai answers within 25 s; embedding the question is quick or not worth waiting for.
+// apps/ai gives Mistral's moderation 5 s.
+const MODERATE_TIMEOUT_MS = 8_000;
+const ANSWER_TIMEOUT_MS = 30_000;
+const QUESTION_EMBED_TIMEOUT_MS = 10_000;
+
+const tooManyQuestions = (scope: string) => ({ error: `Too many questions ${scope}. Try again in a minute.` });
+// Per person (IP), and per room across everyone, since every answer costs an AI call.
+const askPerIp = rateLimit({
+  windowMs: 60_000,
+  limit: env.ASK_RATE_LIMIT,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: tooManyQuestions("from you"),
+});
+const askPerRoom = rateLimit({
+  windowMs: 60_000,
+  limit: env.ASK_ROOM_RATE_LIMIT,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  keyGenerator: (req) => `room:${req.params.id}`,
+  message: tooManyQuestions("in this room"),
+});
+
+type MatchedChunk = { content: string; block_ids: string[]; page: number | null; start_sec: number | null; end_sec: number | null };
+
+// POST /api/rooms/:id/ask  { question, name? }: answers a question from the room's document, with
+// citations checked against it. Guests can ask. The answer is saved in ai_messages, which reaches
+// everyone in the room over Realtime, and returned.
+roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { question, name } = AskRequest.parse(req.body ?? {});
+  const askedBy = name ?? (req.user?.name.trim().slice(0, 40) || null);
+  const db = supabaseAdmin();
+
+  const [room, ai] = await Promise.all([
+    db.from("rooms").select("status").eq("id", id).maybeSingle(),
+    db.from("room_ai").select("status").eq("room_id", id).maybeSingle(),
+  ]);
+  if (room.error) throw room.error;
+  if (ai.error) throw ai.error;
+  if (!room.data || room.data.status === "deleted") throw new HttpError(404, "Room not found");
+  if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
+  // Until the chunks are saved there is nothing to search; once they are ("summarizing" onwards)
+  // questions work, with or without the summary.
+  if (!ai.data || ai.data.status === "pending" || ai.data.status === "indexing") {
+    throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
+  }
+  // A failed indexing run may have left no chunks or only some: an empty search there would say
+  // "not in this document" about a document nobody searched.
+  if (ai.data.status === "failed") {
+    throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
+  }
+
+  // The question is shown to the whole room, so it is moderated before anything else, whether or not
+  // the search finds anything. Moderation fails open: if apps/ai can't check it, it goes through.
+  const moderation = await callAi("/moderate", { text: question }, ModerateResponse, MODERATE_TIMEOUT_MS).catch(() => {
+    console.warn(`[rooms] moderation unavailable for a question in room ${id}, allowing it`);
+    return { flagged: [] };
+  });
+  if (moderation.flagged.length) throw new HttpError(422, "That question can't be asked here. Try rephrasing it.");
+
+  // Without an embedding the search is by keyword only.
+  let embedding: number[] | null = null;
+  try {
+    const embedded = await callAi("/embed", { texts: [question], input_type: "query" }, EmbedResponse, QUESTION_EMBED_TIMEOUT_MS);
+    embedding = embedded.vectors[0] ?? null;
+  } catch {
+    console.warn(`[rooms] no embedding for a question in room ${id}, searching by keyword`);
+  }
+
+  const { data: found, error: matchError } = await db.rpc("match_chunks", {
+    p_room: id,
+    p_embedding: embedding,
+    p_query: question,
+    p_k: ASK_CHUNKS,
+  });
+  if (matchError) throw matchError;
+  const chunks = (found ?? []) as MatchedChunk[];
+
+  // Nothing matched: the document can't answer, and there is nothing to send the AI.
+  const answer: AnswerResponse = chunks.length
+    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
+    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
+
+  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
+  const citations = answer.citations.flatMap((citation): AiCitation[] => {
+    const chunk = chunks[citation.chunk - 1];
+    if (!chunk) return [];
+    return [{ quote: citation.quote, block_ids: chunk.block_ids, page: chunk.page, start_sec: chunk.start_sec, end_sec: chunk.end_sec }];
+  });
+  const inDocument = answer.found_in_document && citations.length > 0;
+
+  const { data: message, error } = await db
+    .from("ai_messages")
+    .insert({
+      room_id: id,
+      kind: "ask",
+      asked_by: askedBy,
+      question,
+      // Our own text for a withheld answer: never the model's.
+      answer: answer.withheld ? ANSWER_WITHHELD : inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
+      found_in_document: inDocument,
+      citations: inDocument ? citations : [],
+    })
+    .select()
+    .single();
+  if (error) throw error;
+
+  // A history row is nice to have but never worth failing the answer for.
+  const { error: historyError } = await db
+    .from("ai_queries")
+    .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "ask", prompt: question, response: message });
+  if (historyError) console.error("[rooms] could not record the question", historyError);
+
+  res.status(201).json(message as AiMessage);
+});
+
+// --- Step 9 extras. Rate-limited like Ask, since each one costs an AI call. ---
+
+const MAX_CATCHUP_ITEMS = 200;
+const QUIZ_CHUNKS = 12;
+const EXTRAS_TIMEOUT_MS = 30_000; // apps/ai gives these 25 s, like an answer
+
+// A readable room, or the error for one that isn't (deleted, unknown).
+async function readableRoom(id: string) {
+  const { data, error } = await supabaseAdmin()
+    .from("rooms")
+    .select("kind, title, status, content_html, content_text")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.status === "deleted") throw new HttpError(404, "Room not found");
+  return data as { kind: string; title: string | null; status: string; content_html: string | null; content_text: string | null };
+}
+
+// POST /api/rooms/:id/catchup  { since }: what the group highlighted and said since the reader left.
+// Only for them, so nothing is saved; with nothing new, the AI isn't called.
+roomsRouter.post("/:id/catchup", askPerIp, askPerRoom, async (req, res) => {
+  const id = req.params.id as string;
+  const { since } = CatchupRequest.parse(req.body ?? {});
+  const room = await readableRoom(id);
+  const db = supabaseAdmin();
+  // The newest items when there are more than fit, put back in time order for the summary.
+  const [highlights, comments] = await Promise.all([
+    db.from("highlights").select("author_name, block_id, quote").eq("room_id", id).gt("created_at", since).order("created_at", { ascending: false }).limit(MAX_CATCHUP_ITEMS),
+    db.from("comments").select("author_name, highlight_id, body").eq("room_id", id).gt("created_at", since).order("created_at", { ascending: false }).limit(MAX_CATCHUP_ITEMS),
+  ]);
+  if (highlights.error) throw highlights.error;
+  if (comments.error) throw comments.error;
+  highlights.data.reverse();
+  comments.data.reverse();
+  if (!highlights.data.length && !comments.data.length) {
+    res.json({ summary: NOTHING_NEW, key_points: [], active_people: [] } satisfies CatchupResponse);
+    return;
+  }
+  const data = await callAi(
+    "/catchup",
+    { title: (room.title ?? "").slice(0, 300), highlights: highlights.data, comments: comments.data },
+    CatchupResponse,
+    EXTRAS_TIMEOUT_MS,
+  );
+  res.json(data);
+});
+
+// POST /api/rooms/:id/explain  { highlight_id, level, name? }: explains a highlight with the blocks
+// around it, and saves the explanation as an ai_messages row the whole room sees.
+roomsRouter.post("/:id/explain", askPerIp, askPerRoom, optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { highlight_id, level, name } = ExplainRequest.parse(req.body ?? {});
+  const room = await readableRoom(id);
+  if (room.status === "archived") throw new HttpError(409, "This room is archived");
+  const db = supabaseAdmin();
+
+  const { data: highlight, error } = await db
+    .from("highlights")
+    .select("block_id, quote")
+    .eq("id", highlight_id)
+    .eq("room_id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!highlight) throw new HttpError(404, "Highlight not found");
+
+  // The highlighted block and one on each side, as context.
+  const blocks = room.kind === "pdf" ? pdfBlocks(room.content_text ?? "") : htmlBlocks(room.content_html ?? "");
+  const at = blocks.findIndex((b) => b.ids.includes(highlight.block_id as string));
+  const context = at < 0 ? [] : blocks.slice(Math.max(0, at - 1), at + 2).map((b) => b.text.slice(0, 4000));
+
+  const explained = await callAi("/explain", { quote: highlight.quote, context, level }, ExplainResponse, EXTRAS_TIMEOUT_MS);
+  const { data: message, error: insertError } = await db
+    .from("ai_messages")
+    .insert({
+      room_id: id,
+      kind: "explain",
+      asked_by: name ?? (req.user?.name.trim().slice(0, 40) || null),
+      question: `Explain: "${highlight.quote as string}"`.slice(0, 500),
+      answer: explained.withheld ? ANSWER_WITHHELD : explained.explanation.slice(0, 4000),
+      found_in_document: !explained.withheld,
+      citations: explained.withheld
+        ? []
+        : [{ quote: highlight.quote, block_ids: [highlight.block_id], page: blocks[at]?.page ?? null, start_sec: null, end_sec: null }],
+    })
+    .select()
+    .single();
+  if (insertError) throw insertError;
+  res.status(201).json(message as AiMessage);
+});
+
+// POST /api/rooms/:id/quiz: five multiple-choice questions on the room, each with the blocks it
+// comes from. Not saved: answers go over Realtime broadcast. Needs the room's chunks.
+roomsRouter.post("/:id/quiz", askPerIp, askPerRoom, async (req, res) => {
+  const id = req.params.id as string;
+  const room = await readableRoom(id);
+  const db = supabaseAdmin();
+  const { data: chunks, error } = await db.from("chunks").select("block_ids, content").eq("room_id", id).order("idx");
+  if (error) throw error;
+  if (!chunks.length) throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
+
+  // Spread over the whole room, not just its start.
+  const step = Math.max(1, chunks.length / QUIZ_CHUNKS);
+  const picked = Array.from({ length: Math.min(QUIZ_CHUNKS, chunks.length) }, (_, i) => chunks[Math.floor(i * step)]!);
+  const quiz = await callAi("/quiz", { title: (room.title ?? "").slice(0, 300), chunks: picked }, QuizResponse, EXTRAS_TIMEOUT_MS);
+  res.json(quiz satisfies QuizResponse);
 });

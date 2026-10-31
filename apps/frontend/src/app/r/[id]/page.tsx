@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DEMO_DOCS, DEMO_ROOM_ID } from "@/components/room/demo";
 import { toContent } from "@/components/room/docs";
+import { RoomActivityTracker } from "@/components/room/room-activity-tracker";
 import { RoomWorkspace } from "@/components/room/room-workspace";
 import { getSupabase } from "@/lib/supabase";
 
@@ -42,7 +43,13 @@ async function RoomContent({ id }: { id: string }) {
   if (id === DEMO_ROOM_ID) return <RoomWorkspace primary={DEMO_DOCS[0]!} bundled={DEMO_DOCS} />;
   const room = await loadRoom(id);
   if (!room) notFound();
-  return <RoomWorkspace primary={room} bundled={[]} />;
+
+  return (
+    <>
+      <RoomActivityTracker roomId={id} />
+      <RoomWorkspace primary={room} bundled={[]} />
+    </>
+  );
 }
 
 function RoomSkeleton() {

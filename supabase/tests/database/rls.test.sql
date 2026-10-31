@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(108);
+select plan(118);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -37,7 +37,8 @@ where oid in (
   'public.room_invites'::regclass,
   'public.ai_queries'::regclass,
   'public.room_ai'::regclass,
-  'public.chunks'::regclass
+  'public.chunks'::regclass,
+  'public.ai_messages'::regclass
 )
 order by relname;
 
@@ -55,8 +56,11 @@ select throws_ok(
   '23514', null, 'a requested_by over 40 characters is refused'
 );
 
+insert into room_sources (room_id, data) values ('room0001', '{"kind": "transcript"}');
+
 -- Guests (anon key, not logged in) -------------------------------------------------------------
 set local role anon;
+select is_empty($$select 1 from room_sources$$, 'anon cannot read a room''s raw transcript');
 
 select isnt_empty($$select 1 from rooms where id = 'room0001'$$, 'anon can read rooms');
 select isnt_empty($$select 1 from highlights where room_id = 'room0001'$$, 'anon can read highlights');
@@ -426,6 +430,39 @@ select throws_ok(
   $$insert into chunks (room_id, idx, content, block_ids) values ('room0001', 9, 'x', '{b9}')$$,
   '42501', null, 'anon cannot write chunks'
 );
+
+-- Ask the room (0012) -----------------------------------------------------------------------------
+reset role;
+insert into ai_messages (room_id, asked_by, question, answer, found_in_document, citations) values
+  ('room0001', 'Ana', 'Why?', 'Because.', true, '[{"quote": "para", "block_ids": ["b0"], "page": null}]'),
+  ('deleted1', null, 'Hidden?', 'Yes.', true, '[]');
+
+select throws_ok(
+  $$insert into ai_messages (room_id, question, answer, found_in_document, citations)
+    values ('room0001', 'Why?', 'Because.', true, '{"quote": "x"}')$$,
+  '23514', null, 'citations must be a list'
+);
+select throws_ok(
+  $$insert into ai_messages (room_id, question, answer, found_in_document) values ('room0001', '', 'A', false)$$,
+  '23514', null, 'an empty question is rejected'
+);
+select throws_ok(
+  $$insert into ai_messages (room_id, kind, question, answer, found_in_document) values ('room0001', 'chat', 'Q', 'A', false)$$,
+  '23514', null, 'an unknown message kind is rejected'
+);
+select isnt_empty(
+  $$select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'ai_messages'$$,
+  'answers are sent over Realtime'
+);
+
+set local role anon;
+select isnt_empty($$select 1 from ai_messages where room_id = 'room0001'$$, 'anon can read a room''s answers');
+select is_empty($$select 1 from ai_messages where room_id = 'deleted1'$$, 'the answers of a deleted room are hidden');
+select throws_ok(
+  $$insert into ai_messages (room_id, question, answer, found_in_document) values ('room0001', 'Q', 'Fake answer', true)$$,
+  '42501', null, 'anon cannot write answers (only the backend can)'
+);
+select is_empty($$update ai_messages set answer = 'Edited' where room_id = 'room0001' returning 1$$, 'anon cannot edit answers');
 
 select * from finish();
 rollback;

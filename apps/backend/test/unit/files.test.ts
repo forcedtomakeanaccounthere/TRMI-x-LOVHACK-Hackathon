@@ -280,7 +280,9 @@ describe("parseFile: Markdown and text", () => {
     // Every "<" becomes "&lt;": 4 characters of HTML for each one of text.
     const big = Buffer.from("<".repeat(Math.ceil(MAX_FILE_HTML_CHARS / 4) + 10));
     await expect(parseFile(big, "a.txt")).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/too much text/) });
-  });
+    // Builds and sanitizes several MB of HTML: about 1 s alone, past the 5 s default when the
+    // whole suite runs in parallel.
+  }, 30_000);
 });
 
 describe("decodeUtf8", () => {

@@ -15,6 +15,9 @@ const Env = z
     SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
     // Requests per IP per 15 min across signup, login and resend-verification.
     AUTH_RATE_LIMIT: z.coerce.number().int().positive().default(10),
+    // Questions per minute to POST /api/rooms/:id/ask: per IP, and per room across everyone.
+    ASK_RATE_LIMIT: z.coerce.number().int().positive().default(10),
+    ASK_ROOM_RATE_LIMIT: z.coerce.number().int().positive().default(30),
   })
   .superRefine((env, ctx) => {
     // In dev the server boots without Supabase so /health works; in production fail fast.

@@ -91,3 +91,18 @@ def clean_text(text: str, allowed_urls: set[str], max_chars: int) -> str:
     if len(text) > max_chars:
         text = text[: max_chars - 1].rstrip() + "…"
     return text
+
+
+MAX_QUESTION_CHARS = 500
+
+
+def check_question(question: str) -> str:
+    """A question from someone in the room, ready for a prompt: control characters removed,
+    whitespace squeezed, cut to MAX_QUESTION_CHARS. Text that looks like a prompt injection is
+    logged (the answer prompt treats the question as data anyway). Raises ValueError when nothing
+    is left to ask."""
+    cleaned = re.sub(r"\s+", " ", CONTROL.sub(" ", question)).strip()[:MAX_QUESTION_CHARS]
+    if not cleaned:
+        raise ValueError("The question is empty")
+    flag_injection("question", cleaned)
+    return cleaned

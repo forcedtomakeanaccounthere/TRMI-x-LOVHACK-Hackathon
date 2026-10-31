@@ -4,6 +4,7 @@ import { z } from "zod";
 vi.stubEnv("AI_SERVICE_URL", "http://ai.test");
 vi.stubEnv("AI_INTERNAL_TOKEN", "secret");
 const { callAi } = await import("../../src/lib/ai");
+const { HttpError } = await import("../../src/middleware/error");
 
 const Reply = z.object({ ok: z.boolean() });
 const fetchMock = vi.fn<typeof fetch>();
@@ -101,5 +102,13 @@ describe("callAi", () => {
     fetchMock.mockResolvedValue(json({ detail: "All AI providers failed" }, 502));
     await expect(callAi("/recap", {}, Reply, 1000)).rejects.toMatchObject({ status: 502 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns a status apps/ai answers with into the error given for it", async () => {
+    fetchMock.mockResolvedValue(json({ detail: "Question refused by moderation" }, 400));
+    const refused = new HttpError(422, "That question can't be asked here.");
+    await expect(callAi("/answer", {}, Reply, 1000, { 400: refused })).rejects.toBe(refused);
+    fetchMock.mockResolvedValue(json({ detail: "x" }, 500));
+    await expect(callAi("/answer", {}, Reply, 1000, { 400: refused })).rejects.toMatchObject({ status: 502 });
   });
 });

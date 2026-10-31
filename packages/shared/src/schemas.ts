@@ -10,8 +10,17 @@ export type RoomKind = z.infer<typeof RoomKind>;
 export const FileFormat = z.enum(["pdf", "docx", "pptx", "md", "txt"]);
 export type FileFormat = z.infer<typeof FileFormat>;
 
-// rooms.source_meta for uploaded rooms (0010_ai_foundation.sql).
-export const SourceMeta = z.object({ format: FileFormat, file_name: z.string() });
+// rooms.source_meta (0010_ai_foundation.sql): an uploaded file, or a YouTube video.
+export const FileSourceMeta = z.object({ format: FileFormat, file_name: z.string() });
+export const YoutubeSourceMeta = z.object({
+  format: z.literal("youtube"),
+  video_id: z.string(),
+  language: z.string().nullable(), // null for a pasted transcript
+  // YouTube's automatic captions (usually without punctuation), its manual ones, or pasted text.
+  transcript: z.enum(["auto", "manual", "pasted"]),
+  duration_sec: z.number().nullable(), // null when a pasted transcript has no timestamps
+});
+export const SourceMeta = z.union([FileSourceMeta, YoutubeSourceMeta]);
 export type SourceMeta = z.infer<typeof SourceMeta>;
 
 // Block anchors: "b12" paragraph | "p3" PDF page or slide | "t7" transcript segment.
@@ -116,6 +125,64 @@ export const RoomSummary = z.object({
 });
 export type RoomSummary = z.infer<typeof RoomSummary>;
 
+// --- Ask the room (POST /api/rooms/:id/ask) ---
+
+// The answer when the room's document doesn't answer a question (apps/ai/app/services/answer.py).
+export const NOT_IN_DOCUMENT = "I couldn't find that in this document.";
+
+// The name works like RecapRequest's: optional, and a blank one counts as none.
+export const AskRequest = z.object({
+  question: z.string().trim().min(1, "Ask a question first").max(500),
+  name: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .transform((name) => name || undefined),
+});
+export type AskRequest = z.infer<typeof AskRequest>;
+
+// POST /answer on apps/ai (apps/ai/app/schemas.py AnswerData): `chunk` is the 1-based position of
+// the chunk it quotes among the chunks that were sent.
+export const AnswerResponse = z.object({
+  answer: z.string(),
+  found_in_document: z.boolean(),
+  citations: z.array(z.object({ chunk: z.number().int(), quote: z.string() })),
+  withheld: z.boolean().default(false), // moderation flagged the answer
+});
+export type AnswerResponse = z.infer<typeof AnswerResponse>;
+
+// POST /moderate on apps/ai: the blocking categories a question falls into (empty when fine).
+export const ModerateResponse = z.object({ flagged: z.array(z.string()) });
+
+// Saved instead of an answer moderation flagged, so the room sees that one was withheld, not it.
+export const ANSWER_WITHHELD = "This answer was withheld because it may break the room's content rules.";
+
+// A checked citation as saved and shown: where in the room the quote is. Page and times come from
+// the chunk, never from the model.
+export const AiCitation = z.object({
+  quote: z.string(),
+  block_ids: z.array(z.string()),
+  page: z.number().int().nullable(),
+  start_sec: z.number().nullable(),
+  end_sec: z.number().nullable(),
+});
+export type AiCitation = z.infer<typeof AiCitation>;
+
+// A row of ai_messages (supabase/migrations/0012_ai_messages.sql).
+export const AiMessage = z.object({
+  id: z.string().uuid(),
+  room_id: z.string(),
+  kind: z.enum(["ask", "explain"]),
+  asked_by: z.string().nullable(),
+  question: z.string(),
+  answer: z.string(),
+  found_in_document: z.boolean(),
+  citations: z.array(AiCitation),
+  created_at: z.string(),
+});
+export type AiMessage = z.infer<typeof AiMessage>;
+
 export const Recap = z.object({
   id: z.string().uuid(),
   room_id: z.string(),
@@ -186,6 +253,7 @@ export const DashboardRoom = z.object({
   group_id: z.string().uuid().nullable(),
   created_at: z.string(),
   last_activity_at: z.string(),
+  archived_at: z.string().nullable().optional(),
   last_opened_at: z.string().nullable(), // null until this user joins the room
   highlight_count: z.number().int(),
   comment_count: z.number().int(),
@@ -223,9 +291,18 @@ export const RoomDetail = z.object({
   last_activity_at: z.string(),
   paused_at: z.string().nullable(),
   closed_at: z.string().nullable(),
+  archived_at: z.string().nullable().optional(),
   deleted_at: z.string().nullable(),
 });
 export type RoomDetail = z.infer<typeof RoomDetail>;
+
+export const RoomLifecycleSweepResult = z.object({
+  room_id: z.string(),
+  old_status: RoomStatus,
+  new_status: RoomStatus,
+  transition_reason: z.string(),
+});
+export type RoomLifecycleSweepResult = z.infer<typeof RoomLifecycleSweepResult>;
 
 export const RoomStatusResponse = z.object({ id: z.string(), status: RoomStatus });
 export type RoomStatusResponse = z.infer<typeof RoomStatusResponse>;
@@ -399,3 +476,60 @@ export type MessageResponse = z.infer<typeof MessageResponse>;
 
 export const ApiError = z.object({ error: z.string() });
 export type ApiError = z.infer<typeof ApiError>;
+
+// --- YouTube rooms (POST /api/rooms/youtube) ---
+
+// A pasted transcript (YouTube's "Show transcript", copied with or without its timestamps) is
+// used instead of fetching one, for videos whose captions can't be fetched from the server.
+export const CreateYoutubeRoomRequest = z.object({
+  url: z.string().url(),
+  transcript: z.string().max(500_000).optional(),
+});
+export type CreateYoutubeRoomRequest = z.infer<typeof CreateYoutubeRoomRequest>;
+
+// POST /transcript on apps/ai (apps/ai/app/schemas.py must match).
+export const TranscriptResponse = z.object({
+  language: z.string(),
+  is_generated: z.boolean(),
+  segments: z.array(z.object({ start: z.number(), duration: z.number(), text: z.string() })),
+});
+export type TranscriptResponse = z.infer<typeof TranscriptResponse>;
+
+// --- Step 9 extras (POST /api/rooms/:id/catchup, /explain, /quiz) ---
+
+const OptionalName = z
+  .string()
+  .trim()
+  .max(40)
+  .optional()
+  .transform((name) => name || undefined);
+
+// What the group did since `since` (an ISO time: when the reader left). Shown only to them.
+export const CatchupRequest = z.object({ since: z.string().datetime({ offset: true }) });
+export const CatchupResponse = z.object({
+  summary: z.string(),
+  key_points: z.array(z.string()),
+  active_people: z.array(z.string()),
+});
+export type CatchupResponse = z.infer<typeof CatchupResponse>;
+export const NOTHING_NEW = "Nothing new since you were last here.";
+
+// Explain a highlight, simply or in Hinglish. The explanation is saved as an ai_messages row
+// (kind "explain") that the whole room sees.
+export const ExplainRequest = z.object({
+  highlight_id: z.string().uuid(),
+  level: z.enum(["simple", "hinglish"]).default("simple"),
+  name: OptionalName,
+});
+export const ExplainResponse = z.object({ explanation: z.string(), withheld: z.boolean().default(false) });
+
+// A five-question quiz on the room. Not stored: answers go over Realtime broadcast.
+export const QuizQuestion = z.object({
+  question: z.string(),
+  options: z.array(z.string()),
+  answer_index: z.number().int(),
+  explanation: z.string(),
+  source_blocks: z.array(z.string()),
+});
+export const QuizResponse = z.object({ questions: z.array(QuizQuestion) });
+export type QuizResponse = z.infer<typeof QuizResponse>;

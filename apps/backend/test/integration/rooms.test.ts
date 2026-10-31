@@ -537,3 +537,57 @@ describe("indexing a new room (chunks for search)", () => {
     expect((await browser.from("room_ai").select("status").eq("room_id", id)).data).toEqual([{ status: "ready" }]);
   });
 });
+
+describe("POST /api/rooms/:id/ask", () => {
+  // No AI service runs here: a question that matches nothing is answered without one.
+  const settled = async (id: string) => {
+    await vi.waitFor(
+      async () => {
+        expect((await supabase.aiState(id))?.status).toBe("ready");
+      },
+      { timeout: 10_000, interval: 100 },
+    );
+  };
+  const ask = (id: string, body: object) => request(app).post(`/api/rooms/${id}/ask`).send(body);
+
+  it("saves a not-found answer when the document doesn't match, and everyone can read it", async () => {
+    const id = await createRoom("Ask me");
+    await settled(id);
+
+    const res = await ask(id, { question: "What about quantum chromodynamics?", name: "Guest" });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      room_id: id,
+      kind: "ask",
+      asked_by: "Guest",
+      question: "What about quantum chromodynamics?",
+      found_in_document: false,
+      citations: [],
+    });
+
+    const browser = createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
+    const { data } = await browser.from("ai_messages").select("question").eq("room_id", id);
+    expect(data).toEqual([{ question: "What about quantum chromodynamics?" }]);
+    // Only the backend writes answers.
+    const { error } = await browser
+      .from("ai_messages")
+      .insert({ room_id: id, question: "Q", answer: "Fake", found_in_document: true });
+    expect(error).not.toBeNull();
+  });
+
+  it("asks the AI when the document matches, and reports its failure as a 502", async () => {
+    const id = await createRoom("Matching");
+    await settled(id);
+    // createRoom's text is "Some text".
+    const res = await ask(id, { question: "What does the text say?" });
+    expect(res.status).toBe(502);
+  });
+
+  it("refuses an empty question, and questions in a deleted room", async () => {
+    const id = await createRoom("Deleted ask");
+    expect((await ask(id, { question: "  " })).status).toBe(400);
+    await settled(id);
+    await remove(owner, id);
+    expect((await ask(id, { question: "Still there?" })).status).toBe(404);
+  });
+});

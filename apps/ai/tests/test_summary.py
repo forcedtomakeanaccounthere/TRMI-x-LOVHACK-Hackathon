@@ -76,7 +76,7 @@ class FakeSummaryAI:
 @pytest.fixture
 def fake(monkeypatch, clock):
     fake = FakeSummaryAI()
-    monkeypatch.setattr("app.services.summary.complete_json", fake)
+    monkeypatch.setattr("app.services.fallback.complete_json", fake)
     return fake
 
 
