@@ -1,11 +1,35 @@
 import { chromium, type Browser } from "playwright";
+import { env } from "../env";
 import { assertPublicUrl } from "./extract";
+import { startPinnedProxy, type PinnedProxy } from "./pinned-proxy";
 import { HttpError } from "../middleware/error";
 
 const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 15_000;
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
+// Each fallback is a whole Chromium process, so only a few run at once and a few more may wait;
+// past that the import is refused rather than letting concurrent imports exhaust memory and CPU.
+const MAX_WAITING = 8;
+const BUSY = "Too many pages are being read right now. Try again in a minute.";
+let running = 0;
+const waiting: (() => void)[] = [];
+
+async function acquireBrowserSlot() {
+  if (running < env.PLAYWRIGHT_MAX_BROWSERS) {
+    running++;
+    return;
+  }
+  if (waiting.length >= MAX_WAITING) throw new HttpError(503, BUSY);
+  await new Promise<void>((resolve) => waiting.push(resolve)); // the slot is handed over as is
+}
+
+function releaseBrowserSlot() {
+  const next = waiting.shift();
+  if (next) next();
+  else running--;
+}
 
 export type PlaywrightScrapedPage = {
   html: string;
@@ -27,15 +51,24 @@ export async function scrapeWithPlaywright(
   // 1. Initial SSRF check (validates protocol, hostname, and resolved IP addresses)
   await assertPublicUrl(targetUrl);
 
+  await acquireBrowserSlot();
   let browser: Browser | null = null;
+  let proxy: PinnedProxy | null = null;
   try {
+    // All browser traffic goes through the pinned proxy, which connects only to the public
+    // address it checked (pinned-proxy.ts). Chromium skips the proxy for loopback by default and
+    // WebRTC can send UDP around it, so both are switched off.
+    proxy = await startPinnedProxy();
     browser = await chromium.launch({
       headless: true,
+      proxy: { server: proxy.server, username: proxy.username, password: proxy.password },
       args: [
         "--disable-gpu",
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-setuid-sandbox",
+        "--proxy-bypass-list=<-loopback>",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
       ],
     });
 
@@ -136,5 +169,7 @@ export async function scrapeWithPlaywright(
     if (browser) {
       await browser.close().catch(() => null);
     }
+    await proxy?.close();
+    releaseBrowserSlot();
   }
 }

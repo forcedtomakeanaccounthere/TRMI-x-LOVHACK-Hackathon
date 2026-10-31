@@ -246,7 +246,9 @@ async function readArticle(start: URL) {
       url = new URL(pw.finalUrl);
       html = pw.html;
       usedPlaywright = true;
-    } catch {
+    } catch (pwErr) {
+      // "Too busy" is worth saying; any other browser failure keeps the original error.
+      if (pwErr instanceof HttpError && pwErr.status === 503) throw pwErr;
       throw err;
     }
   }
@@ -262,8 +264,9 @@ async function readArticle(start: URL) {
       html = pw.html;
       dom = new JSDOM(html, { url: url.href });
       article = new Readability(dom.window.document).parse();
-    } catch {
-      // Keep original article result if Playwright also failed
+    } catch (pwErr) {
+      if (pwErr instanceof HttpError && pwErr.status === 503) throw pwErr;
+      // Otherwise keep the original article result
     }
   }
 
