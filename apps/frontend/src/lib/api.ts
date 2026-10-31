@@ -12,13 +12,24 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+// Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 // Pass the access token from AuthSession for routes that need a logged-in user.
 async function request<T>(path: string, init: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(`${API_URL}${path}`, { ...init, headers });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
+  if (!res.ok) throw new ApiError(body.error ?? `Request failed (${res.status})`, res.status);
   return body as T;
 }
 
