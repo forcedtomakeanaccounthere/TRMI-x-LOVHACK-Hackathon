@@ -428,3 +428,16 @@
     backdrop-filter: none;
   }
 }
+
+/* ---------- Rooms ---------- */
+
+/* Blocks are the anchors for marks, comments and cursors (src/components/room/anchors.ts). */
+.room-reader [data-block] {
+  position: relative;
+  scroll-margin-top: 6rem;
+}
+
+/* PDF text layer: invisible text over the page, tinted only while selected. */
+.textLayer ::selection {
+  background: color-mix(in oklab, var(--azure) 35%, transparent);
+}

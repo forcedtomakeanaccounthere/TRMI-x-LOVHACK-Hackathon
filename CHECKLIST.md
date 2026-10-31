@@ -33,6 +33,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 | 5 | Wow features | Sun 12 – 4 PM | P1 |
 | 6 | Polish | Sun 4 – 8 PM | P1 |
 | D | Dashboard (`/dashboard`) | Alongside Phase 6 | P1 |
+| W | Link rooms workspace (`/r/[id]`) | Alongside Phases 3–6 | P1 |
 | 7 | Test and ship | Sun 8 PM – Mon 1:30 AM | Ship |
 | 8 | Stretch | Only if time is left | P2 |
 
@@ -359,6 +360,45 @@ Room lifecycle (backend `RoomStatus`): **running** → **closed** (readable, no 
 - [ ] Dashboard works on a phone (sheet menu, horizontally scrolling calendar) and in both themes
 
 **Done when:** a signed-in user sees their real rooms, can close, archive, delete and restore them, and (once the people endpoints land) can invite someone they've read with in two taps.
+
+---
+
+## Link rooms workspace (`/r/[id]`) · P1, builds on Phases 3–5
+
+A room now holds several sources and has three panes, like NotebookLM: Sources on the left, the document in the middle, and AI chat, Discussion, Studio, Library and History on the right. `/r/demo` runs without the backend.
+
+How state is shared until the backend has tables for it: every change is an event in an append-only **ledger** (`components/room/ledger.ts`). Each browser keeps its copy in localStorage and peers exchange events over the `room:{id}` channel, merged by event id (`sync-req` / `sync` / `ledger` broadcasts). The room's state is the ledger replayed, and the History tab lists it. Text highlights are also written to `highlights`, so the recap still sees them.
+
+**FE** *(in repo: `apps/frontend/src/components/room/`)*
+- [ ] Sources: upload PDF / DOCX / PPTX / MD / TXT from the device (`.doc` / `.ppt` get "save as …x"), Google Drive picker (`NEXT_PUBLIC_GOOGLE_CLIENT_ID` + `NEXT_PUBLIC_GOOGLE_API_KEY`; Docs/Slides exported as DOCX/PPTX), web links (Wikipedia, Notion, Medium, Substack, arXiv, blogs), YouTube (preview → attach to watch, or **Process into document**) and pasted text; tick sources in or out of AI answers
+- [ ] Guests join with a name and colour; admins can remove anyone below them (kick broadcast + ledger entry)
+- [ ] Annotation tools (dock + keys V H U P E N L): highlight in 7 colours (text, or the area dragged over when there's no text), underline, pen in 3 widths, eraser, text comments anywhere; hover shows who made a mark and when
+- [ ] Selection toolbar: Copy, Highlight, Underline, Comment, **Ask AI**. An AI box opens beside the line, shows who asked, and takes follow-up questions
+- [ ] **AI lens**: drag over any part of the page; the snapshot (canvas crop for PDFs, html-to-image for HTML) opens an AI box next to it
+- [ ] Live cursors with name tags; click someone's avatar to **follow** them (switches document and scrolls with them; stops when you scroll)
+- [ ] AI chat about one source, several, or `@all`, with numbered citations that jump to the passage
+- [ ] Discussion: group chat with joined and left lines
+- [ ] Studio: summary, quiz, flashcards, mind map, infographic from chosen sources; Library holds attachments and artifacts, with downloads (PDF, readable HTML, Markdown / JSON / PNG); still available when the room is archived
+- [ ] History: every attachment, mark, AI question, artifact and role change with person and time; filters; click to jump
+- [ ] Roles owner / admin / editor / viewer, defaults for guests and signed-in members, "viewers can use AI"; checked in the UI
+- [ ] Phone layout: bottom bar opens Sources or the room panel as a sheet you can drag down to close
+
+**BE: still needed** (the frontend already calls these and falls back to a labelled **Preview** when they return 404)
+- [ ] `POST /api/rooms/:id/ask` `{ question, sources: room_id[], quote?, image? (JPEG data URL), history? }` → `{ answer, citations: [{ room_id, block, quote }] }`, answered with `match_chunks` over the chosen rooms; the image is for the AI lens, so it needs a vision model. Save each one to `ai_queries`.
+- [ ] `POST /api/rooms/:id/artifacts` `{ kind: summary|quiz|flashcards|mindmap|infographic, sources }` → the `ArtifactBody` shape in `components/room/types.ts`. The preview builds them from `room_ai.summary` (or headings) in the browser.
+- [ ] `POST /api/rooms/youtube` `{ url }` → `{ id }`: a `youtube` room with transcript segments as `t{n}` blocks
+- [ ] `room_sources` table (room_id, source_room_id, added_by, position) plus `GET/POST/DELETE /api/rooms/:id/sources`, so attachments don't depend on peers being online
+- [ ] Tables for what the ledger holds now: `annotations` (kind, doc, block, geometry jsonb, color, author), `room_messages` (discussion), `ai_threads`, `artifacts`, `room_members` (role, kicked_at) and `room_settings`; append-only `room_events` for History. Enforce roles and kicks in RLS or the API.
+- [ ] A signed download link for an uploaded room's original file (private `files` bucket): `GET /api/rooms/:id/original`
+- [ ] Notes as comments: allow `comments.highlight_id` to be null in `NewComment`, so comment boxes reach the recap
+
+**QA**
+- [ ] Two browsers on `/r/demo`: presence, cursors, highlights, drawings, comments, AI boxes, chat and artifacts appear on both; the later joiner receives everything
+- [ ] Follow someone across two sources; scrolling yourself stops following
+- [ ] Viewer can't annotate; removed guest sees "You were removed" and stays out after a reload
+- [ ] Archived room: read only, Library still downloads
+
+**Done when:** a group can attach mixed sources, mark them up together, ask the AI about any part, and leave with artifacts and a full history.
 
 ---
 
