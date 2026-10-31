@@ -136,6 +136,49 @@ describe("parseFile: PPTX", () => {
     );
   });
 
+  // Valid XML can quote attributes with ' and put spaces around "=". None of these slides may be lost.
+  it("reads relationships written with single quotes and spaces", async () => {
+    const zip = await JSZip.loadAsync(await makePptx([["A"], ["B"], ["C"]], { order: [3, 1, 2] }));
+    const rels = await zip.file("ppt/_rels/presentation.xml.rels")!.async("string");
+    zip.file(
+      "ppt/_rels/presentation.xml.rels",
+      rels
+        .replace('Target="slides/slide1.xml"', "Target = 'slides/slide1.xml'")
+        .replace(/Id="(rId\d+)"/, "Id='$1'")
+        .replace('Target="slides/slide3.xml"', 'Target\n= "slides/slide3.xml"'),
+    );
+    const presentation = await zip.file("ppt/presentation.xml")!.async("string");
+    zip.file("ppt/presentation.xml", presentation.replace(/r:id="(rId\d+)"/, "r:id = '$1'"));
+
+    expect(await slideOrder(zip)).toEqual(["ppt/slides/slide3.xml", "ppt/slides/slide1.xml", "ppt/slides/slide2.xml"]);
+    const { html: out } = await html(await zip.generateAsync({ type: "nodebuffer" }), "deck.pptx");
+    expect(out).toContain("<p>C</p></section><section");
+    expect(out.match(/<section/g)).toHaveLength(3);
+  });
+
+  it("refuses a deck that lists a slide it doesn't contain, instead of dropping it", async () => {
+    const missingRel = await JSZip.loadAsync(await makePptx([["A"], ["B"]]));
+    const rels = await missingRel.file("ppt/_rels/presentation.xml.rels")!.async("string");
+    missingRel.file("ppt/_rels/presentation.xml.rels", rels.replace(/<Relationship Target="slides\/slide2\.xml"[^>]*\/>/, ""));
+    await expect(parseFile(await missingRel.generateAsync({ type: "nodebuffer" }), "deck.pptx")).rejects.toMatchObject({
+      status: 422,
+    });
+
+    const missingFile = await JSZip.loadAsync(await makePptx([["A"], ["B"]]));
+    missingFile.remove("ppt/slides/slide2.xml");
+    await expect(parseFile(await missingFile.generateAsync({ type: "nodebuffer" }), "deck.pptx")).rejects.toMatchObject({
+      status: 422,
+    });
+  });
+
+  it("refuses a deck with a slide whose XML is broken", async () => {
+    const zip = await JSZip.loadAsync(await makePptx([["A"], ["B"]]));
+    zip.file("ppt/slides/slide2.xml", "<p:sld><a:p>broken");
+    await expect(parseFile(await zip.generateAsync({ type: "nodebuffer" }), "deck.pptx")).rejects.toMatchObject({
+      status: 422,
+    });
+  });
+
   it("resolves absolute and ../ relationship targets", async () => {
     const zip = await JSZip.loadAsync(await makePptx([["A"], ["B"]], { order: [2, 1] }));
     const rels = await zip.file("ppt/_rels/presentation.xml.rels")!.async("string");
@@ -166,15 +209,26 @@ describe("parseFile: PPTX", () => {
 });
 
 describe("slideParagraphs", () => {
+  const slide = (body: string, prefix = "a") =>
+    `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ` +
+    `xmlns:${prefix}="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>` +
+    `${body}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+
   it("joins runs, turns line breaks into spaces and decodes entities", () => {
-    const xml =
+    const xml = slide(
       '<a:p><a:pPr lvl="1"/><a:r><a:t>Fish &amp; chips</a:t></a:r><a:br/><a:r><a:t>&#x2014;&#8212;&lt;ok&gt;</a:t></a:r></a:p>' +
-      "<a:p/><a:p><a:r><a:t>   </a:t></a:r></a:p><a:p><a:fld><a:t>Second</a:t></a:fld></a:p>";
+        "<a:p/><a:p><a:r><a:t>   </a:t></a:r></a:p><a:p><a:fld id='x'><a:t>Second</a:t></a:fld></a:p>",
+    );
     expect(slideParagraphs(xml)).toEqual(["Fish & chips ——<ok>", "Second"]);
   });
 
-  it("leaves out-of-range character references alone", () => {
-    expect(slideParagraphs("<a:p><a:r><a:t>&#0;&#x110000;</a:t></a:r></a:p>")).toEqual(["&#0;&#x110000;"]);
+  it("reads the DrawingML namespace whatever its prefix", () => {
+    expect(slideParagraphs(slide("<d:p><d:r><d:t>Other prefix</d:t></d:r></d:p>", "d"))).toEqual(["Other prefix"]);
+  });
+
+  it("throws on XML that doesn't parse", () => {
+    expect(() => slideParagraphs("<a:p><a:t>no namespace</a:t></a:p>")).toThrow();
+    expect(() => slideParagraphs(slide("<a:p><a:t>&#0;</a:t></a:p>"))).toThrow();
   });
 });
 

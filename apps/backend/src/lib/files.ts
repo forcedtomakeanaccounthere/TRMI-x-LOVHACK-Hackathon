@@ -190,22 +190,19 @@ async function pptxToHtml(buf: Buffer) {
     throw damaged();
   }
 
-  let slides: string[];
+  // Every slide is read before anything is shown: a deck with a slide we can't read is refused
+  // rather than turned into a room with slides missing.
+  let slides: string[][];
   try {
-    slides = await slideOrder(zip);
+    const names = await slideOrder(zip);
+    slides = [];
+    for (const name of names) slides.push(slideParagraphs(await zip.file(name)!.async("string")));
   } catch {
     throw damaged();
   }
 
   const { document } = new JSDOM("<body></body>").window;
-  for (const [i, name] of slides.entries()) {
-    let xml: string;
-    try {
-      xml = await zip.file(name)!.async("string");
-    } catch {
-      throw damaged();
-    }
-    const paragraphs = slideParagraphs(xml);
+  for (const [i, paragraphs] of slides.entries()) {
     if (!paragraphs.length) continue;
 
     // Numbered by position, so the blocks match the slide numbers people see.
@@ -224,36 +221,58 @@ async function pptxToHtml(buf: Buffer) {
   return document.body.innerHTML;
 }
 
+// Office files are XML, read with a real parser so any valid spelling of an attribute (single
+// quotes, spaces around "=") is understood. It never loads external entities.
+const xmlParser = new new JSDOM("").window.DOMParser();
+
+function parseXml(xml: string) {
+  const doc = xmlParser.parseFromString(xml, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("Invalid XML");
+  return doc;
+}
+
+// Elements by local name, whatever prefix the file gives their namespace.
+const elements = (root: Document | Element, localName: string) => [...root.getElementsByTagNameNS("*", localName)];
+
 /**
  * The slide files in the order the deck shows them. That order is the slide list (p:sldIdLst) in
  * ppt/presentation.xml, whose relationship ids point at the files; the numbers in the file names
  * keep the order slides were created in, not where they were moved. Files the list doesn't name
  * are hidden from the show too. Without a list, falls back to the file numbers.
+ * Throws when the list names a slide that can't be found, so no deck loses slides silently.
  */
 export async function slideOrder(zip: JSZip): Promise<string[]> {
   const isSlide = (name: string) => /^ppt\/slides\/slide\d+\.xml$/.test(name) && Boolean(zip.file(name));
 
-  const presentation = (await zip.file("ppt/presentation.xml")?.async("string")) ?? "";
-  const rels = (await zip.file("ppt/_rels/presentation.xml.rels")?.async("string")) ?? "";
-  const attr = (tag: string, name: string) => new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  const presentationXml = await zip.file("ppt/presentation.xml")?.async("string");
+  if (!presentationXml) throw new Error("No ppt/presentation.xml");
+  const listedIds = elements(parseXml(presentationXml), "sldId").map(
+    // r:id: the attribute named "id" in a namespace (the plain "id" is the slide's number).
+    (el) => [...el.attributes].find((a) => a.localName === "id" && a.namespaceURI)?.value,
+  );
 
+  if (!listedIds.length) {
+    return Object.keys(zip.files)
+      .filter(isSlide)
+      .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)![1]) - Number(/(\d+)\.xml$/.exec(b)![1]));
+  }
+
+  const relsXml = await zip.file("ppt/_rels/presentation.xml.rels")?.async("string");
+  if (!relsXml) throw new Error("No ppt/_rels/presentation.xml.rels");
   const targets = new Map<string, string>();
-  for (const [tag] of rels.matchAll(/<(?:\w+:)?Relationship\b[^>]*>/g)) {
-    const id = attr(tag, "Id");
-    const target = attr(tag, "Target");
+  for (const rel of elements(parseXml(relsXml), "Relationship")) {
+    const id = rel.getAttribute("Id");
+    const target = rel.getAttribute("Target");
     if (id && target) targets.set(id, resolvePart("ppt/", target));
   }
 
   const listed: string[] = [];
-  for (const [tag] of presentation.matchAll(/<(?:\w+:)?sldId\b[^>]*>/g)) {
-    const name = targets.get(attr(tag, "\\w+:id") ?? "");
-    if (name && isSlide(name) && !listed.includes(name)) listed.push(name);
+  for (const id of listedIds) {
+    const name = id ? targets.get(id) : undefined;
+    if (!name || !isSlide(name)) throw new Error(`Slide ${id ?? "without an id"} can't be found`);
+    if (!listed.includes(name)) listed.push(name);
   }
-  if (listed.length) return listed;
-
-  return Object.keys(zip.files)
-    .filter(isSlide)
-    .sort((a, b) => Number(/(\d+)\.xml$/.exec(a)![1]) - Number(/(\d+)\.xml$/.exec(b)![1]));
+  return listed;
 }
 
 // A relationship target is relative to the folder of the part that names it, or absolute from the
@@ -268,28 +287,24 @@ function resolvePart(folder: string, target: string) {
   return out.join("/");
 }
 
-/** The text of each <a:p> paragraph in a slide's XML, with line breaks as spaces. */
+const isDrawingMl = (el: Element) => el.namespaceURI?.includes("drawingml") ?? false;
+
+/**
+ * The text of each DrawingML paragraph (a:p) in a slide's XML: its text runs (a:t) in order, with
+ * line breaks (a:br) as spaces. Throws on XML that doesn't parse.
+ */
 export function slideParagraphs(xml: string) {
   const paragraphs: string[] = [];
-  for (const [, body] of xml.matchAll(/<a:p(?:\s[^>]*)?>([\s\S]*?)<\/a:p>/g)) {
-    const text = [...body!.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>|<a:br\b[^>]*\/>/g)]
-      .map(([tag, run]) => (tag.startsWith("<a:br") ? " " : decodeXml(run ?? "")))
+  for (const p of elements(parseXml(xml), "p").filter(isDrawingMl)) {
+    const text = elements(p, "*")
+      .filter(isDrawingMl)
+      .map((el) => (el.localName === "t" ? (el.textContent ?? "") : el.localName === "br" ? " " : ""))
       .join("");
     // eslint-disable-next-line no-control-regex
     const clean = text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
     if (clean) paragraphs.push(clean);
   }
   return paragraphs;
-}
-
-const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-
-function decodeXml(text: string) {
-  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi, (whole, name: string) => {
-    if (name[0] !== "#") return XML_ENTITIES[name.toLowerCase()] ?? whole;
-    const code = name[1]?.toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-  });
 }
 
 // GitHub-flavoured Markdown. Raw HTML in the file is allowed through marked and sanitized by
