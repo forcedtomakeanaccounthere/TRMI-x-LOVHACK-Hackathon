@@ -77,6 +77,13 @@ const PdfUpload = z.object({
   file: z.string().meta({ override: { type: "string", format: "binary" }, description: "PDF, up to 20 MB" }),
 });
 
+const FileUpload = z.object({
+  file: z.string().meta({
+    override: { type: "string", format: "binary" },
+    description: "PDF, DOCX, PPTX, Markdown (.md) or text (.txt), up to 20 MB",
+  }),
+});
+
 export const openApiDocument = createDocument({
   openapi: "3.1.0",
   info: {
@@ -332,7 +339,10 @@ export const openApiDocument = createDocument({
           ...roomCreated,
           "400": failure("Invalid URL: not http(s), or a private or local address"),
           ...needsVerifiedUser,
-          "422": failure("The page could not be read: unknown host, error status, not HTML, too large or no article text"),
+          "422": failure(
+            "The page could not be read: unknown host, error status, not HTML, too large or no article text. " +
+              "Sites known not to work from a link (Notion, Google Docs, ...) get advice on what to upload instead.",
+          ),
         },
       },
     },
@@ -361,6 +371,29 @@ export const openApiDocument = createDocument({
           ...needsVerifiedUser,
           "413": failure("The PDF is over 20 MB"),
           "422": failure("The PDF is damaged or password-protected"),
+        },
+      },
+    },
+    "/api/rooms/file": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Create a room from an uploaded document",
+        description:
+          "The format comes from the bytes, not the Content-Type: `%PDF-` is a PDF room (as `POST /api/rooms/pdf`); " +
+          "a ZIP with `word/document.xml` or `ppt/presentation.xml` is DOCX or PPTX; `.md` and `.txt` must be valid UTF-8. " +
+          "ZIPs are refused if they unpack to more than 50 MB or hold more than 2,000 files. DOCX images are dropped. " +
+          "Non-PDF files become `kind: \"file\"` rooms with block HTML (one `p{n}` block per slide for PPTX), and " +
+          "`source_meta` records the format and file name.",
+        security: bearer,
+        requestBody: { required: true, content: { "multipart/form-data": { schema: FileUpload } } },
+        responses: {
+          ...roomCreated,
+          "400": failure(
+            "No file, more than one file, an unsupported or old (.doc/.ppt) format, invalid UTF-8 or a ZIP that is too large",
+          ),
+          ...needsVerifiedUser,
+          "413": failure("The file is over 20 MB"),
+          "422": failure("The file is damaged, has no text or has too much text for one room"),
         },
       },
     },

@@ -4,6 +4,7 @@ import {
   addBlockIds,
   cleanArticle,
   extractArticle,
+  hostHint,
   htmlToText,
   isPrivateHost,
   parseSrcset,
@@ -234,7 +235,82 @@ describe("extractArticle with a fetched page", () => {
   });
 });
 
+describe("hostHint", () => {
+  it.each([
+    ["https://www.notion.so/team/Page-abc123", /Export/],
+    ["https://acme.notion.site/Roadmap-1", /Export/],
+    ["https://docs.google.com/document/d/abc/edit", /\.docx/],
+    ["https://docs.google.com/presentation/d/abc/edit", /\.pptx/],
+    ["https://docs.google.com/spreadsheets/d/abc/edit", /paste/],
+    ["https://drive.google.com/file/d/abc/view", /Download the file/],
+    ["https://x.com/someone/status/1", /paste/],
+    ["https://www.linkedin.com/posts/abc", /paste/],
+    ["https://youtu.be/dQw4w9WgXcQ", /transcript/],
+  ])("has advice for %s", (url, advice) => {
+    expect(hostHint(new URL(url))).toMatch(advice);
+  });
+
+  it.each(["https://example.com/", "https://notnotion.so/", "https://notion.so.evil.com/", "https://google.com/"])(
+    "has none for %s",
+    (url) => {
+      expect(hostHint(new URL(url))).toBeNull();
+    },
+  );
+});
+
+describe("extractArticle advice for sites that can't be read", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    mockLookup.mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+    mockLookup.mockReset();
+  });
+
+  it("tells a Notion link to export and upload, even after a redirect to a login page", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "https://www.notion.so/login" } }))
+      .mockResolvedValueOnce(htmlResponse("<html><body><div id=app></div></body></html>"));
+    await expect(extractArticle("https://www.notion.so/team/Page-abc123")).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining("Export"),
+    });
+  });
+
+  it("keeps the usual message for other sites", async () => {
+    fetchMock.mockResolvedValue(htmlResponse("<html><body>short</body></html>"));
+    await expect(extractArticle("https://example.com/app")).rejects.toMatchObject({
+      status: 422,
+      message: "We couldn't read this page. Try pasting the text instead.",
+    });
+  });
+
+  it("leaves a 400 for a bad address as it is", async () => {
+    mockLookup.mockResolvedValue([{ address: "10.0.0.1", family: 4 }]);
+    await expect(extractArticle("https://www.notion.so/page")).rejects.toMatchObject({
+      status: 400,
+      message: "Invalid URL",
+    });
+  });
+
+  it("still reads a page from a hinted site when it works", async () => {
+    fetchMock.mockResolvedValue(htmlResponse(PAGE));
+    const { html } = await extractArticle("https://acme.notion.site/Public-page");
+    expect(html).toContain('data-block="b0"');
+  });
+});
+
 describe("cleanArticle", () => {
+  it("drops images when asked, for sources whose images can't be served", () => {
+    const html = '<p>a<img src="https://example.com/a.png"></p><picture><source srcset="b.png"><img src="b.png"></picture>';
+    expect(cleanArticle(html, "https://example.com/", { images: false })).toBe('<p data-block="b0">a</p>');
+  });
+
   it("drops page styles and forms that could clash with the room UI", () => {
     const html = cleanArticle(
       '<p class="fixed inset-0" style="position:fixed">a</p><style>p{}</style><form><input></form>',

@@ -7,6 +7,7 @@ import {
   RecapRequest,
   RoomDetail,
   UpdateRoomRequest,
+  type SourceMeta,
   type CreateRoomResponse,
   type DashboardResponse,
   type DashboardRoom,
@@ -20,6 +21,7 @@ import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
+import { CONTENT_TYPES, parseFile } from "../lib/files";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth, requireAuth } from "../middleware/auth";
@@ -81,6 +83,53 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
   const file = req.file;
   if (!file) throw new HttpError(400, "A PDF file is required");
   if (!isPdf(file.buffer)) throw new HttpError(400, "That file is not a PDF");
+  const id = await createPdfRoom(file, req.user!.id);
+  res.status(201).json({ id } satisfies CreateRoomResponse);
+});
+
+// POST /api/rooms/file  multipart field "file": a PDF, DOCX, PPTX, Markdown or text file. The format
+// comes from the bytes (see lib/files.ts). PDFs become PDF rooms; the rest become file rooms with the
+// same block HTML as a link room, and the original is kept in the private "files" bucket.
+roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) => {
+  const file = req.file;
+  if (!file) throw new HttpError(400, "A file is required");
+  const parsed = await parseFile(file.buffer, file.originalname);
+  if (parsed.format === "pdf") {
+    const id = await createPdfRoom(file, req.user!.id);
+    res.status(201).json({ id } satisfies CreateRoomResponse);
+    return;
+  }
+
+  const id = nanoid(8);
+  const path = `${id}.${parsed.format}`;
+  const db = supabaseAdmin();
+
+  const { error: uploadError } = await db.storage
+    .from(FILES_BUCKET)
+    .upload(path, file.buffer, { contentType: CONTENT_TYPES[parsed.format] });
+  if (uploadError) throw uploadError;
+
+  const { error } = await db.from("rooms").insert({
+    id,
+    kind: "file",
+    title: file.originalname.trim().slice(0, 200) || "Untitled file",
+    content_html: parsed.html,
+    source_meta: { format: parsed.format, file_name: file.originalname } satisfies SourceMeta,
+    created_by: req.user!.id,
+  });
+  if (error) {
+    const { error: cleanupError } = await db.storage.from(FILES_BUCKET).remove([path]);
+    if (cleanupError) console.error(`Could not remove orphaned file ${path}:`, cleanupError);
+    throw error;
+  }
+
+  res.status(201).json({ id } satisfies CreateRoomResponse);
+});
+
+const FILES_BUCKET = "files";
+
+// Stores a PDF in the public bucket and creates its room. Returns the room id.
+async function createPdfRoom(file: Express.Multer.File, userId: string) {
   // Before the upload, so a file pdf.js can't open never gets a room. Also the text for the recap.
   const contentText = await extractPdfText(file.buffer);
 
@@ -99,7 +148,8 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
     title: file.originalname.trim().slice(0, 200) || "Untitled PDF",
     pdf_path: pdfPath,
     content_text: contentText,
-    created_by: req.user!.id,
+    source_meta: { format: "pdf", file_name: file.originalname } satisfies SourceMeta,
+    created_by: userId,
   });
   if (error) {
     // No room points at the file, so don't leave it in the public bucket.
@@ -108,9 +158,8 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
     if (cleanupError) console.error(`Could not remove orphaned PDF ${pdfPath}:`, cleanupError);
     throw error;
   }
-
-  res.status(201).json({ id } satisfies CreateRoomResponse);
-});
+  return id;
+}
 
 // The most rooms a user's participation history contributes to their dashboard.
 export const MAX_PARTICIPATION = 1000;

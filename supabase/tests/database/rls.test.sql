@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(81);
+select plan(95);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -35,7 +35,8 @@ where oid in (
   'public.room_participants'::regclass,
   'public.follows'::regclass,
   'public.room_invites'::regclass,
-  'public.ai_queries'::regclass
+  'public.ai_queries'::regclass,
+  'public.room_ai'::regclass
 )
 order by relname;
 
@@ -149,7 +150,7 @@ select throws_ok(
 select throws_ok(
   $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
     values ('room0001', 'Guest', '#00ff00', 'x1', 0, 4, 'text')$$,
-  '23514', null, 'a block id that is not b{n} or p{n} is rejected'
+  '23514', null, 'a block id that is not b{n}, p{n} or t{n} is rejected'
 );
 select lives_ok(
   $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
@@ -315,6 +316,54 @@ select throws_ok(
 );
 select is_empty($$select 1 from room_participants$$, 'participation history is private');
 select is_empty($$update rooms set status = 'deleted' where id = 'room0001' returning 1$$, 'anon cannot change a room''s status');
+
+-- AI foundation (0010): new room kinds, source_meta, t{n} blocks, room_ai and the files bucket ----
+reset role;
+insert into rooms (id, kind, title, source_meta)
+values ('file0001', 'file', 'notes.docx', '{"format": "docx", "file_name": "notes.docx"}');
+insert into room_ai (room_id, status) values ('room0001', 'ready'), ('deleted1', 'pending');
+insert into storage.objects (bucket_id, name) values ('files', 'file0001.docx');
+
+select lives_ok($$insert into rooms (id, kind, title) values ('video001', 'youtube', 'A video')$$, 'a youtube room is accepted');
+select throws_ok(
+  $$insert into rooms (id, kind, title) values ('bad00001', 'video', 'Nope')$$,
+  '23514', null, 'an unknown room kind is rejected'
+);
+select throws_ok(
+  $$insert into rooms (id, kind, title, source_meta) values ('bad00002', 'file', 'Nope', '"docx"')$$,
+  '23514', null, 'source_meta must be an object'
+);
+select throws_ok(
+  $$insert into room_ai (room_id, status) values ('file0001', 'done')$$,
+  '23514', null, 'an unknown AI status is rejected'
+);
+select is((select public from storage.buckets where id = 'files'), false, 'the files bucket is private');
+select isnt_empty(
+  $$select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'room_ai'$$,
+  'room_ai changes are sent over Realtime'
+);
+
+set local role anon;
+select isnt_empty($$select 1 from room_ai where room_id = 'room0001'$$, 'anon can read a room''s AI state');
+select is_empty($$select 1 from room_ai where room_id = 'deleted1'$$, 'the AI state of a deleted room is hidden');
+select throws_ok(
+  $$insert into room_ai (room_id) values ('file0001')$$,
+  '42501', null, 'anon cannot write AI state (only the backend can)'
+);
+select is_empty(
+  $$update room_ai set summary = '{}' where room_id = 'room0001' returning 1$$,
+  'anon cannot edit AI state'
+);
+select is_empty($$select 1 from storage.objects where bucket_id = 'files'$$, 'anon cannot read uploaded files');
+select throws_ok(
+  $$insert into storage.objects (bucket_id, name) values ('files', 'evil.docx')$$,
+  '42501', null, 'anon cannot upload files'
+);
+select lives_ok(
+  $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
+    values ('file0001', 'Guest', '#00ff00', 't3', 0, 4, 'clip')$$,
+  'a highlight on a transcript block t{n} is accepted'
+);
 
 select * from finish();
 rollback;

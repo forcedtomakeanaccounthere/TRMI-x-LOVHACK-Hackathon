@@ -107,6 +107,24 @@ describe("room contracts", () => {
     expect(Room.safeParse({ ...room, created_by: "not-a-uuid" }).success).toBe(false);
   });
 
+  it("Room takes the uploaded kinds and their source_meta (0010_ai_foundation.sql)", () => {
+    const room = {
+      id: "abcd1234",
+      kind: "file",
+      source_url: null,
+      title: "notes.docx",
+      content_html: '<p data-block="b0">Hi</p>',
+      pdf_path: null,
+      source_meta: { format: "docx", file_name: "notes.docx" },
+      created_by: null,
+      created_at: "2026-10-30T00:00:00Z",
+    };
+    expect(Room.parse(room)).toEqual(room);
+    expect(Room.safeParse({ ...room, kind: "youtube", source_meta: null }).success).toBe(true);
+    expect(Room.safeParse({ ...room, kind: "video" }).success).toBe(false);
+    expect(Room.safeParse({ ...room, source_meta: { format: "doc", file_name: "old.doc" } }).success).toBe(false);
+  });
+
   it("CreateLinkRoomRequest needs a URL", () => {
     expect(CreateLinkRoomRequest.safeParse({ url: "not a url" }).success).toBe(false);
   });
@@ -146,11 +164,11 @@ describe("room contracts", () => {
       expect(NewHighlight.safeParse({ ...highlight, author_name: "x".repeat(41) }).success).toBe(false);
     });
 
-    it.each(["b0", "b12", "p1", "p999999"])("accepts the block id %s", (block_id) => {
+    it.each(["b0", "b12", "p1", "p999999", "t0", "t42"])("accepts the block id %s", (block_id) => {
       expect(NewHighlight.safeParse({ ...highlight, block_id }).success).toBe(true);
     });
 
-    it.each(["", "b", "x1", "B1", "b1 ", "b-1", "p1234567"])("rejects the block id %j", (block_id) => {
+    it.each(["", "b", "x1", "B1", "T1", "b1 ", "b-1", "p1234567"])("rejects the block id %j", (block_id) => {
       expect(NewHighlight.safeParse({ ...highlight, block_id }).success).toBe(false);
     });
 
