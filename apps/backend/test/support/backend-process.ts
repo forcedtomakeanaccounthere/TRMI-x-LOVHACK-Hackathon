@@ -36,6 +36,7 @@ export async function startBackend(extraEnv: Record<string, string> = {}) {
       SUPABASE_URL: supabase.url,
       SUPABASE_ANON_KEY: supabase.anonKey,
       SUPABASE_SERVICE_ROLE_KEY: supabase.serviceRoleKey,
+      AI_INTERNAL_TOKEN: "e2e-internal-token",
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],

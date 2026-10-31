@@ -87,7 +87,7 @@ npm run supabase:stop
 
 ### CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, database + integration + e2e (one job that starts the local Supabase once), build, and ruff for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, database + integration + e2e (one job that starts the local Supabase once), build, and ruff plus pytest for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
 
 ## API
 
