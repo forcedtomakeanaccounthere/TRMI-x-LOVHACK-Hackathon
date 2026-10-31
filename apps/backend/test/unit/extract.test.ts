@@ -15,6 +15,10 @@ import { HttpError } from "../../src/middleware/error";
 vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 const mockLookup = vi.mocked(lookup) as unknown as ReturnType<typeof vi.fn>;
 
+vi.mock("../../src/lib/scraper-browser", () => ({
+  scrapeWithPlaywright: vi.fn().mockRejectedValue(new Error("Playwright disabled in mock")),
+}));
+
 describe("isPrivateHost", () => {
   it.each([
     "localhost",

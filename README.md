@@ -34,6 +34,7 @@ To use a cloud Supabase project instead, requirements are Node 22.14+, Python 3.
 ```bash
 npm install              # all JS workspaces
 npm run setup:ai         # Python deps for apps/ai
+npm run setup:playwright # install Playwright Chromium browser & OS deps
 
 cp .env.example .env                                     # backend + ai
 grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local     # frontend, after filling in .env

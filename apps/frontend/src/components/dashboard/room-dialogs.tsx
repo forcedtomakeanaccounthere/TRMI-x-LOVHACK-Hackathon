@@ -45,8 +45,14 @@ export function JoinRoomDialog({ open, onOpenChange }: { open: boolean; onOpenCh
       try {
         await api.joinRoom(code, session.access_token);
       } catch (err) {
+        // "Room not found" is the join route's own 404. A bare "Not found" means the backend has no
+        // such route (an outdated server), which is not the visitor's mistake.
         if (err instanceof ApiError && err.status === 404) {
-          setError("No room with that code. Check the link and try again.");
+          setError(
+            err.message === "Room not found"
+              ? "No room with that code. Check the link and try again."
+              : "Couldn't reach the room service. Try again in a moment.",
+          );
           return;
         }
       }

@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowSquareOutIcon, EyeIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, DownloadSimpleIcon, EyeIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ReactLenis, type LenisRef } from "lenis/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { blockOf, findBlock, readSelection, type TextSelection, toAnchor, topBlock } from "./anchors";
 import { Spinner, timeAgo } from "./bits";
@@ -569,6 +570,22 @@ function Scroller({
             >
               {hostOf(docRef.source_url)} <ArrowSquareOutIcon className="size-3.5" />
             </a>
+          )}
+          {content?.summary && room.realDoc(docId) && (
+            <div className="mt-3 flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+              <DownloadSimpleIcon className="size-3.5" />
+              <span>Summary</span>
+              {(["md", "txt"] as const).map((format) => (
+                <a
+                  key={format}
+                  href={api.summaryExportUrl(docId, format)}
+                  download
+                  className="rounded-full px-2 py-0.5 ring-1 ring-(--hairline) hover:bg-foreground/5 hover:text-foreground"
+                >
+                  .{format}
+                </a>
+              ))}
+            </div>
           )}
         </header>
 

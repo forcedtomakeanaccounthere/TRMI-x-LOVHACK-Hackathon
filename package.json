@@ -24,6 +24,7 @@
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
     "setup:ai": "cd apps/ai && uv sync",
+    "setup:playwright": "npx playwright install --with-deps chromium",
     "clean:cache": "node scripts/trim-turbo-cache.mjs",
     "postbuild": "node scripts/trim-turbo-cache.mjs"
   },

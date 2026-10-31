@@ -6,6 +6,7 @@ import { Marked } from "marked";
 import yauzl from "yauzl";
 import { HttpError } from "../middleware/error";
 import { cleanArticle, htmlToText, textToHtml } from "./extract";
+import { pptToHtml } from "./ppt";
 import { isPdf } from "./pdf";
 
 // Uploaded documents (POST /api/rooms/file) turned into the same block HTML as a link room:
@@ -37,6 +38,7 @@ export const CONTENT_TYPES: Record<FileFormat, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ppt: "application/vnd.ms-powerpoint",
   md: "text/markdown",
   txt: "text/plain",
 };
@@ -58,7 +60,22 @@ function extension(fileName: string) {
 export async function parseFile(buf: Buffer, fileName: string): Promise<ParsedFile> {
   const ext = extension(fileName);
 
-  if (["doc", "ppt", "pps", "pot", "dot"].includes(ext) || buf.subarray(0, 8).equals(OLE_MAGIC)) {
+  if (buf.subarray(0, 8).equals(OLE_MAGIC) || ["ppt", "pps"].includes(ext)) {
+    if (buf.subarray(0, 8).equals(OLE_MAGIC)) {
+      try {
+        const html = pptToHtml(buf);
+        return { format: "ppt", html: checkHtml(html) };
+      } catch (err) {
+        if (["ppt", "pps"].includes(ext)) throw err;
+        throw new HttpError(400, LEGACY_OFFICE);
+      }
+    }
+    if (["ppt", "pps"].includes(ext)) {
+      throw new HttpError(400, `That file isn't a valid .${ext} file.`);
+    }
+  }
+
+  if (["doc", "pot", "dot"].includes(ext)) {
     throw new HttpError(400, LEGACY_OFFICE);
   }
   if (isPdf(buf)) return { format: "pdf" };
@@ -80,7 +97,7 @@ export async function parseFile(buf: Buffer, fileName: string): Promise<ParsedFi
   }
 
   // Named like a format we read, but the bytes say otherwise.
-  if (["pdf", "docx", "pptx"].includes(ext)) throw new HttpError(400, `That file isn't a valid .${ext} file.`);
+  if (["pdf", "docx", "pptx", "ppt"].includes(ext)) throw new HttpError(400, `That file isn't a valid .${ext} file.`);
   throw new HttpError(400, UNSUPPORTED);
 }
 

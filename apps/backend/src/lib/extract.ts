@@ -4,6 +4,7 @@ import { Readability } from "@mozilla/readability";
 import DOMPurify from "isomorphic-dompurify";
 import { JSDOM } from "jsdom";
 import { HttpError } from "../middleware/error";
+import { scrapeWithPlaywright } from "./scraper-browser";
 
 // A table is one block: its rows and cells are not, so highlights and citations point at the table.
 const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, pre, figure, table";
@@ -230,9 +231,45 @@ export async function extractArticle(rawUrl: string) {
 }
 
 async function readArticle(start: URL) {
-  const { url, html } = await fetchPage(start);
-  const dom = new JSDOM(html, { url: url.href });
-  const article = new Readability(dom.window.document).parse();
+  let url = start;
+  let html = "";
+  let usedPlaywright = false;
+
+  try {
+    const page = await fetchPage(start);
+    url = page.url;
+    html = page.html;
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 400) throw err;
+    try {
+      const pw = await scrapeWithPlaywright(start);
+      url = new URL(pw.finalUrl);
+      html = pw.html;
+      usedPlaywright = true;
+    } catch (pwErr) {
+      // "Too busy" is worth saying; any other browser failure keeps the original error.
+      if (pwErr instanceof HttpError && pwErr.status === 503) throw pwErr;
+      throw err;
+    }
+  }
+
+  let dom = new JSDOM(html, { url: url.href });
+  let article = new Readability(dom.window.document).parse();
+
+  // If standard Readability failed on an SPA / dynamic page, invoke Playwright fallback
+  if ((!article?.content || (article.textContent ?? "").trim().length < MIN_TEXT_CHARS) && !usedPlaywright) {
+    try {
+      const pw = await scrapeWithPlaywright(start);
+      url = new URL(pw.finalUrl);
+      html = pw.html;
+      dom = new JSDOM(html, { url: url.href });
+      article = new Readability(dom.window.document).parse();
+    } catch (pwErr) {
+      if (pwErr instanceof HttpError && pwErr.status === 503) throw pwErr;
+      // Otherwise keep the original article result
+    }
+  }
+
   if (!article?.content || (article.textContent ?? "").trim().length < MIN_TEXT_CHARS) {
     throw new HttpError(422, UNREADABLE);
   }
