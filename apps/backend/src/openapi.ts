@@ -152,13 +152,16 @@ export const openApiDocument = createDocument({
       post: {
         tags: ["Rooms"],
         summary: "Create a room from a web page",
+        description:
+          "Fetches the page (10 s timeout, 5 MB limit, up to 5 redirects), extracts the article and sanitizes it. " +
+          "Hosts that are or resolve to a private address are refused, on every redirect hop.",
         security: bearer,
         requestBody: body(CreateLinkRoomRequest),
         responses: {
           ...roomCreated,
-          ...invalidInput,
+          "400": failure("Invalid URL: not http(s), or a private or local address"),
           ...needsVerifiedUser,
-          "422": failure("The page could not be read"),
+          "422": failure("The page could not be read: unknown host, error status, not HTML, too large or no article text"),
         },
       },
     },
