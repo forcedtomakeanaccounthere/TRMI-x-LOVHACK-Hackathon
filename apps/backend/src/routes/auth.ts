@@ -77,7 +77,7 @@ authRouter.post("/signup", authLimiter, async (req, res) => {
 
 // GET /api/auth/verify?token_hash=...&type=email
 // Target of the link in the "Confirm signup" email. Redirects back to the frontend.
-const VerifyQuery = z.object({
+export const VerifyQuery = z.object({
   token_hash: z.string().min(1),
   type: z.enum(["email", "signup"]).default("email"),
 });

@@ -29,7 +29,7 @@ Cursors, scroll and reactions go browser to browser over Supabase Realtime. High
 
 **To run locally, follow [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).** It uses a local Supabase in Docker and checks each step.
 
-To use a cloud Supabase project instead, requirements are Node 20+, Python 3.12+ and [uv](https://docs.astral.sh/uv/):
+To use a cloud Supabase project instead, requirements are Node 22.14+, Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 ```bash
 npm install              # all JS workspaces
@@ -90,6 +90,8 @@ npm run supabase:stop
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`. Its jobs are: lint and typecheck, unit, database + integration + e2e (one job that starts the local Supabase once), build, and ruff for the AI service. For branch protection, make **CI passed** the required check; it fails if any other job fails.
 
 ## API
+
+Interactive docs are generated when each service starts: backend at http://localhost:4000/docs (`/openapi.json`), AI service at http://localhost:8000/docs.
 
 | Method | Path | Service |
 | --- | --- | --- |
