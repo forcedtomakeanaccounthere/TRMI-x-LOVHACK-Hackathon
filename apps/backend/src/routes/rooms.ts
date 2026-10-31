@@ -25,12 +25,18 @@ const upload = multer({
 // POST /api/rooms/link  { url }
 roomsRouter.post("/link", requireAuth, async (req, res) => {
   const { url } = CreateLinkRoomRequest.parse(req.body);
-  const { title, html } = await extractArticle(url);
+  // source_url is where redirects ended up, so "open original" lands on the real page.
+  const article = await extractArticle(url);
   const id = nanoid(8);
 
-  const { error } = await supabaseAdmin()
-    .from("rooms")
-    .insert({ id, kind: "link", source_url: url, title, content_html: html, created_by: req.user!.id });
+  const { error } = await supabaseAdmin().from("rooms").insert({
+    id,
+    kind: "link",
+    source_url: article.url,
+    title: article.title,
+    content_html: article.html,
+    created_by: req.user!.id,
+  });
   if (error) throw error;
 
   res.status(201).json({ id } satisfies CreateRoomResponse);
@@ -39,6 +45,7 @@ roomsRouter.post("/link", requireAuth, async (req, res) => {
 // POST /api/rooms/text  { title?, text }: fallback when a site can't be read
 roomsRouter.post("/text", requireAuth, async (req, res) => {
   const { title, text } = CreateTextRoomRequest.parse(req.body);
+  if (!text.trim()) throw new HttpError(400, "Paste some text first");
   const id = nanoid(8);
 
   const { error } = await supabaseAdmin()
@@ -46,7 +53,7 @@ roomsRouter.post("/text", requireAuth, async (req, res) => {
     .insert({
       id,
       kind: "link",
-      title: title ?? "Pasted text",
+      title: title?.trim() || "Pasted text",
       content_html: textToHtml(text),
       created_by: req.user!.id,
     });
