@@ -15,7 +15,17 @@ import type {
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// Proposed contract for POST /api/rooms/:id/ask, until it lands in @linkroom/shared.
+export type AskRequest = {
+  question: string;
+  sources: string[]; // room ids of the documents to answer from
+  quote?: string | null; // the selected text an AI box was opened on
+  image?: string | null; // a lens snapshot as a JPEG data URL
+  history?: { role: "user" | "ai"; text: string }[];
+};
+export type AskResponse = { answer: string; citations: { room_id: string; block: string; quote: string }[] };
+
+const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
@@ -74,6 +84,24 @@ export const api = {
     form.append("file", file);
     return request<CreateRoomResponse>("/api/rooms/pdf", { method: "POST", body: form }, token);
   },
+
+  // PDF, DOCX, PPTX, Markdown or text; the backend detects the format from the bytes.
+  createFileRoom: (file: File, token: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<CreateRoomResponse>("/api/rooms/file", { method: "POST", body: form }, token);
+  },
+
+  // Proposed (CHECKLIST.md "Link rooms workspace"): turns a video's transcript into t{n} blocks.
+  createYoutubeRoom: (url: string, token: string) =>
+    request<CreateRoomResponse>("/api/rooms/youtube", json({ url }), token),
+
+  // Proposed: answers from the chosen documents' chunks, or from a snapshot image.
+  ask: (roomId: string, body: AskRequest) => request<AskResponse>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
+
+  // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
+  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
 
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.
