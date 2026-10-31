@@ -1,6 +1,13 @@
 import { lookup } from "node:dns/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addBlockIds, cleanArticle, extractArticle, isPrivateHost, textToHtml } from "../../src/lib/extract";
+import {
+  addBlockIds,
+  cleanArticle,
+  extractArticle,
+  isPrivateHost,
+  parseSrcset,
+  textToHtml,
+} from "../../src/lib/extract";
 import { HttpError } from "../../src/middleware/error";
 
 vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
@@ -27,6 +34,10 @@ describe("isPrivateHost", () => {
     "fe80::1",
     "::ffff:127.0.0.1",
     "[::ffff:10.0.0.1]",
+    // URL parsing turns [::ffff:127.0.0.1] into this hex form.
+    "[::ffff:7f00:1]",
+    "::ffff:a9fe:a9fe",
+    "64:ff9b::7f00:1",
   ])("blocks %s", (host) => {
     expect(isPrivateHost(host)).toBe(true);
   });
@@ -118,6 +129,24 @@ describe("extractArticle with a fetched page", () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
   });
 
+  it("resolves relative links and images against the page URL", async () => {
+    const body = "LinkRoom turns any link into a shared reading room for a group. ".repeat(12);
+    const page = `<html><head><title>Shared reading</title></head><body><article>
+      <h1>Shared reading</h1>
+      <p>${body}<a href="/wiki/Reading">relative link</a> and <a href="https://other.org/x">absolute link</a>.</p>
+      <p>${body}<img src="images/room.png" alt="room"><script>alert(1)</script></p>
+    </article></body></html>`;
+    fetchMock.mockResolvedValue(htmlResponse(page));
+
+    const { title, html } = await extractArticle("https://example.com/blog/post");
+
+    expect(title).toBe("Shared reading");
+    expect(html).toContain('<a href="https://example.com/wiki/Reading" target="_blank" rel="noopener noreferrer nofollow">');
+    expect(html).toContain('<a href="https://other.org/x" target="_blank" rel="noopener noreferrer nofollow">');
+    expect(html).toContain('src="https://example.com/blog/images/room.png"');
+    expect(html).not.toContain("<script");
+  });
+
   it("follows redirects and reports the final URL", async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 301, headers: { location: "/final" } }))
@@ -141,6 +170,40 @@ describe("extractArticle with a fetched page", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(["http://[::ffff:7f00:1]/", "http://[::ffff:127.0.0.1]/admin", "http://[64:ff9b::a9fe:a9fe]/"])(
+    "refuses the IPv6 form of a private IPv4 address: %s",
+    async (url) => {
+      await expect(extractArticle(url)).rejects.toMatchObject({ status: 400, message: "Invalid URL" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns 422, not 500, for a redirect with a broken Location", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "http://[" } }));
+    await expect(extractArticle("https://example.com/")).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("returns 422 when DNS outlasts the request deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      mockLookup.mockReturnValue(new Promise(() => {}));
+      const result = expect(extractArticle("https://slow-dns.example/")).rejects.toMatchObject({ status: 422 });
+      await vi.advanceTimersByTimeAsync(10_001);
+      await result;
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the body of an error response", async () => {
+    const res = htmlResponse("gone", { status: 500 });
+    const cancel = vi.spyOn(res.body!, "cancel");
+    fetchMock.mockResolvedValue(res);
+    await expect(extractArticle("https://example.com/")).rejects.toMatchObject({ status: 422 });
+    expect(cancel).toHaveBeenCalled();
+  });
+
   it("gives up after too many redirects", async () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 302, headers: { location: "/loop" } }));
     await expect(extractArticle("https://example.com/")).rejects.toMatchObject({ status: 422 });
@@ -161,11 +224,35 @@ describe("extractArticle with a fetched page", () => {
 });
 
 describe("cleanArticle", () => {
-  it("drops page styles, forms and ids that could clash with the room UI", () => {
+  it("drops page styles and forms that could clash with the room UI", () => {
     const html = cleanArticle(
-      '<p id="x" class="fixed inset-0" style="position:fixed">a</p><style>p{}</style><form><input></form>',
+      '<p class="fixed inset-0" style="position:fixed">a</p><style>p{}</style><form><input></form>',
       "https://example.com/",
     );
     expect(html).toBe('<p data-block="b0">a</p>');
+  });
+
+  it("leaves in-page anchors and their targets working", () => {
+    const html = '<p><a href="#notes">jump</a></p><p id="notes"><a name="n1">notes</a></p>';
+    expect(cleanArticle(html, "https://example.com/post")).toBe(
+      '<p data-block="b0"><a href="#notes">jump</a></p><p id="notes" data-block="b1"><a name="n1">notes</a></p>',
+    );
+  });
+
+  it("keeps commas that are part of a srcset URL", () => {
+    const html = cleanArticle('<img src="a.png" srcset="images/a,b.png 1x, /c.png 2x">', "https://example.com/blog/");
+    expect(html).toContain('srcset="https://example.com/blog/images/a,b.png 1x, https://example.com/c.png 2x"');
+  });
+});
+
+describe("parseSrcset", () => {
+  it.each([
+    ["a.png 1x, b.png 2x", [{ url: "a.png", descriptor: "1x" }, { url: "b.png", descriptor: "2x" }]],
+    ["images/a,b.png 1x", [{ url: "images/a,b.png", descriptor: "1x" }]],
+    ["a.png,b.png 2x", [{ url: "a.png,b.png", descriptor: "2x" }]],
+    ["a.png, b.png", [{ url: "a.png", descriptor: "" }, { url: "b.png", descriptor: "" }]],
+    ["  a.png 480w ,  ", [{ url: "a.png", descriptor: "480w" }]],
+  ])("parses %j", (srcset, expected) => {
+    expect(parseSrcset(srcset)).toEqual(expected);
   });
 });

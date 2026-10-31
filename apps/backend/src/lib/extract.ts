@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { Readability } from "@mozilla/readability";
 import DOMPurify from "isomorphic-dompurify";
 import { JSDOM } from "jsdom";
@@ -22,30 +22,38 @@ const BROWSER_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
-const PRIVATE_HOST = [
-  /^localhost$/i,
-  /\.localhost$/i,
-  /^127\./,
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^169\.254\./,
-  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // carrier-grade NAT 100.64.0.0/10
-  /^0\./,
-  /^\[?::1?\]?$/, // ::1 and ::
-  /^\[?f[cd][0-9a-f]{2}:/i, // unique local fc00::/7
-  /^\[?fe[89ab][0-9a-f]:/i, // link-local fe80::/10
-];
+// BlockList also matches IPv4-mapped IPv6 (::ffff:7f00:1) against the IPv4 rules.
+const PRIVATE_IPS = new BlockList();
+for (const [net, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10], // carrier-grade NAT
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+] as const) {
+  PRIVATE_IPS.addSubnet(net, prefix, "ipv4");
+}
+for (const [net, prefix] of [
+  ["::", 96], // ::, ::1 and IPv4-compatible addresses
+  ["64:ff9b::", 96], // NAT64, wraps an IPv4 address
+  ["fc00::", 7], // unique local
+  ["fe80::", 10], // link-local
+] as const) {
+  PRIVATE_IPS.addSubnet(net, prefix, "ipv6");
+}
 
 export function isPrivateHost(hostname: string) {
-  // IPv4-mapped IPv6 (::ffff:127.0.0.1) is checked as the IPv4 address it wraps.
-  const mapped = /^\[?::ffff:(\d+\.\d+\.\d+\.\d+)\]?$/i.exec(hostname);
-  const host = mapped?.[1] ?? hostname;
-  return PRIVATE_HOST.some((re) => re.test(host));
+  const host = hostname.replace(/^\[|\]$/g, "");
+  const family = isIP(host);
+  if (family === 4) return PRIVATE_IPS.check(host, "ipv4");
+  if (family === 6) return PRIVATE_IPS.check(host, "ipv6");
+  return /^localhost$|\.localhost$/i.test(host);
 }
 
 // Rejects non-http(s) URLs and hosts that are, or resolve to, a private address (SSRF).
-export async function assertPublicUrl(url: URL) {
+export async function assertPublicUrl(url: URL, signal?: AbortSignal) {
   if (!["http:", "https:"].includes(url.protocol) || isPrivateHost(url.hostname)) {
     throw new HttpError(400, "Invalid URL");
   }
@@ -54,20 +62,41 @@ export async function assertPublicUrl(url: URL) {
 
   let addresses: { address: string }[];
   try {
-    addresses = await lookup(hostname, { all: true });
+    addresses = await withDeadline(lookup(hostname, { all: true }), signal);
   } catch {
     throw new HttpError(422, "We couldn't find that website. Check the link and try again.");
   }
   if (addresses.some(({ address }) => isPrivateHost(address))) throw new HttpError(400, "Invalid URL");
 }
 
+// dns.lookup takes no AbortSignal, so race it against the request's deadline.
+function withDeadline<T>(promise: Promise<T>, signal?: AbortSignal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 // Follows redirects by hand so every hop goes through assertPublicUrl.
+// One deadline covers DNS, every hop and reading the body.
 async function fetchPage(start: URL) {
-  const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new Error("timed out")), FETCH_TIMEOUT_MS);
+  try {
+    return await followRedirects(start, deadline.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function followRedirects(start: URL, signal: AbortSignal) {
   let url = start;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertPublicUrl(url);
+    await assertPublicUrl(url, signal);
 
     let res: Response;
     try {
@@ -79,11 +108,18 @@ async function fetchPage(start: URL) {
     const location = res.headers.get("location");
     if (res.status >= 300 && res.status < 400 && location) {
       await res.body?.cancel();
-      url = new URL(location, url);
+      try {
+        url = new URL(location, url);
+      } catch {
+        throw new HttpError(422, UNREADABLE);
+      }
       continue;
     }
 
-    if (!res.ok) throw new HttpError(422, UNREADABLE);
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new HttpError(422, UNREADABLE);
+    }
     const type = res.headers.get("content-type") ?? "";
     if (!/text\/html|application\/xhtml\+xml/i.test(type)) {
       await res.body?.cancel();
@@ -152,12 +188,16 @@ export function cleanArticle(html: string, baseUrl: string) {
   const safe = DOMPurify.sanitize(html, {
     FORBID_TAGS: ["style", "form", "input", "button", "select", "textarea", "iframe", "object", "embed"],
     // Page classes and inline styles could pick up our own CSS or overlay the room UI.
-    FORBID_ATTR: ["style", "class", "id"],
+    FORBID_ATTR: ["style", "class"],
   });
   const { document } = new JSDOM(`<body>${safe}</body>`, { url: baseUrl }).window;
 
-  for (const a of document.querySelectorAll("a")) {
-    const href = absolute(a.getAttribute("href"), baseUrl);
+  // Links open in a new tab so following one doesn't take the reader out of the room.
+  // In-page anchors (footnotes, "jump to") stay as they are.
+  for (const a of document.querySelectorAll("a[href]")) {
+    const raw = a.getAttribute("href") ?? "";
+    if (raw.startsWith("#")) continue;
+    const href = absolute(raw, baseUrl);
     if (href && /^(https?|mailto):/i.test(href)) {
       a.setAttribute("href", href);
       a.setAttribute("target", "_blank");
@@ -176,13 +216,8 @@ export function cleanArticle(html: string, baseUrl: string) {
     if (srcset) {
       el.setAttribute(
         "srcset",
-        srcset
-          .split(",")
-          .map((entry) => {
-            const [u, ...descriptor] = entry.trim().split(/\s+/);
-            return [absolute(u, baseUrl), ...descriptor].filter(Boolean).join(" ");
-          })
-          .filter(Boolean)
+        parseSrcset(srcset)
+          .map(({ url, descriptor }) => [absolute(url, baseUrl), descriptor].filter(Boolean).join(" "))
           .join(", "),
       );
     }
@@ -194,6 +229,31 @@ export function cleanArticle(html: string, baseUrl: string) {
 
   numberBlocks(document);
   return document.body.innerHTML;
+}
+
+// Splits a srcset into candidates. A URL may itself contain commas (a,b.png 1x), so a comma
+// only separates candidates after a descriptor or at the very end of a URL, as in the HTML spec.
+export function parseSrcset(srcset: string) {
+  const candidates: { url: string; descriptor: string }[] = [];
+  let i = 0;
+  while (i < srcset.length) {
+    while (i < srcset.length && /[\s,]/.test(srcset[i]!)) i++;
+    if (i >= srcset.length) break;
+
+    let start = i;
+    while (i < srcset.length && !/\s/.test(srcset[i]!)) i++;
+    let url = srcset.slice(start, i);
+    let descriptor = "";
+    if (url.endsWith(",")) {
+      url = url.replace(/,+$/, "");
+    } else {
+      start = i;
+      while (i < srcset.length && srcset[i] !== ",") i++;
+      descriptor = srcset.slice(start, i).trim();
+    }
+    if (url) candidates.push({ url, descriptor });
+  }
+  return candidates;
 }
 
 function absolute(value: string | null | undefined, baseUrl: string) {

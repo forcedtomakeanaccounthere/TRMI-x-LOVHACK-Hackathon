@@ -78,7 +78,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **BE**
 - [ ] Create the Supabase project (region closest to the team, e.g. Mumbai)
-- [ ] Run `supabase/migrations/0001_init.sql` then `0002_auth_and_phase1.sql` in the SQL editor *(in repo)*
+- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql` then `0003_comments_highlight_idx.sql` in the SQL editor *(in repo)*
   - tables `rooms`, `highlights`, `comments`, `recaps`; realtime publication; RLS (public select, anonymous insert on highlights and comments only)
   - `pdfs` bucket: public read, 20 MB limit, `application/pdf` only
   - length checks: quote ≤ 1,000, comment body ≤ 2,000, author name ≤ 40
@@ -112,14 +112,14 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 ## Phase 2: Link rooms (Sat 9 PM – Sun 1 AM IST) · P0
 
 **BE** (all in `apps/backend/src/lib/extract.ts` and `routes/rooms.ts`)
-- [ ] `isPrivateHost()` blocks `localhost`, `*.localhost`, `127.*`, `10.*`, `172.16–31.*`, `192.168.*`, `169.254.*`, `100.64/10`, `0.*`, `::1`, `::`, `fc00::/7`, `fe80::/10` and IPv4-mapped IPv6 *(in repo)*
+- [ ] `isPrivateHost()` blocks `localhost`, `*.localhost`, `127.*`, `10.*`, `172.16–31.*`, `192.168.*`, `169.254.*`, `100.64/10`, `0.*`, `::1`, `::`, `fc00::/7`, `fe80::/10`, NAT64 and IPv4-mapped IPv6 in any notation (checked with `net.BlockList`) *(in repo)*
 - [ ] `POST /api/rooms/link`: accept only `http`/`https`, reject private hosts, and reject hostnames whose DNS resolves to a private address *(in repo)*
 - [ ] Follow redirects by hand (max 5) and re-check every hop, so a redirect can't reach a private address *(in repo)*
-- [ ] Fetch with a browser-like User-Agent and a 10 s timeout; 422 on error status, non-HTML response or pages over 5 MB *(in repo)*
+- [ ] Fetch with a browser-like User-Agent and one 10 s deadline covering DNS, every redirect and the body; 422 on error status, non-HTML response or pages over 5 MB *(in repo)*
 - [ ] Run Readability on the HTML; return 422 with a friendly message if there is no content or under 200 characters of text (JS-only sites) *(in repo)*
-- [ ] Sanitize with DOMPurify; also drop `style`, `class`, `id`, forms and iframes so the page can't restyle or overlay the room *(in repo)*
+- [ ] Sanitize with DOMPurify; also drop `style`, `class`, forms and iframes so the page can't restyle or overlay the room *(in repo)*
 - [ ] `addBlockIds()`: add `data-block="b0"…` to `p, h1–h6, li, blockquote, pre, figure` *(in repo)*
-- [ ] Make relative image (`src`, `srcset`) and link URLs absolute; links open in a new tab with `rel="noopener noreferrer nofollow"`; `javascript:` links removed *(in repo)*
+- [ ] Make relative image (`src`, `srcset`) and link URLs absolute; `srcset` URLs may contain commas; links open in a new tab with `rel="noopener noreferrer nofollow"`, in-page `#` links stay as they are; `javascript:` links removed *(in repo)*
 - [ ] Insert the room with `nanoid(8)` and return `{ id }`; `source_url` is the final URL after redirects *(in repo)*
 - [ ] `POST /api/rooms/text`: create a room from pasted text (split by blank lines into `<p data-block>`); blank text is a 400 *(in repo)*
 - [ ] HTML-escape pasted text (`&`, `<`, `>`, `"`, `'`) before wrapping it in `<p>`, so it always shows as plain text *(in repo)*

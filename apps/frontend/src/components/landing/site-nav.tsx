@@ -4,7 +4,7 @@ import { ArrowUpRightIcon } from "@phosphor-icons/react";
 import { useLenis } from "lenis/react";
 import { AnimatePresence, motion, useMotionValueEvent, useScroll } from "motion/react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/brand/logo";
 import { EASE_OUT_EXPO } from "@/components/fx/reveal";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -29,12 +29,22 @@ export function SiteNav() {
   const session = useSession();
   const lenis = useLenis();
   const { scrollY } = useScroll();
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   useMotionValueEvent(scrollY, "change", (y) => setScrolled(y > 24));
 
+  // The open menu stops page scrolling. It only exists below md, so it closes if the window
+  // grows past that, and scrolling always resumes when it closes or the nav unmounts.
   useEffect(() => {
-    if (open) lenis?.stop();
-    else lenis?.start();
+    if (!open) return;
+    lenis?.stop();
+    const desktop = window.matchMedia("(min-width: 48rem)");
+    const closeOnDesktop = () => desktop.matches && setOpen(false);
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => {
+      desktop.removeEventListener("change", closeOnDesktop);
+      lenis?.start();
+    };
   }, [open, lenis]);
 
   return (
@@ -156,19 +166,28 @@ export function SiteNav() {
                 <ArrowUpRightIcon weight="light" className="size-3.5" />
               </span>
             </Link>
-            <Hamburger open={open} onToggle={() => setOpen((o) => !o)} />
+            <Hamburger ref={toggleRef} open={open} onToggle={() => setOpen((o) => !o)} />
           </div>
         </motion.nav>
       </header>
 
-      <MobileMenu open={open} onClose={() => setOpen(false)} signedIn={!!session} />
+      <MobileMenu open={open} onClose={() => setOpen(false)} signedIn={!!session} toggleRef={toggleRef} />
     </>
   );
 }
 
-function Hamburger({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+function Hamburger({
+  ref,
+  open,
+  onToggle,
+}: {
+  ref: RefObject<HTMLButtonElement | null>;
+  open: boolean;
+  onToggle: () => void;
+}) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onToggle}
       aria-label={open ? "Close menu" : "Open menu"}
@@ -200,7 +219,19 @@ const MOBILE_LINKS = [
   { href: "#inside", label: "Inside a room" },
 ];
 
-function MobileMenu({ open, onClose, signedIn }: { open: boolean; onClose: () => void; signedIn: boolean }) {
+function MobileMenu({
+  open,
+  onClose,
+  signedIn,
+  toggleRef,
+}: {
+  open: boolean;
+  onClose: () => void;
+  signedIn: boolean;
+  toggleRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -208,12 +239,30 @@ function MobileMenu({ open, onClose, signedIn }: { open: boolean; onClose: () =>
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // While open, the page behind the menu is inert, so Tab moves only between the menu and the
+  // header above it. Focus starts on the first link and returns to the toggle on close.
+  useEffect(() => {
+    const menu = menuRef.current;
+    if (!open || !menu) return;
+    const behind = Array.from(menu.parentElement?.children ?? []).filter(
+      (el): el is HTMLElement =>
+        el instanceof HTMLElement && el !== menu && !el.inert && !el.contains(toggleRef.current),
+    );
+    for (const el of behind) el.inert = true;
+    menu.querySelector<HTMLElement>("a")?.focus();
+    return () => {
+      for (const el of behind) el.inert = false;
+      toggleRef.current?.focus();
+    };
+  }, [open, toggleRef]);
+
   const links = [...MOBILE_LINKS, signedIn ? { href: "#hero", label: "New room" } : { href: "/login", label: "Sign in" }];
 
   return (
     <AnimatePresence>
       {open && (
         <motion.div
+          ref={menuRef}
           key="mobile-menu"
           initial={{ opacity: 0, backdropFilter: "blur(0px)" }}
           animate={{ opacity: 1, backdropFilter: "blur(28px)" }}

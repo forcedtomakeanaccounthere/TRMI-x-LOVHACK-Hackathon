@@ -123,7 +123,8 @@ export const openApiDocument = createDocument({
         responses: {
           "200": reply("New session", AuthSession),
           ...invalidInput,
-          "401": failure("Session expired"),
+          "401": failure("Session expired: the refresh token was rejected, so sign in again"),
+          "503": failure("Auth is temporarily unavailable: keep the refresh token and retry"),
         },
       },
     },
