@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AuthSession,
+  RecapRequest,
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
   LoginRequest,
@@ -179,5 +180,18 @@ describe("room contracts", () => {
     it("rejects a body of only whitespace", () => {
       expect(NewComment.safeParse({ ...comment, body: " \n\t " }).success).toBe(false);
     });
+  });
+});
+
+describe("RecapRequest", () => {
+  it("trims the name and allows up to 40 characters", () => {
+    expect(RecapRequest.parse({ name: "  Priya " })).toEqual({ name: "Priya" });
+    expect(RecapRequest.parse({ name: "x".repeat(40) }).name).toHaveLength(40);
+    expect(RecapRequest.safeParse({ name: "x".repeat(41) }).success).toBe(false);
+  });
+
+  it("treats a missing or blank name as none", () => {
+    expect(RecapRequest.parse({})).toEqual({ name: undefined });
+    expect(RecapRequest.parse({ name: " \n\t " })).toEqual({ name: undefined });
   });
 });

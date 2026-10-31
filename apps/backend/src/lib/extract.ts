@@ -282,6 +282,19 @@ export function textToHtml(text: string) {
   return addBlockIds(document.body.innerHTML);
 }
 
+// Plain text of a room's HTML for the AI: one paragraph per top-level block, entities decoded and
+// whitespace squeezed. Blocks nested in another block (a <p> in a <blockquote>) are read once.
+export function htmlToText(html: string) {
+  const { document } = new JSDOM(`<body>${html}</body>`).window;
+  const blocks = [...document.querySelectorAll("[data-block]")].filter(
+    (el) => !el.parentElement?.closest("[data-block]"),
+  );
+  return (blocks.length ? blocks : [document.body])
+    .map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 // Every block gets a stable id ("b0", "b1", ...) used to anchor cursors and highlights.
 export function addBlockIds(html: string) {
   const { document } = new JSDOM(`<body>${html}</body>`).window;

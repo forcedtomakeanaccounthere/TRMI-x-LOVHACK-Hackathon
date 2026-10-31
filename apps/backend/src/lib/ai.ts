@@ -12,21 +12,31 @@ const UNAVAILABLE = "The AI couldn't answer right now. Try again in a moment.";
  */
 export async function callAi<T>(path: string, body: unknown, schema: z.ZodType<T>, timeoutMs: number): Promise<T> {
   const requestId = randomUUID();
-  let res: Response;
-  try {
-    res = await fetch(`${env.AI_SERVICE_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Internal-Token": env.AI_INTERNAL_TOKEN ?? "",
-        "X-Request-Id": requestId,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    console.error(`AI ${path} [${requestId}] unreachable:`, err);
-    throw new HttpError(502, UNAVAILABLE);
+  // One deadline for both attempts: a retry gets only the time the first one left.
+  const signal = AbortSignal.timeout(timeoutMs);
+  let res: Response | undefined;
+  for (let attempt = 1; !res; attempt++) {
+    try {
+      res = await fetch(`${env.AI_SERVICE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Internal-Token": env.AI_INTERNAL_TOKEN ?? "",
+          "X-Request-Id": requestId,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (err) {
+      // A refused or dropped connection (a restart, a cold start) is worth one more try. A timeout
+      // is not: it has used up the time already.
+      if (attempt === 1 && !signal.aborted) {
+        console.warn(`AI ${path} [${requestId}] connection failed, retrying once:`, err);
+        continue;
+      }
+      console.error(`AI ${path} [${requestId}] unreachable:`, err);
+      throw new HttpError(502, UNAVAILABLE);
+    }
   }
 
   if (!res.ok) {

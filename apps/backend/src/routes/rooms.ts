@@ -4,6 +4,7 @@ import {
   CreateTextRoomRequest,
   DashboardQuery,
   RecapData,
+  RecapRequest,
   RoomDetail,
   UpdateRoomRequest,
   type CreateRoomResponse,
@@ -18,7 +19,7 @@ import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
-import { extractArticle, textToHtml } from "../lib/extract";
+import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth, requireAuth } from "../middleware/auth";
@@ -446,46 +447,81 @@ async function movePdf(path: string, hide: boolean) {
   if (error) throw error;
 }
 
-// POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap. Guests can
-// ask too; a signed-in caller is recorded as the author in the history.
+// One recap per room at a time, and a pause between recaps, so a burst of clicks costs one AI call.
+// The lock lives in this process: right for one backend instance; several would need a database lock.
+const RECAP_COOLDOWN_MS = 30_000;
+const recapsInFlight = new Set<string>();
+
+// POST /api/rooms/:id/recap  { name? }: gathers room data, asks the AI service, stores the recap.
+// Guests can ask too; a signed-in caller is recorded as the author in the history.
 // The insert reaches every client through Supabase Realtime.
 roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
-  const { id } = req.params;
-  const db = supabaseAdmin();
+  const id = req.params.id as string;
+  const { name } = RecapRequest.parse(req.body ?? {});
+  const requestedBy = name ?? (req.user?.name.trim().slice(0, 40) || null);
 
-  const [room, highlights, comments] = await Promise.all([
-    db.from("rooms").select("title, content_html, content_text, status").eq("id", id).single(),
-    db.from("highlights").select("author_name, block_id, quote").eq("room_id", id),
-    db.from("comments").select("author_name, highlight_id, body").eq("room_id", id),
-  ]);
-  if (room.error || room.data.status === "deleted") throw new HttpError(404, "Room not found");
-  if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
+  // Taken before any read: a second click can't pass the cooldown on a read made before the
+  // first recap was saved.
+  if (recapsInFlight.has(id)) throw new HttpError(409, "A recap for this room is already on its way.");
+  recapsInFlight.add(id);
+  try {
+    const db = supabaseAdmin();
+    const [room, highlights, comments, lastRecap] = await Promise.all([
+      db.from("rooms").select("title, content_html, content_text, status").eq("id", id).single(),
+      db.from("highlights").select("author_name, block_id, quote").eq("room_id", id),
+      db.from("comments").select("author_name, highlight_id, body").eq("room_id", id),
+      db
+        .from("recaps")
+        .select("created_at")
+        .eq("room_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    if (room.error || room.data.status === "deleted") throw new HttpError(404, "Room not found");
+    if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
+    if (highlights.error) throw highlights.error;
+    if (comments.error) throw comments.error;
+    if (lastRecap.error) throw lastRecap.error;
 
-  // apps/ai stops trying providers after 100 s, so it answers before this gives up.
-  const data = await callAi(
-    "/recap",
-    {
-      title: room.data.title ?? "",
-      // PDF rooms have no HTML: their text was extracted on upload.
-      text: room.data.content_text ?? stripHtml(room.data.content_html ?? ""),
-      highlights: highlights.data ?? [],
-      comments: comments.data ?? [],
-    },
-    RecapData,
-    120_000,
-  );
-  const { error } = await db.from("recaps").insert({ room_id: id, data });
-  if (error) throw error;
+    // The recap is about what the group picked out, so there is nothing to recap yet.
+    if (!highlights.data.length) {
+      throw new HttpError(422, "Highlight a few things first, then ask for a recap.");
+    }
 
-  // A history row is nice to have but never worth failing the recap for.
-  const { error: historyError } = await db
-    .from("ai_queries")
-    .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "recap", response: data });
-  if (historyError) console.error("[rooms] could not record the recap query", historyError);
+    const waitMs = lastRecap.data
+      ? RECAP_COOLDOWN_MS - (Date.now() - Date.parse(lastRecap.data.created_at as string))
+      : 0;
+    if (waitMs > 0) {
+      const seconds = Math.ceil(waitMs / 1000);
+      res.set("Retry-After", String(seconds));
+      throw new HttpError(429, `A recap was made moments ago. Try again in ${seconds} s.`);
+    }
 
-  res.json(data);
+    // apps/ai stops trying providers after 100 s, so it answers before this gives up.
+    const data = await callAi(
+      "/recap",
+      {
+        title: room.data.title ?? "",
+        // PDF rooms have no HTML: their text was extracted on upload.
+        text: room.data.content_text ?? htmlToText(room.data.content_html ?? ""),
+        highlights: highlights.data,
+        comments: comments.data,
+      },
+      RecapData,
+      120_000,
+    );
+    const { error } = await db.from("recaps").insert({ room_id: id, data, requested_by: requestedBy });
+    if (error) throw error;
+
+    // A history row is nice to have but never worth failing the recap for.
+    const { error: historyError } = await db
+      .from("ai_queries")
+      .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "recap", response: data });
+    if (historyError) console.error("[rooms] could not record the recap query", historyError);
+
+    res.json(data);
+  } finally {
+    recapsInFlight.delete(id);
+  }
 });
-
-function stripHtml(html: string) {
-  return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}

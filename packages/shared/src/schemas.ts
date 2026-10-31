@@ -83,9 +83,22 @@ export const Recap = z.object({
   id: z.string().uuid(),
   room_id: z.string(),
   data: RecapData,
+  requested_by: z.string().nullable(), // "Recapped by …"; see 0009_recap_requested_by.sql
   created_at: z.string(),
 });
 export type Recap = z.infer<typeof Recap>;
+
+// POST /api/rooms/:id/recap. The name shown as "Recapped by …". Optional, since guests may not have
+// typed one yet; a blank name counts as none.
+export const RecapRequest = z.object({
+  name: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .transform((name) => name || undefined),
+});
+export type RecapRequest = z.infer<typeof RecapRequest>;
 
 // --- API contracts (apps/backend) ---
 

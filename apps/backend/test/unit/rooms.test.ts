@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 const USER = "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f";
 const OTHER = "11111111-1111-4111-8111-111111111111";
@@ -648,42 +648,158 @@ describe("DELETE /api/rooms/:id and POST /api/rooms/:id/restore", () => {
 });
 
 describe("POST /api/rooms/:id/recap", () => {
-  const recap = () => request(app).post("/api/rooms/room0001/recap");
+  const recap = (body?: object) => {
+    const req = request(app).post("/api/rooms/room0001/recap");
+    return body ? req.send(body) : req;
+  };
+  const answer = {
+    one_line_summary: "s",
+    key_points: [],
+    what_the_group_cared_about: [],
+    disagreements: [],
+    open_questions: [],
+    next_steps: [],
+  };
+  const room = (over = {}) => ({ title: "x", content_html: "", content_text: null, status: "running", ...over });
+  const highlight = { author_name: "Ana", block_id: "b0", quote: "q" };
+  const secondsAgo = (s: number) => ({ data: { created_at: new Date(Date.now() - s * 1000).toISOString() } });
+  let fetchSpy: MockInstance<typeof fetch>;
+  const aiCalls = () => fetchSpy.mock.calls.filter(([url]) => String(url).endsWith("/recap"));
+  const aiBody = (n = 0) => JSON.parse(String(aiCalls()[n]![1]!.body)) as { text: string; highlights: unknown[] };
+
+  // A room that is ready for a recap: running, one highlight, no recap yet.
+  beforeEach(() => {
+    results.rooms = [{ data: room() }];
+    results.highlights = [{ data: [highlight] }];
+    results.comments = [{ data: [] }];
+    results.recaps = [{ data: null }];
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(answer));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("answers 404 for a deleted room and 409 for an archived one, before calling the AI", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    results.rooms = [{ data: { title: "x", content_html: "", status: "deleted" } }];
+    results.rooms = [{ data: room({ status: "deleted" }) }];
     expect((await recap()).status).toBe(404);
 
-    results.rooms = [{ data: { title: "x", content_html: "", status: "archived" } }];
+    results.rooms = [{ data: room({ status: "archived" }) }];
+    results.recaps = [{ data: null }];
     expect((await recap()).status).toBe(409);
 
-    const aiCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith("/recap"));
-    expect(aiCalls).toEqual([]);
-    fetchSpy.mockRestore();
+    expect(aiCalls()).toEqual([]);
+  });
+
+  it("answers 422 when nothing is highlighted yet, without calling the AI", async () => {
+    results.highlights = [{ data: [] }];
+    const res = await recap();
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("Highlight a few things first, then ask for a recap.");
+    expect(aiCalls()).toEqual([]);
+  });
+
+  it("answers 429 with Retry-After within 30 s of the last recap, without calling the AI", async () => {
+    results.recaps = [secondsAgo(10)];
+    const res = await recap();
+    expect(res.status).toBe(429);
+    expect(Number(res.headers["retry-after"])).toBeGreaterThanOrEqual(19);
+    expect(Number(res.headers["retry-after"])).toBeLessThanOrEqual(20);
+    expect(aiCalls()).toEqual([]);
+    expect(called("recaps", "insert")).toEqual([]);
+  });
+
+  it("makes a new recap once 30 s have passed", async () => {
+    results.recaps = [secondsAgo(31)];
+    expect((await recap()).status).toBe(200);
+    expect(aiCalls()).toHaveLength(1);
+  });
+
+  it("answers 409 to a second request while the first is still with the AI, then frees the room", async () => {
+    let release!: () => void;
+    fetchSpy.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (release = () => resolve(Response.json(answer)))),
+    );
+
+    const first = recap().then((r) => r);
+    await vi.waitFor(() => expect(aiCalls()).toHaveLength(1));
+    const second = await recap();
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe("A recap for this room is already on its way.");
+
+    release();
+    expect((await first).status).toBe(200);
+    expect(aiCalls()).toHaveLength(1);
+
+    // The lock is gone: the next request reads the room again (and meets the cooldown).
+    results.rooms = [{ data: room() }];
+    results.highlights = [{ data: [highlight] }];
+    results.recaps = [secondsAgo(1)];
+    expect((await recap()).status).toBe(429);
+  });
+
+  it("frees the room when the AI fails", async () => {
+    fetchSpy.mockImplementationOnce(async () => Response.json({ detail: "All AI providers failed" }, { status: 502 }));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await recap()).status).toBe(502);
+
+    results.rooms = [{ data: room() }];
+    results.highlights = [{ data: [highlight] }];
+    results.recaps = [{ data: null }];
+    expect((await recap()).status).toBe(200);
+  });
+
+  it("sends the AI the room's text one paragraph per block, with entities decoded", async () => {
+    results.rooms = [
+      {
+        data: room({
+          content_html:
+            '<h1 data-block="b0">Title</h1><p data-block="b1">Fish &amp; chips</p>' +
+            '<blockquote data-block="b2"><p data-block="b3">Quoted</p></blockquote>',
+        }),
+      },
+    ];
+    expect((await recap()).status).toBe(200);
+    expect(aiBody().text).toBe("Title\n\nFish & chips\n\nQuoted");
+    expect(aiBody().highlights).toEqual([highlight]);
+  });
+
+  it("sends a PDF room's extracted text as it is", async () => {
+    results.rooms = [{ data: room({ content_html: null, content_text: "[Page 1] Hello" }) }];
+    expect((await recap()).status).toBe(200);
+    expect(aiBody().text).toBe("[Page 1] Hello");
+  });
+
+  describe("requested_by", () => {
+    const saved = () => (called("recaps", "insert")[0]?.[0] as { requested_by: string | null }).requested_by;
+
+    it("saves the name the caller sent, trimmed", async () => {
+      expect((await recap({ name: "  Priya  " })).status).toBe(200);
+      expect(saved()).toBe("Priya");
+    });
+
+    it("falls back to a signed-in caller's name", async () => {
+      expect((await recap().set("Authorization", "Bearer token")).status).toBe(200);
+      expect(saved()).toBe("a"); // the mock user has no name, so their email prefix
+    });
+
+    it("is null for a guest who sent no name, or a blank one", async () => {
+      expect((await recap()).status).toBe(200);
+      expect(saved()).toBeNull();
+
+      results.rooms = [{ data: room() }];
+      results.highlights = [{ data: [highlight] }];
+      results.recaps = [{ data: null }];
+      expect((await recap({ name: "   " })).status).toBe(200);
+      expect((called("recaps", "insert")[1]?.[0] as { requested_by: string | null }).requested_by).toBeNull();
+    });
+
+    it("answers 400 for a name over 40 characters", async () => {
+      expect((await recap({ name: "x".repeat(41) })).status).toBe(400);
+      expect(aiCalls()).toEqual([]);
+    });
   });
 
   describe("recap history", () => {
-    const answer = {
-      one_line_summary: "s",
-      key_points: [],
-      what_the_group_cared_about: [],
-      disagreements: [],
-      open_questions: [],
-      next_steps: [],
-    };
-
-    beforeEach(() => {
-      results.rooms = [{ data: { title: "x", content_html: "", content_text: null, status: "running" } }];
-      results.highlights = [{ data: [] }];
-      results.comments = [{ data: [] }];
-      vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(answer));
-    });
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
     it("records a signed-in caller as the author", async () => {
       expect((await recap().set("Authorization", "Bearer token")).status).toBe(200);
       expect(called("ai_queries", "insert")[0]?.[0]).toMatchObject({ user_id: USER, kind: "recap" });

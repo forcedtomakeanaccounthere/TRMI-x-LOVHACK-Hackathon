@@ -17,6 +17,7 @@ import {
   ParticipantsResponse as ParticipantsResponseSchema,
   Profile as ProfileSchema,
   RecapData as RecapDataSchema,
+  RecapRequest,
   RefreshRequest,
   ResendVerificationRequest,
   RoomDetail as RoomDetailSchema,
@@ -461,12 +462,22 @@ export const openApiDocument = createDocument({
         summary: "Generate an AI recap of a room",
         description:
           "The stored recap reaches every client through Supabase Realtime. Guests can ask for one; " +
-          "with a bearer token the caller is recorded in the recap history.",
+          "with a bearer token the caller is recorded in the recap history. `name` is saved as " +
+          "`requested_by` (\"Recapped by …\"); without it, a signed-in caller's name is used.",
         requestParams: { path: roomId },
+        requestBody: { required: false, ...json(RecapRequest) },
         responses: {
           "200": reply("The recap", RecapData),
+          ...invalidInput,
           "404": failure("Room not found or deleted"),
-          "409": failure("The room is archived"),
+          "409": failure("The room is archived, or a recap for it is already being made"),
+          "422": failure("Nothing is highlighted yet, so there is nothing to recap"),
+          "429": {
+            ...failure("A recap was made in the last 30 s"),
+            headers: {
+              "Retry-After": { description: "Seconds until the next recap is allowed", schema: { type: "integer" } },
+            },
+          },
           "502": failure("The AI service failed, timed out or returned an unexpected shape"),
           "503": failure("No AI provider is configured"),
         },
