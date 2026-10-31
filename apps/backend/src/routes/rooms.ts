@@ -19,6 +19,7 @@ import { nanoid } from "nanoid";
 import { env } from "../env";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, textToHtml } from "../lib/extract";
+import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -27,7 +28,9 @@ export const roomsRouter = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: MAX_PDF_BYTES, files: 1 },
+  // Browsers send file names as raw UTF-8; multer's latin1 default garbles names like "résumé.pdf".
+  defParamCharset: "utf8",
 });
 
 // Creating a room needs a verified account; joining and reading a room stays open to guests.
@@ -72,10 +75,13 @@ roomsRouter.post("/text", requireAuth, async (req, res) => {
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
-// POST /api/rooms/pdf  multipart field "file"
+// POST /api/rooms/pdf  multipart field "file" (over 20 MB is a 413, see middleware/error.ts)
 roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) => {
   const file = req.file;
-  if (!file || file.mimetype !== "application/pdf") throw new HttpError(400, "A PDF file is required");
+  if (!file) throw new HttpError(400, "A PDF file is required");
+  if (!isPdf(file.buffer)) throw new HttpError(400, "That file is not a PDF");
+  // Before the upload, so a file pdf.js can't open never gets a room. Also the text for the recap.
+  const contentText = await extractPdfText(file.buffer);
 
   const id = nanoid(8);
   const pdfPath = `${id}.pdf`;
@@ -86,10 +92,21 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
     .upload(pdfPath, file.buffer, { contentType: "application/pdf" });
   if (uploadError) throw uploadError;
 
-  const { error } = await db
-    .from("rooms")
-    .insert({ id, kind: "pdf", title: file.originalname, pdf_path: pdfPath, created_by: req.user!.id });
-  if (error) throw error;
+  const { error } = await db.from("rooms").insert({
+    id,
+    kind: "pdf",
+    title: file.originalname.trim().slice(0, 200) || "Untitled PDF",
+    pdf_path: pdfPath,
+    content_text: contentText,
+    created_by: req.user!.id,
+  });
+  if (error) {
+    // No room points at the file, so don't leave it in the public bucket.
+    const { error: cleanupError } = await db.storage.from("pdfs").remove([pdfPath]);
+    // Logged with the path so the orphaned file can be found and removed by hand.
+    if (cleanupError) console.error(`Could not remove orphaned PDF ${pdfPath}:`, cleanupError);
+    throw error;
+  }
 
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
@@ -431,7 +448,7 @@ roomsRouter.post("/:id/recap", async (req, res) => {
   const db = supabaseAdmin();
 
   const [room, highlights, comments] = await Promise.all([
-    db.from("rooms").select("title, content_html, status").eq("id", id).single(),
+    db.from("rooms").select("title, content_html, content_text, status").eq("id", id).single(),
     db.from("highlights").select("author_name, block_id, quote").eq("room_id", id),
     db.from("comments").select("author_name, highlight_id, body").eq("room_id", id),
   ]);
@@ -443,7 +460,8 @@ roomsRouter.post("/:id/recap", async (req, res) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       title: room.data.title ?? "",
-      text: stripHtml(room.data.content_html ?? ""),
+      // PDF rooms have no HTML: their text was extracted on upload.
+      text: room.data.content_text ?? stripHtml(room.data.content_html ?? ""),
       highlights: highlights.data ?? [],
       comments: comments.data ?? [],
     }),

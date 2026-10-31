@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makePdf } from "../support/pdf";
 import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
 
 let supabase: TestSupabase;
@@ -391,7 +392,7 @@ describe("DELETE /api/rooms/:id and POST /api/rooms/:id/restore", () => {
     const res = await request(app)
       .post("/api/rooms/pdf")
       .set(auth(owner))
-      .attach("file", Buffer.from("%PDF-1.4 test"), { filename: "paper.pdf", contentType: "application/pdf" });
+      .attach("file", makePdf(["test"]), { filename: "paper.pdf", contentType: "application/pdf" });
     expect(res.status).toBe(201);
     const { id } = res.body as { id: string };
     const download = (bucket: string) => fetch(`${supabase.url}/storage/v1/object/public/${bucket}/${id}.pdf`);
