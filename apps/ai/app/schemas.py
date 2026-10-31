@@ -244,3 +244,92 @@ class QuizQuestion(BaseModel):
 
 class QuizData(BaseModel):
     questions: list[QuizQuestion]
+
+
+# --- Study tools: quiz, flashcards, mind map and infographic from one or more documents ---
+# Shapes must match packages/shared/src/schemas.ts (Study*).
+
+MAX_STUDY_DOCUMENTS = 20
+
+
+class StudyDocument(BaseModel):
+    # The room id, so every generated item can say which document it came from.
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(max_length=300)
+    text: Annotated[str, BeforeValidator(lambda v: v[:MAX_TEXT_CHARS] if isinstance(v, str) else v)]
+
+
+class StudyRequest(BaseModel):
+    kind: Literal["quiz", "flashcards", "mindmap", "infographic"]
+    documents: list[StudyDocument] = Field(min_length=1, max_length=MAX_STUDY_DOCUMENTS)
+    # How many questions or cards; ignored by mind maps and infographics.
+    count: int = Field(default=10, ge=3, le=30)
+    # Optional topic to focus on, e.g. "chapter 3" or "definitions".
+    focus: str | None = Field(default=None, max_length=200)
+
+
+class StudyQuizQuestion(BaseModel):
+    question: str
+    options: list[str]
+    answer_index: int
+    explanation: str
+    source_id: str | None = None
+
+
+class StudyQuizData(BaseModel):
+    kind: Literal["quiz"] = "quiz"
+    title: str
+    questions: list[StudyQuizQuestion]
+
+
+class StudyFlashcard(BaseModel):
+    front: str
+    back: str
+    source_id: str | None = None
+
+
+class StudyFlashcardsData(BaseModel):
+    kind: Literal["flashcards"] = "flashcards"
+    title: str
+    cards: list[StudyFlashcard]
+
+
+class StudyMindMapNode(BaseModel):
+    # Flat list with parent links: recursive JSON schemas trip up several providers.
+    id: str
+    label: str
+    parent_id: str | None = None
+    source_id: str | None = None
+
+
+class StudyMindMapData(BaseModel):
+    kind: Literal["mindmap"] = "mindmap"
+    title: str
+    nodes: list[StudyMindMapNode]
+
+
+class StudyInfographicStat(BaseModel):
+    label: str
+    value: str
+    source_id: str | None = None
+
+
+class StudyInfographicSection(BaseModel):
+    heading: str
+    points: list[str]
+    source_id: str | None = None
+
+
+class StudyInfographicData(BaseModel):
+    kind: Literal["infographic"] = "infographic"
+    title: str
+    subtitle: str
+    stats: list[StudyInfographicStat]
+    sections: list[StudyInfographicSection]
+    key_takeaway: str
+
+
+StudyData = Annotated[
+    StudyQuizData | StudyFlashcardsData | StudyMindMapData | StudyInfographicData,
+    Field(discriminator="kind"),
+]

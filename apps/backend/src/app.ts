@@ -11,6 +11,7 @@ import { groupsRouter } from "./routes/groups";
 import { healthRouter } from "./routes/health";
 import { meRouter } from "./routes/me";
 import { roomsRouter } from "./routes/rooms";
+import { studyRouter } from "./routes/study";
 import { usersRouter } from "./routes/users";
 
 // Every API router, by mount path. test/unit/openapi.test.ts checks each route is documented.
@@ -20,6 +21,7 @@ export const apiRouters = {
   "/api/me": meRouter,
   "/api/rooms": roomsRouter,
   "/api/groups": groupsRouter,
+  "/api/study": studyRouter,
   "/api/users": usersRouter,
 };
 

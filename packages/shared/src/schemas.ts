@@ -533,3 +533,111 @@ export const QuizQuestion = z.object({
 });
 export const QuizResponse = z.object({ questions: z.array(QuizQuestion) });
 export type QuizResponse = z.infer<typeof QuizResponse>;
+
+// --- Study tools (apps/backend /api/study, apps/ai /study) ---
+// A quiz, flashcards, a mind map or an infographic made by the AI from one or more documents (rooms).
+// Output shapes must match apps/ai/app/schemas.py. source_id is the room an item came from, or null.
+
+export const StudyKind = z.enum(["quiz", "flashcards", "mindmap", "infographic"]);
+export type StudyKind = z.infer<typeof StudyKind>;
+
+// The most documents one study set can draw on. "Select all" uses the most recently active ones.
+export const MAX_STUDY_DOCUMENTS = 20;
+
+const SourceId = z.string().nullable();
+
+export const StudyQuizData = z.object({
+  kind: z.literal("quiz"),
+  title: z.string(),
+  questions: z.array(
+    z.object({
+      question: z.string(),
+      options: z.array(z.string()),
+      answer_index: z.number().int(),
+      explanation: z.string(),
+      source_id: SourceId,
+    }),
+  ),
+});
+export type StudyQuizData = z.infer<typeof StudyQuizData>;
+
+export const StudyFlashcardsData = z.object({
+  kind: z.literal("flashcards"),
+  title: z.string(),
+  cards: z.array(z.object({ front: z.string(), back: z.string(), source_id: SourceId })),
+});
+export type StudyFlashcardsData = z.infer<typeof StudyFlashcardsData>;
+
+// Flat list: nodes[0] is the root (parent_id null); every other node names its parent.
+export const StudyMindMapData = z.object({
+  kind: z.literal("mindmap"),
+  title: z.string(),
+  nodes: z.array(z.object({ id: z.string(), label: z.string(), parent_id: z.string().nullable(), source_id: SourceId })),
+});
+export type StudyMindMapData = z.infer<typeof StudyMindMapData>;
+
+export const StudyInfographicData = z.object({
+  kind: z.literal("infographic"),
+  title: z.string(),
+  subtitle: z.string(),
+  stats: z.array(z.object({ label: z.string(), value: z.string(), source_id: SourceId })),
+  sections: z.array(z.object({ heading: z.string(), points: z.array(z.string()), source_id: SourceId })),
+  key_takeaway: z.string(),
+});
+export type StudyInfographicData = z.infer<typeof StudyInfographicData>;
+
+export const StudyData = z.discriminatedUnion("kind", [StudyQuizData, StudyFlashcardsData, StudyMindMapData, StudyInfographicData]);
+export type StudyData = z.infer<typeof StudyData>;
+
+// POST /api/study. Pick the documents with `all: true` (optionally inside one project, `group_id`)
+// or by listing `room_ids`; exactly one of the two.
+export const CreateStudyRequest = z
+  .object({
+    kind: StudyKind,
+    all: z.boolean().optional(),
+    room_ids: z.array(z.string().min(1).max(64)).min(1).max(MAX_STUDY_DOCUMENTS).optional(),
+    group_id: z.string().uuid().optional(),
+    count: z.number().int().min(3).max(30).optional(), // questions or cards; default 10
+    focus: z.string().trim().max(200).optional(),
+  })
+  .refine((body) => (body.all === true) !== Boolean(body.room_ids), {
+    message: "Choose the documents: send all: true or a list of room_ids",
+  })
+  .refine((body) => !body.group_id || body.all === true, {
+    message: "group_id only goes with all: true",
+    path: ["group_id"],
+  });
+export type CreateStudyRequest = z.infer<typeof CreateStudyRequest>;
+
+// GET /api/study/sources: the documents a user can pick from.
+export const StudySourcesQuery = z.object({ group_id: z.string().uuid().optional() });
+export type StudySourcesQuery = z.infer<typeof StudySourcesQuery>;
+
+export const StudySource = z.object({
+  id: z.string(),
+  kind: RoomKind,
+  title: z.string().nullable(),
+  role: z.enum(["owner", "member"]),
+  last_activity_at: z.string(),
+});
+export type StudySource = z.infer<typeof StudySource>;
+
+export const StudySourcesResponse = z.object({ sources: z.array(StudySource) });
+export type StudySourcesResponse = z.infer<typeof StudySourcesResponse>;
+
+export const StudySet = z.object({
+  id: z.string().uuid(),
+  kind: StudyKind,
+  title: z.string(),
+  room_ids: z.array(z.string()), // the documents it was made from
+  focus: z.string().nullable(),
+  data: StudyData,
+  created_at: z.string(),
+});
+export type StudySet = z.infer<typeof StudySet>;
+
+export const StudySetSummary = StudySet.omit({ data: true });
+export type StudySetSummary = z.infer<typeof StudySetSummary>;
+
+export const StudySetsResponse = z.object({ sets: z.array(StudySetSummary) });
+export type StudySetsResponse = z.infer<typeof StudySetsResponse>;
