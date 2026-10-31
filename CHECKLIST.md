@@ -233,6 +233,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Rate limit: one recap per room every 30 s (check the latest `recaps.created_at`; 429 with `Retry-After`), and one recap in progress per room (409) *(in repo)*
 - [ ] If there are no highlights yet, return a gentle "Highlight a few things first" message instead of calling the API (422) *(in repo)*
 - [ ] Save who asked as `recaps.requested_by` (body `{ name }`, else the signed-in user's name) for "Recapped by …" *(in repo)*
+- [ ] Guardrails (`apps/ai/app/guardrails.py`): untrusted text in tags with a "data, not instructions" rule, injection attempts logged; output is plain text, links not in the source removed, quotes checked against highlights/document, names limited to people in the room, lists capped *(in repo)*
 
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once

@@ -4,7 +4,16 @@ import logging
 import time
 
 from app.config import get_settings
-from app.schemas import RecapData, RecapRequest
+from app.guardrails import (
+    UNTRUSTED_RULE,
+    clean_text,
+    flag_injection,
+    normalize,
+    quote_in,
+    urls_in,
+    wrap_untrusted,
+)
+from app.schemas import CommentIn, GroupFocus, HighlightIn, RecapData, RecapRequest
 from app.services.providers import (
     available,
     complete_json,
@@ -17,8 +26,19 @@ log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You summarize a group's shared reading session. Focus on what the people "
-    "highlighted and discussed, not just the document."
+    "highlighted and discussed, not just the document. In what_the_group_cared_about, copy each "
+    "quote exactly from the highlights and list only author names that appear in them. Write "
+    "plain text: no HTML, no markdown links.\n\n" + UNTRUSTED_RULE
 )
+
+# A room can collect more than a prompt should carry; the rest is left out of the recap.
+MAX_HIGHLIGHTS = 300
+MAX_COMMENTS = 300
+# Output limits: what fits a recap panel, whatever the model returns.
+MAX_ITEMS = 8
+MAX_SUMMARY_CHARS = 300
+MAX_ITEM_CHARS = 500
+MAX_QUOTE_CHARS = 1000
 
 
 # Not worth starting a provider call with less time than this left.
@@ -40,12 +60,17 @@ async def generate_recap(req: RecapRequest) -> RecapData:
 
     settings = get_settings()
     document = req.text[: settings.max_document_chars]
-    highlights = json.dumps([h.model_dump() for h in req.highlights])
-    comments = json.dumps([c.model_dump() for c in req.comments])
-    user = (
-        f"Document: {req.title}\n\n{document}\n\n"
-        f"Highlights:\n{highlights}\n\nComments:\n{comments}"
-    )
+    highlights = req.highlights[:MAX_HIGHLIGHTS]
+    comments = req.comments[:MAX_COMMENTS]
+    if len(req.highlights) > MAX_HIGHLIGHTS or len(req.comments) > MAX_COMMENTS:
+        log.info(
+            "Recap uses the first %d of %d highlights and %d of %d comments",
+            len(highlights),
+            len(req.highlights),
+            len(comments),
+            len(req.comments),
+        )
+    user = build_prompt(req.title, document, highlights, comments)
 
     # Fall through to the next provider on any failure: API error, timeout or bad output.
     # One deadline covers the whole chain; each attempt gets what is left, up to the per-call cap.
@@ -87,6 +112,69 @@ async def generate_recap(req: RecapRequest) -> RecapData:
             time.monotonic() - started,
             len(failures),
         )
-        return recap
+        return sanitize_recap(recap, document, highlights, comments)
 
     raise RecapError(f"All AI providers failed ({', '.join(failures)})")
+
+
+def build_prompt(
+    title: str, document: str, highlights: list[HighlightIn], comments: list[CommentIn]
+) -> str:
+    """The user message: every part comes from the web or the room, so each goes in its own tag."""
+    flag_injection("document", f"{title}\n{document}")
+    flag_injection("highlights", "\n".join(h.quote for h in highlights))
+    flag_injection("comments", "\n".join(c.body for c in comments))
+    return "\n\n".join(
+        [
+            wrap_untrusted("title", title),
+            wrap_untrusted("document", document),
+            wrap_untrusted("highlights", json.dumps([h.model_dump() for h in highlights])),
+            wrap_untrusted("comments", json.dumps([c.model_dump() for c in comments])),
+        ]
+    )
+
+
+def sanitize_recap(
+    recap: RecapData, document: str, highlights: list[HighlightIn], comments: list[CommentIn]
+) -> RecapData:
+    """Makes the model's recap safe to show the whole room: plain text, no links the source didn't
+    contain, quotes that really come from the highlights or document, names of people who were
+    really there, and lists short enough for the panel."""
+    allowed_urls = urls_in(document, *(h.quote for h in highlights), *(c.body for c in comments))
+    people = {normalize(p.author_name): p.author_name for p in [*highlights, *comments]}
+    quotes = [h.quote for h in highlights]
+
+    def clean(text: str, max_chars: int = MAX_ITEM_CHARS) -> str:
+        return clean_text(text, allowed_urls, max_chars)
+
+    def items(texts: list[str]) -> list[str]:
+        return [t for t in map(clean, texts) if t][:MAX_ITEMS]
+
+    focus: list[GroupFocus] = []
+    for item in recap.what_the_group_cared_about:
+        # Highlights first: they are short, so most quotes are matched without reading the document.
+        if not quote_in(item.quote, *quotes) and not quote_in(item.quote, document):
+            log.info("Dropped a recap quote that isn't in the highlights or the document")
+            continue
+        # Matched against the names as written, then cleaned like any other text for display.
+        who = [
+            clean_text(people[normalize(name)], set(), 40)
+            for name in item.who
+            if normalize(name) in people
+        ]
+        focus.append(
+            GroupFocus(
+                quote=clean(item.quote, MAX_QUOTE_CHARS),
+                who=list(dict.fromkeys(name for name in who if name)),
+                why=clean(item.why),
+            )
+        )
+
+    return RecapData(
+        one_line_summary=clean(recap.one_line_summary, MAX_SUMMARY_CHARS),
+        key_points=items(recap.key_points),
+        what_the_group_cared_about=focus[:MAX_ITEMS],
+        disagreements=items(recap.disagreements),
+        open_questions=items(recap.open_questions),
+        next_steps=items(recap.next_steps),
+    )
