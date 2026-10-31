@@ -23,7 +23,9 @@
     "test:db": "supabase test db",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
-    "setup:ai": "cd apps/ai && uv sync"
+    "setup:ai": "cd apps/ai && uv sync",
+    "clean:cache": "node scripts/trim-turbo-cache.mjs",
+    "postbuild": "node scripts/trim-turbo-cache.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
