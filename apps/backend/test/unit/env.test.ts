@@ -11,6 +11,7 @@ const SUPABASE = {
   SUPABASE_ANON_KEY: "anon",
   SUPABASE_SERVICE_ROLE_KEY: "service",
 };
+const SMTP = { SMTP_HOST: "smtp.gmail.com" };
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -37,9 +38,20 @@ describe("env", () => {
     ).rejects.toThrow(/SUPABASE_URL is required in production[\s\S]*SUPABASE_ANON_KEY[\s\S]*SUPABASE_SERVICE_ROLE_KEY/);
   });
 
-  it("boots in production when Supabase keys are set", async () => {
-    const { env } = await loadEnv({ NODE_ENV: "production", ...SUPABASE });
+  it("boots in production when Supabase keys and SMTP are set", async () => {
+    const { env } = await loadEnv({ NODE_ENV: "production", ...SUPABASE, ...SMTP });
     expect(env.SUPABASE_URL).toBe(SUPABASE.SUPABASE_URL);
+  });
+
+  it("fails fast in production without an SMTP server for the verification emails", async () => {
+    await expect(loadEnv({ NODE_ENV: "production", ...SUPABASE, SMTP_HOST: "" })).rejects.toThrow(
+      /SMTP_HOST is required in production/,
+    );
+  });
+
+  it("treats empty SMTP values in .env as unset", async () => {
+    const { env } = await loadEnv({ SMTP_HOST: "", SMTP_PORT: "", SMTP_USER: "", MAIL_FROM: "" });
+    expect(env).toMatchObject({ SMTP_HOST: undefined, SMTP_PORT: undefined, SMTP_USER: undefined, MAIL_FROM: undefined });
   });
 
   it("redirects to the first WEB_ORIGIN entry", async () => {

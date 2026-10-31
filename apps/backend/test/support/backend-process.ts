@@ -36,6 +36,9 @@ export async function startBackend(extraEnv: Record<string, string> = {}) {
       SUPABASE_URL: supabase.url,
       SUPABASE_ANON_KEY: supabase.anonKey,
       SUPABASE_SERVICE_ROLE_KEY: supabase.serviceRoleKey,
+      // Mailpit's SMTP port from supabase/config.toml; the tests read the emails back from its API.
+      SMTP_HOST: "127.0.0.1",
+      SMTP_PORT: "54325",
       ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],

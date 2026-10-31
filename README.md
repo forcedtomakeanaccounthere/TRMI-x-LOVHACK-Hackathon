@@ -41,12 +41,23 @@ grep '^NEXT_PUBLIC_' .env > apps/frontend/.env.local     # frontend, after filli
 
 Run the files in [supabase/migrations](supabase/migrations) in order (`0001` to `0006`) in the Supabase SQL editor, and fill in `.env` before creating the frontend file.
 
-### Supabase Auth (email verification)
+### Email verification
 
-1. **Auth → Providers → Email**: turn on **Confirm email**; minimum password length 8.
-2. **Auth → URL Configuration**: Site URL = the frontend URL. Add `http://localhost:4000/api/auth/verify` and `<production backend>/api/auth/verify` to **Redirect URLs**.
-3. **Auth → Email Templates → Confirm signup**: make the link `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email`.
-4. **Auth → SMTP**: the built-in sender only mails project team members and is heavily rate-limited; set up custom SMTP (for example Resend) before the demo.
+The backend sends the verification email itself, with nodemailer over your SMTP server. Supabase only creates the user and the one-time token (admin `generateLink`), so its email templates, redirect URLs and SMTP settings are not used.
+
+1. **Supabase → Auth → Providers → Email**: turn on **Confirm email**; minimum password length 8.
+2. **SMTP** in `.env` (required in production; in development it defaults to the local Supabase inbox). For Gmail, turn on 2-Step Verification, create an [app password](https://myaccount.google.com/apppasswords), then:
+
+   ```bash
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=465
+   SMTP_USER=you@gmail.com
+   SMTP_PASS=<16-character app password>
+   MAIL_FROM="LinkRoom <you@gmail.com>"
+   ```
+
+   Any SMTP provider works the same way (Resend: `smtp.resend.com`, port 465, user `resend`, the API key as password, and a `MAIL_FROM` on your verified domain).
+3. **`API_PUBLIC_URL`** = the public backend URL, since the emailed link points at `$API_PUBLIC_URL/api/auth/verify`, and **`WEB_ORIGIN`** = the frontend URL, where that link sends the user back to: `/login?verified=1&email=…`, with the email filled in, ready to sign in.
 
 ## Scripts
 
@@ -74,7 +85,7 @@ npm run test:e2e
 npm run supabase:stop
 ```
 
-[supabase/config.toml](supabase/config.toml) sets local Auth up like production: **Confirm email** on, minimum password length 8, the backend's `/api/auth/verify` as an allowed redirect, and the same "Confirm signup" template ([supabase/templates/confirmation.html](supabase/templates/confirmation.html)). Its rate limits are raised so the suites can sign up many users. After changing a migration, `npx supabase db reset` rebuilds the local database from scratch. Studio (the dashboard) is at http://127.0.0.1:54323 and the email inbox at http://127.0.0.1:54324.
+[supabase/config.toml](supabase/config.toml) sets local Auth up like production: **Confirm email** on, minimum password length 8, and Mailpit's SMTP port (54325), which is where the backend sends its emails in development and tests. Its rate limits are raised so the suites can sign up many users. After changing a migration, `npx supabase db reset` rebuilds the local database from scratch. Studio (the dashboard) is at http://127.0.0.1:54323 and the email inbox at http://127.0.0.1:54324.
 
 | Level | Where | What it covers |
 | --- | --- | --- |
@@ -97,7 +108,7 @@ Interactive docs are generated when each service starts: backend at http://local
 | --- | --- | --- |
 | `GET` | `/health` | backend, ai |
 | `POST` | `/api/auth/signup` `{ email, password, name }` | backend: sends a verification email |
-| `GET` | `/api/auth/verify?token_hash&type` | backend: email link target, redirects to `WEB_ORIGIN/login?verified=1` |
+| `GET` | `/api/auth/verify?token_hash&type` | backend: email link target, redirects to `WEB_ORIGIN/login?verified=1&email=…` |
 | `POST` | `/api/auth/resend-verification` `{ email }` | backend |
 | `POST` | `/api/auth/login` `{ email, password }` | backend: returns `{ access_token, refresh_token, expires_at, user }`; 403 if unverified |
 | `POST` | `/api/auth/refresh` `{ refresh_token }` | backend |

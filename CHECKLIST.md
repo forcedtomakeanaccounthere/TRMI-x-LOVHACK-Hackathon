@@ -92,7 +92,8 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] `POST /api/auth/resend-verification`, `/login` (403 until verified), `/refresh`, `/logout`; `GET /api/auth/me` *(in repo)*
 - [ ] `requireAuth` middleware (Bearer token, verified email) on room creation (`/api/rooms/link`, `/text`, `/pdf`); joining and reading rooms stays login-free *(in repo)*
 - [ ] Rate limit: 10 auth requests per 15 min per IP *(in repo)*
-- [ ] Supabase dashboard: Confirm email ON; redirect URLs include `<backend>/api/auth/verify`; "Confirm signup" template link = `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email`; custom SMTP (e.g. Resend)
+- [ ] Verification emails sent by the backend with nodemailer (Supabase `generateLink` makes the token) *(in repo)*
+- [ ] Supabase dashboard: Confirm email ON; production `.env` has `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`MAIL_FROM` (e.g. a Gmail app password) and the public `API_PUBLIC_URL`
 
 **FE**
 - [ ] Fonts with `next/font`: Inter, Source Serif 4, JetBrains Mono

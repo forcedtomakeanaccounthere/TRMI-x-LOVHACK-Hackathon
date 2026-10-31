@@ -7,7 +7,7 @@ import { inject } from "vitest";
 
 // Helpers for tests that run against the real local Supabase (`npm run supabase:start`):
 // GoTrue auth, PostgREST, Storage and Postgres with our migrations applied, and Mailpit,
-// which catches the emails Supabase sends.
+// which catches the emails the backend sends over SMTP.
 
 export type LocalSupabase = {
   url: string;
@@ -29,7 +29,7 @@ export async function connectSupabase() {
   const sql = postgres(local.dbUrl, { max: 2, onnotice: () => {} });
   const proxy = await startFaultProxy(local.url);
 
-  // Verification links from the "Confirm signup" emails sent to `email`, oldest first.
+  // Verification links from the emails the backend sent to `email`, oldest first.
   async function verificationLinks(email: string) {
     const query = encodeURIComponent(`to:"${email}"`);
     const { messages } = (await (await fetch(`${local.mailUrl}/api/v1/search?query=${query}`)).json()) as {
