@@ -167,6 +167,49 @@ async function readLimited(res: Response) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+// Sites that can't be read from a link, and what to do instead. Checked against the link that was
+// pasted, so the hint still shows when the site redirects to a login page.
+const HOST_HINTS: { hosts: RegExp; paths?: RegExp; message: string }[] = [
+  {
+    hosts: /(^|\.)(notion\.so|notion\.site)$/,
+    message:
+      "Notion pages load with JavaScript, so we can't read them from a link. In Notion, use ••• → Export " +
+      "(PDF or Markdown) and upload the file instead.",
+  },
+  {
+    hosts: /^docs\.google\.com$/,
+    paths: /^\/presentation\//,
+    message: "Google Slides can't be read from a link. Use File → Download → PowerPoint (.pptx) and upload the file.",
+  },
+  {
+    hosts: /^docs\.google\.com$/,
+    paths: /^\/spreadsheets\//,
+    message: "Google Sheets can't be read from a link. Copy the cells and paste them as text instead.",
+  },
+  {
+    hosts: /^docs\.google\.com$/,
+    message: "Google Docs can't be read from a link. Use File → Download → Microsoft Word (.docx) and upload the file.",
+  },
+  {
+    hosts: /^drive\.google\.com$/,
+    message: "Google Drive files can't be read from a link. Download the file and upload it here.",
+  },
+  {
+    hosts: /(^|\.)(twitter\.com|x\.com|linkedin\.com|instagram\.com|facebook\.com|threads\.net)$/,
+    message: "This site needs a login to show posts, so we can't read it. Copy the text and paste it instead.",
+  },
+  {
+    hosts: /(^|\.)(youtube\.com|youtu\.be)$/,
+    message: "Video links can't be read as a page yet. Paste the video's transcript as text instead.",
+  },
+];
+
+/** A friendlier 422 message for sites we know can't be read from a link, or null. */
+export function hostHint(url: URL) {
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  return HOST_HINTS.find((hint) => hint.hosts.test(host) && (!hint.paths || hint.paths.test(url.pathname)))?.message ?? null;
+}
+
 export async function extractArticle(rawUrl: string) {
   let start: URL;
   try {
@@ -175,6 +218,17 @@ export async function extractArticle(rawUrl: string) {
     throw new HttpError(400, "Invalid URL");
   }
 
+  try {
+    return await readArticle(start);
+  } catch (err) {
+    // A 400 (bad or private URL) stays as it is: only "couldn't read it" gets the site's own advice.
+    const hint = err instanceof HttpError && err.status === 422 ? hostHint(start) : null;
+    if (hint) throw new HttpError(422, hint);
+    throw err;
+  }
+}
+
+async function readArticle(start: URL) {
   const { url, html } = await fetchPage(start);
   const dom = new JSDOM(html, { url: url.href });
   const article = new Readability(dom.window.document).parse();
@@ -190,7 +244,8 @@ export async function extractArticle(rawUrl: string) {
 }
 
 // Sanitizes extracted HTML, fixes its links and images, and adds block IDs, in one DOM pass.
-export function cleanArticle(html: string, baseUrl: string) {
+// `images: false` drops every image, for sources whose images we can't serve (an uploaded DOCX).
+export function cleanArticle(html: string, baseUrl: string, { images = true }: { images?: boolean } = {}) {
   const safe = DOMPurify.sanitize(html, {
     FORBID_TAGS: ["style", "form", "input", "button", "select", "textarea", "iframe", "object", "embed"],
     // Page classes and inline styles could pick up our own CSS or overlay the room UI.
@@ -212,6 +267,8 @@ export function cleanArticle(html: string, baseUrl: string) {
       a.removeAttribute("href");
     }
   }
+
+  if (!images) for (const el of document.querySelectorAll("img, picture")) el.remove();
 
   for (const el of document.querySelectorAll("img, source, video, audio")) {
     const src = absolute(el.getAttribute("src"), baseUrl);

@@ -234,6 +234,11 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Save who asked as `recaps.requested_by` (body `{ name }`, else the signed-in user's name) for "Recapped by …" *(in repo)*
 - [ ] Guardrails (`apps/ai/app/guardrails.py`): untrusted text in tags with a "data, not instructions" rule, injection attempts logged; output is plain text, links not in the source removed, quotes checked against highlights/document, names limited to people in the room, lists capped *(in repo)*
 
+**AI: Three sources, one format** (migration `0010_ai_foundation.sql`)
+- [ ] Room kinds `link`, `pdf`, `file`, `youtube`; `rooms.source_meta` `{ format, file_name }`; block ids `b{n}`, `p{n}`, `t{n}`; `room_ai` table (public read, backend writes, Realtime); private `files` bucket *(in repo)*
+- [ ] `POST /api/rooms/file`: PDF, DOCX (mammoth, images dropped), PPTX (one `p{n}` block per slide), Markdown (marked + DOMPurify) and text, detected from the bytes; zip bomb guard (50 MB unpacked, 2,000 entries); strict UTF-8; `.doc`/`.ppt` get "Save as .docx/.pptx" *(in repo)*
+- [ ] Link 422s carry site advice: Notion → Export, Google Docs/Slides → download .docx/.pptx, social sites → paste the text *(in repo)*
+
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once
 

@@ -1,9 +1,22 @@
 import { z } from "zod";
 
-// Mirrors supabase/migrations/0001_init.sql.
+// Mirrors supabase/migrations/0001_init.sql and 0010_ai_foundation.sql.
 
-export const RoomKind = z.enum(["link", "pdf"]);
+// link: web page or pasted text | pdf: PDF upload | file: DOCX, PPTX, Markdown or text upload | youtube: video
+export const RoomKind = z.enum(["link", "pdf", "file", "youtube"]);
 export type RoomKind = z.infer<typeof RoomKind>;
+
+// Uploaded formats, as stored in rooms.source_meta.format.
+export const FileFormat = z.enum(["pdf", "docx", "pptx", "md", "txt"]);
+export type FileFormat = z.infer<typeof FileFormat>;
+
+// rooms.source_meta for uploaded rooms (0010_ai_foundation.sql).
+export const SourceMeta = z.object({ format: FileFormat, file_name: z.string() });
+export type SourceMeta = z.infer<typeof SourceMeta>;
+
+// Block anchors: "b12" paragraph | "p3" PDF page or slide | "t7" transcript segment.
+// Matches highlights_block_id_format in 0010_ai_foundation.sql.
+export const BlockId = z.string().regex(/^[bpt][0-9]{1,6}$/);
 
 // Mirrors the check constraint in supabase/migrations/0007_dashboard.sql.
 // A room is readable unless deleted; only running rooms take new highlights and comments.
@@ -19,6 +32,8 @@ export const Room = z.object({
   pdf_path: z.string().nullable(),
   // pdf rooms: text of the first pages, for the AI recap. Optional so pages can leave it out of the select.
   content_text: z.string().nullable().optional(),
+  // Uploaded rooms: the format and file name. Optional so pages can leave it out of the select.
+  source_meta: SourceMeta.nullable().optional(),
   created_by: z.string().uuid().nullable(), // auth.users id of the creator
   created_at: z.string(),
 });
@@ -35,7 +50,7 @@ export const Author = z.object({
 // 0004_browser_write_checks.sql.
 const HighlightFields = Author.extend({
   room_id: z.string(),
-  block_id: z.string().regex(/^[bp][0-9]{1,6}$/), // link: "b12" | pdf: "p3"
+  block_id: BlockId,
   start_offset: z.number().int().nonnegative(),
   end_offset: z.number().int().nonnegative(),
   quote: z.string().min(1).max(1000),
