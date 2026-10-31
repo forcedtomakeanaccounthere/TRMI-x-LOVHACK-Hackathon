@@ -5,12 +5,16 @@ import {
   CreateLinkRoomRequest,
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
+  DashboardQuery,
+  DashboardResponse as DashboardResponseSchema,
   LoginRequest,
   MessageResponse as MessageResponseSchema,
   RecapData as RecapDataSchema,
   RefreshRequest,
   ResendVerificationRequest,
+  RoomStatusResponse as RoomStatusResponseSchema,
   SignupRequest,
+  UpdateRoomStatusRequest,
 } from "@linkroom/shared";
 import { z } from "zod";
 import { createDocument } from "zod-openapi";
@@ -23,7 +27,9 @@ const ApiError = ApiErrorSchema.meta({ id: "ApiError" });
 const AuthSession = AuthSessionSchema.meta({ id: "AuthSession" });
 const AuthUser = AuthUserSchema.meta({ id: "AuthUser" });
 const CreateRoomResponse = CreateRoomResponseSchema.meta({ id: "CreateRoomResponse" });
+const DashboardResponse = DashboardResponseSchema.meta({ id: "DashboardResponse" });
 const MessageResponse = MessageResponseSchema.meta({ id: "MessageResponse" });
+const RoomStatusResponse = RoomStatusResponseSchema.meta({ id: "RoomStatusResponse" });
 const RecapData = RecapDataSchema.meta({ id: "RecapData" });
 
 const json = (schema: z.ZodType) => ({ content: { "application/json": { schema } } });
@@ -188,6 +194,48 @@ export const openApiDocument = createDocument({
         },
       },
     },
+    "/api/rooms/mine": {
+      get: {
+        tags: ["Rooms"],
+        summary: "List the rooms on the user's dashboard",
+        description:
+          "Rooms the user created or joined, newest first by default. Deleted rooms are left out unless " +
+          "`status=deleted` is passed, and only ever appear for their owner.",
+        security: bearer,
+        requestParams: { query: DashboardQuery },
+        responses: { "200": reply("One page of rooms", DashboardResponse), ...invalidInput, ...needsVerifiedUser },
+      },
+    },
+    "/api/rooms/{id}/join": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Join a room and remember it on the dashboard",
+        description: "Closed and archived rooms can be joined to read them. Guests skip this and open the link.",
+        security: bearer,
+        requestParams: { path: z.object({ id: z.string() }) },
+        responses: {
+          "200": reply("The room", RoomStatusResponse),
+          ...needsVerifiedUser,
+          "404": failure("Room not found or deleted"),
+        },
+      },
+    },
+    "/api/rooms/{id}/status": {
+      patch: {
+        tags: ["Rooms"],
+        summary: "Close, archive, delete or restore a room",
+        description: "Owner only. Deleting is reversible: the room is hidden, not erased.",
+        security: bearer,
+        requestParams: { path: z.object({ id: z.string() }) },
+        requestBody: body(UpdateRoomStatusRequest),
+        responses: {
+          "200": reply("The updated room", RoomStatusResponse),
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("Room not found, or owned by someone else"),
+        },
+      },
+    },
     "/api/rooms/{id}/recap": {
       post: {
         tags: ["Rooms"],
@@ -196,7 +244,8 @@ export const openApiDocument = createDocument({
         requestParams: { path: z.object({ id: z.string() }) },
         responses: {
           "200": reply("The recap", RecapData),
-          "404": failure("Room not found"),
+          "404": failure("Room not found or deleted"),
+          "409": failure("The room is archived"),
           "502": failure("The AI service failed"),
         },
       },

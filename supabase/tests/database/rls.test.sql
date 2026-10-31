@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(40);
+select plan(49);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room');
@@ -161,6 +161,39 @@ select is_empty(
   $$delete from storage.objects where bucket_id = 'pdfs' and name = 'room0001.pdf' returning 1$$,
   'logged-in users cannot delete PDFs'
 );
+
+-- Room status ------------------------------------------------------------------------------------
+reset role;
+insert into auth.users (id) values ('00000000-0000-0000-0000-0000000000aa');
+insert into rooms (id, kind, title, status) values
+  ('closed01', 'link', 'Closed', 'closed'),
+  ('deleted1', 'link', 'Deleted', 'deleted');
+insert into highlights (id, room_id, author_name, author_color, block_id, start_offset, end_offset, quote) values
+  ('00000000-0000-0000-0000-000000000011', 'closed01', 'Ana', '#f00', 'b0', 0, 4, 'para'),
+  ('00000000-0000-0000-0000-000000000012', 'deleted1', 'Ana', '#f00', 'b0', 0, 4, 'para');
+insert into comments (room_id, highlight_id, author_name, author_color, body)
+values ('deleted1', '00000000-0000-0000-0000-000000000012', 'Ana', '#f00', 'Nice');
+insert into recaps (room_id, data) values ('deleted1', '{"summary": "fixture"}');
+insert into room_visits (room_id, user_id) values ('room0001', '00000000-0000-0000-0000-0000000000aa');
+set local role anon;
+
+select isnt_empty($$select 1 from rooms where id = 'closed01'$$, 'closed rooms stay readable');
+select is_empty($$select 1 from rooms where id = 'deleted1'$$, 'deleted rooms are hidden');
+select is_empty($$select 1 from highlights where room_id = 'deleted1'$$, 'highlights of deleted rooms are hidden');
+select is_empty($$select 1 from comments where room_id = 'deleted1'$$, 'comments of deleted rooms are hidden');
+select is_empty($$select 1 from recaps where room_id = 'deleted1'$$, 'recaps of deleted rooms are hidden');
+select throws_ok(
+  $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
+    values ('closed01', 'Guest', '#0f0', 'b1', 2, 6, 'text')$$,
+  '42501', null, 'closed rooms take no new highlights'
+);
+select throws_ok(
+  $$insert into comments (room_id, highlight_id, author_name, author_color, body)
+    values ('closed01', '00000000-0000-0000-0000-000000000011', 'Guest', '#0f0', 'Late')$$,
+  '42501', null, 'closed rooms take no new comments'
+);
+select is_empty($$select 1 from room_visits$$, 'visit history is private');
+select is_empty($$update rooms set status = 'deleted' where id = 'room0001' returning 1$$, 'anon cannot change a room''s status');
 
 select * from finish();
 rollback;
