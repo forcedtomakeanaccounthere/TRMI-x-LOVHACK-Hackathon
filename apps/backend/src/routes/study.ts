@@ -33,6 +33,14 @@ const studyInFlight = new Set<string>();
 // pause. The newest saved set still counts too, so a restart doesn't reset it either.
 const lastStudyCall = new Map<string, number>();
 
+// Records a call and forgets ones older than the pause, so the map holds only the users who called
+// in the last 10 s instead of growing with every user until a restart.
+export function rememberStudyCall(userId: string, now: number) {
+  for (const [id, at] of lastStudyCall) if (now - at >= STUDY_COOLDOWN_MS) lastStudyCall.delete(id);
+  lastStudyCall.set(userId, now);
+  return lastStudyCall.size;
+}
+
 /**
  * Cuts texts to `total` characters in all, fairly: short texts keep everything and what they don't
  * use goes to the longer ones, so one long PDF isn't cut while there is room. Same rule as
@@ -186,7 +194,7 @@ studyRouter.post("/", requireAuth, async (req, res) => {
 
     // apps/ai stops trying providers after 100 s, so it answers before this gives up. The pause
     // counts from here, whether or not the call succeeds: a failed call is paid for too.
-    lastStudyCall.set(userId, Date.now());
+    rememberStudyCall(userId, Date.now());
     const study = await callAi(
       "/study",
       { kind: body.kind, documents, count: body.count ?? 10, focus: body.focus || null },

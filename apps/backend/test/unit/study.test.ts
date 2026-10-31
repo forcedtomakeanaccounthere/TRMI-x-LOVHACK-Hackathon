@@ -41,7 +41,7 @@ vi.mock("../../src/lib/supabase", () => ({
 }));
 
 const { createApp } = await import("../../src/app");
-const { shareBudget } = await import("../../src/routes/study");
+const { rememberStudyCall, shareBudget } = await import("../../src/routes/study");
 const app = createApp();
 
 const called = (name: string, method: string) => (calls[name] ?? []).filter(([m]) => m === method).map(([, ...a]) => a);
@@ -238,6 +238,14 @@ describe("study cooldown", () => {
     results.rooms = [{ data: [room("roomA")] }, { data: [text("roomA")] }];
     vi.setSystemTime((clock += 10_000));
     expect((await create({ kind: "quiz", all: true })).status).toBe(201);
+  });
+
+  it("forgets calls older than the pause", () => {
+    const t = Date.parse("2030-01-01T00:00:00Z");
+    rememberStudyCall("old", t);
+    expect(rememberStudyCall("recent", t + 5_000)).toBeGreaterThanOrEqual(2);
+    // Ten seconds after "old": it goes, "recent" (5 s old) stays.
+    expect(rememberStudyCall("new", t + 10_000)).toBe(2);
   });
 
   it("counts a failed AI call too", async () => {
