@@ -32,6 +32,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 | 4 | PDF rooms | Sun 7 AM – 12 PM | P0 |
 | 5 | Wow features | Sun 12 – 4 PM | P1 |
 | 6 | Polish | Sun 4 – 8 PM | P1 |
+| D | Dashboard (`/dashboard`) | Alongside Phase 6 | P1 |
 | 7 | Test and ship | Sun 8 PM – Mon 1:30 AM | Ship |
 | 8 | Stretch | Only if time is left | P2 |
 
@@ -95,10 +96,10 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Supabase dashboard: Confirm email ON; redirect URLs include `<backend>/api/auth/verify`; "Confirm signup" template link = `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email`; custom SMTP (e.g. Resend)
 
 **FE**
-- [ ] Fonts with `next/font`: Inter, Source Serif 4, JetBrains Mono
-- [ ] Colour tokens in `globals.css` for light and dark, plus the 8 person colours
-- [ ] Theme provider with system default and a toggle
-- [ ] Empty landing page with the hero text
+- [ ] Fonts with `next/font` *(in repo, changed from the original Inter / Source Serif 4 / JetBrains Mono plan: Cormorant Garamond for display and reading, Cinzel for eyebrows, Manrope for UI, Geist Mono for code; update MASTER.md section 6 to match)*
+- [ ] Colour tokens in `globals.css` for light and dark, plus the 8 person colours *(tokens in repo; the 8 person colours live in `PRESENCE_COLORS` in `packages/shared/src/realtime.ts`, not yet as CSS tokens)*
+- [ ] Theme provider with system default and a toggle *(in repo: no-flash inline script, `useTheme`, animated toggle with a circular reveal)*
+- [ ] Empty landing page with the hero text *(in repo, and well past empty: full landing page, see Phase 6)*
 
 **QA**
 - [ ] Live Vercel URL loads in light and dark mode
@@ -283,6 +284,65 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] **Feature freeze at 8 PM IST.** After that, only bug fixes.
 
 **Done when:** a first-time user can go from landing page to a busy room and a recap without help, on desktop and phone.
+
+---
+
+## Dashboard (`/dashboard`) · P1, alongside Phase 6
+
+A home for signed-in users: every room they created or joined, the people they read with, and a calendar of activity. **Rooms are live** (`GET /api/rooms/mine`, `PATCH /api/rooms/:id/status`, `POST /api/rooms/:id/join`, migration `0005`). **People, groups and profile stats are preview data** until their endpoints exist; their proposed contracts are in `packages/shared/src/dashboard.ts`. Signed out, or if the backend can't be reached, the whole page shows preview data and says so.
+
+Room lifecycle (backend `RoomStatus`): **running** → **closed** (readable, no new highlights or comments) → **archived** (filed away) → **deleted** (soft delete, only the owner sees it and can restore it). **Paused** exists only in the dashboard's preview data so far; see BE below.
+
+**FE** (`apps/frontend/src/components/dashboard/*`, route `app/dashboard/page.tsx`)
+- [ ] Layout: glass sidebar (sections + group tree, sheet on mobile), sticky glass top bar, Lenis smooth scroll, Cormorant / Cinzel typography *(in repo)*
+- [ ] Loads real rooms from `GET /api/rooms/mine` (active and deleted) and maps them with `fromApiRoom()`; falls back to preview data with a toast when the API fails *(in repo)*
+- [ ] Room list with status tabs and counts: All, Running, Paused, Closed, Archived, Deleted; one row of 3 cards, then **Show more** adds a row at a time *(in repo)*
+- [ ] Search rooms by title, source, group or participant; ⌘K / Ctrl+K focuses search *(in repo)*
+- [ ] Filters popover: type (link / PDF), group, last active (7 / 30 days), sort (activity, newest, most discussed, A–Z) *(in repo)*
+- [ ] Room menu, owner only: close / reopen, archive / unarchive, delete with Undo, restore, saved through `PATCH /api/rooms/:id/status` with optimistic updates and rollback on error *(in repo)*
+- [ ] Join room dialog: accepts a room code or any `/r/<code>` link; signed-in users go through `POST /api/rooms/:id/join`, which also catches wrong codes *(in repo)*
+- [ ] New room dialog (reuses the landing link / PDF form): optional room name, group dropdown (no group, an existing group, or create one inline) and a colour palette *(in repo; name, colour and group are kept in this browser until `rooms.title` / `color` / `group_id` can be set through the API)*
+- [ ] Room card: colour accent, status badge, source, group chip, up to 3 participant avatars + "+N", counts for highlights, comments, attachments and AI queries, last activity *(in repo; attachments, AI queries and participants are 0 / empty until the API returns them)*
+- [ ] Calendar: three rows per week (active, paused, archived; closed and deleted rooms stay off). A bar runs unbroken while any room has that status and lists up to 3 titles and "+N"; clicking it lists those rooms with each one's start and end dates. Active bars take one colour (the longest-running room's group colour, or its own colour if it has no group) and blink every 5 s; paused are red; archived dark grey *(in repo)*
+- [ ] Past participants ("Read with"), Following / Followers with Follow and "Add to room", invite dialog *(in repo, preview data)*
+- [ ] Paused rooms panel with one-tap Resume *(in repo, preview data only)*
+- [ ] Profile card: name, handle, email, bio, member since, rooms / highlights / followers / following *(in repo; name, email and rooms hosted are real)*
+- [ ] Edit profile (from the top bar or the profile card): change name, upload or remove a photo *(in repo; saved in this browser until `PATCH /api/me/profile` exists)*
+- [ ] Groups / projects: cards, create, delete (tick which rooms to delete too; the rest stay without a group), move a room into a group; the sidebar tree lists each group with its rooms nested under it (collapsible) *(in repo; saved in this browser until the groups API exists. Signed-in users start with no groups)*
+- [ ] Navbar "Dashboard" button while signed in; sign-in lands on `/dashboard` unless `?next=` says otherwise *(in repo)*
+- [ ] Opening `/r/[id]` while signed in should call `POST /api/rooms/:id/join`, so visited rooms show up on the dashboard
+- [ ] Swap the preview people, groups and profile stats for the endpoints below as they land
+
+**BE: done** *(in repo)*
+- [ ] Migration `0005_room_status_and_visits.sql`: `rooms.status` (running / closed / archived / deleted), `room_visits`, private `pdfs-deleted` bucket, RLS that hides deleted rooms and blocks writes to non-running rooms
+- [ ] `GET /api/rooms/mine?q&status&kind&role&sort&limit&offset`, `POST /api/rooms/:id/join`, `PATCH /api/rooms/:id/status` (owner only, 409 on a race)
+
+**BE: still needed for the dashboard** (all `requireAuth`, documented in `openapi.ts`)
+- [ ] **Paused status**: add `paused` to `RoomStatus` and the `rooms.status` check (read-only like closed, but shown as "on hold"); then the dashboard's Pause / Resume actions can be saved
+- [ ] `rooms.color` (hex, chosen in the New room dialog; accept it on `POST /api/rooms/link`, `/text`, `/pdf` and return it from `/mine`)
+- [ ] `rooms`: `closed_at`, `paused_at`, `last_activity_at` (bumped on every highlight, comment, recap and AI query), so the calendar shows real spans instead of ending at the last visit
+- [ ] `GET /api/rooms/mine` extras: `participants` preview (a few people per room), `live_count`, `attachment_count`, `ai_query_count`, `group_id`
+- [ ] Groups: `room_groups` table + `rooms.group_id`; `GET / POST /api/groups`, `PATCH /api/groups/:id`, `DELETE /api/groups/:id?delete_rooms=id1,id2` (listed rooms are soft-deleted, the rest get `group_id = null`); set a room's group with `PATCH /api/rooms/:id` `{ group_id }`
+- [ ] Room creation (`/api/rooms/link`, `/text`, `/pdf`) accepts optional `title`, `color` and `group_id`, so the New room dialog doesn't need browser storage
+- [ ] Profiles: `profiles` table (`name`, `handle` unique, `avatar_url`, `bio`); `GET /api/me/profile` → `Profile` with stats; `PATCH /api/me/profile` `{ name? }`; `PUT / DELETE /api/me/avatar` (image upload to an `avatars` bucket, ≤ 2 MB, resized)
+- [ ] People I've read with: `GET /api/me/participants` → `PastParticipant[]` (from `room_visits`, ranked by rooms together, then recency)
+- [ ] Follows: `follows` table; `GET /api/me/following`, `GET /api/me/followers`, `POST / DELETE /api/users/:id/follow`, `GET /api/users/search?q=`
+- [ ] Invites: `room_invites` table; `POST /api/rooms/:id/invites` `{ user_ids }`, `GET /api/me/invites` (for the notifications bell)
+- [ ] Attachments (if they ship): `attachments` table + bucket; `GET / POST /api/rooms/:id/attachments`
+- [ ] AI queries: `ai_queries` table, shared with Phase 8 "Ask AI"
+
+**RT**
+- [ ] `live_count` from a join heartbeat (`room_visits` seen in the last 2 minutes), so the dashboard doesn't subscribe to every room's presence
+- [ ] Closing, archiving or deleting a room broadcasts a `status` event, so open rooms switch to read-only at once
+
+**QA**
+- [ ] A signed-in user sees exactly the rooms they created or joined; deleted rooms only on the Deleted tab
+- [ ] Close → reopen, archive → unarchive, delete → Undo and delete → restore all survive a refresh; a member can't change a room's status
+- [ ] Stopping the backend shows the "Couldn't load your rooms" toast and preview data, not a crash
+- [ ] The calendar shows each room from start to end; archived rooms are grey
+- [ ] Dashboard works on a phone (sheet menu, horizontally scrolling calendar) and in both themes
+
+**Done when:** a signed-in user sees their real rooms, can close, archive, delete and restore them, and (once the people endpoints land) can invite someone they've read with in two taps.
 
 ---
 

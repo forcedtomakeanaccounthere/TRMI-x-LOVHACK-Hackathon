@@ -4,9 +4,13 @@ import type {
   CreateLinkRoomRequest,
   CreateRoomResponse,
   CreateTextRoomRequest,
+  DashboardQuery,
+  DashboardResponse,
   LoginRequest,
   MessageResponse,
   RecapData,
+  RoomStatus,
+  RoomStatusResponse,
   SignupRequest,
 } from "@linkroom/shared";
 
@@ -71,4 +75,23 @@ export const api = {
   },
 
   recap: (roomId: string) => request<RecapData>(`/api/rooms/${roomId}/recap`, { method: "POST" }),
+
+  // Dashboard: rooms I created or joined. Deleted rooms come back only when asked for by status.
+  myRooms: (query: Partial<DashboardQuery>, token: string) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return request<DashboardResponse>(`/api/rooms/mine?${params}`, { method: "GET" }, token);
+  },
+
+  // Remembers the room for a signed-in user; 404 when it doesn't exist or was deleted.
+  joinRoom: (roomId: string, token: string) =>
+    request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/join`, { method: "POST" }, token),
+
+  // Owner only: close, reopen, archive, delete or restore. 409 when another change won the race.
+  setRoomStatus: (roomId: string, status: RoomStatus, token: string) =>
+    request<RoomStatusResponse>(
+      `/api/rooms/${encodeURIComponent(roomId)}/status`,
+      { ...json({ status }), method: "PATCH" },
+      token,
+    ),
 };
