@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { api, ApiError } from "@/lib/api";
+import { backendQuestion } from "@/components/room/ai";
 import { getSupabase } from "@/lib/supabase";
 
 // Configure pdfjs worker
@@ -53,6 +55,139 @@ export type CommentItem = {
   author_color: string;
   created_at: string;
 };
+
+function findQuoteRanges(root: HTMLElement, search: string): Range[] {
+  const normSearch = search.replace(/\s+/g, " ").trim();
+  if (!normSearch) return [];
+
+  const textLayer = (root.querySelector(".react-pdf__Page__textContent") as HTMLElement) || root;
+  const walker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
+  const indexMap: { node: Text; start: number; len: number }[] = [];
+  let combined = "";
+
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text)) {
+    const text = node.textContent || "";
+    if (text) {
+      indexMap.push({ node, start: combined.length, len: text.length });
+      combined += text;
+    }
+  }
+
+  const ranges: Range[] = [];
+  const lowerCombined = combined.toLowerCase();
+  const lowerSearch = normSearch.toLowerCase();
+  const pos = lowerCombined.indexOf(lowerSearch);
+
+  if (pos !== -1) {
+    const startIdx = pos;
+    const endIdx = pos + normSearch.length;
+
+    let startNode: Text | null = null;
+    let startOffset = 0;
+    let endNode: Text | null = null;
+    let endOffset = 0;
+
+    for (const item of indexMap) {
+      if (!startNode && startIdx >= item.start && startIdx < item.start + item.len) {
+        startNode = item.node;
+        startOffset = startIdx - item.start;
+      }
+      if (endIdx > item.start && endIdx <= item.start + item.len) {
+        endNode = item.node;
+        endOffset = endIdx - item.start;
+        break;
+      }
+    }
+
+    if (startNode && endNode) {
+      try {
+        const range = document.createRange();
+        range.setStart(startNode, startOffset);
+        range.setEnd(endNode, endOffset);
+        ranges.push(range);
+      } catch {
+        // Fallback gracefully if DOM range creation fails
+      }
+    }
+  }
+  return ranges;
+}
+
+function PdfPageHighlights({
+  pageNum,
+  highlights,
+  scale,
+  onSelectHighlight,
+}: {
+  pageNum: number;
+  highlights: HighlightItem[];
+  scale: number;
+  onSelectHighlight: (id: string) => void;
+}) {
+  const [highlightBoxes, setHighlightBoxes] = useState<
+    { id: string; color: string; author: string; quote: string; boxes: { left: number; top: number; width: number; height: number }[] }[]
+  >([]);
+
+  useEffect(() => {
+    const pageEl = document.getElementById(`pdf-page-${pageNum}`);
+    if (!pageEl) return;
+
+    const timer = setTimeout(() => {
+      const pageRect = pageEl.getBoundingClientRect();
+      if (!pageRect.width || !pageRect.height) return;
+
+      const pageHighlights = highlights.filter((h) => h.block_id === `p${pageNum}`);
+      const results = pageHighlights.map((h) => {
+        const ranges = findQuoteRanges(pageEl, h.quote);
+        const boxes: { left: number; top: number; width: number; height: number }[] = [];
+        for (const range of ranges) {
+          const clientRects = range.getClientRects();
+          for (let i = 0; i < clientRects.length; i++) {
+            const r = clientRects[i]!;
+            boxes.push({
+              left: ((r.left - pageRect.left) / pageRect.width) * 100,
+              top: ((r.top - pageRect.top) / pageRect.height) * 100,
+              width: (r.width / pageRect.width) * 100,
+              height: (r.height / pageRect.height) * 100,
+            });
+          }
+        }
+        return { id: h.id, color: h.author_color, author: h.author_name, quote: h.quote, boxes };
+      });
+
+      setHighlightBoxes(results);
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [pageNum, highlights, scale]);
+
+  return (
+    <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
+      {highlightBoxes.map((h) =>
+        h.boxes.map((b, idx) => (
+          <div
+            key={`${h.id}_${idx}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectHighlight(h.id);
+            }}
+            title={`Highlighted by ${h.author}: "${h.quote}"`}
+            className="absolute pointer-events-auto cursor-pointer rounded-xs transition-opacity hover:opacity-80"
+            style={{
+              left: `${b.left}%`,
+              top: `${b.top}%`,
+              width: `${b.width}%`,
+              height: `${b.height}%`,
+              backgroundColor: `${h.color}35`,
+              borderBottom: `2px solid ${h.color}`,
+            }}
+          />
+        )),
+      )}
+    </div>
+  );
+}
 
 interface PdfAnnotatorProps {
   roomId: string;
@@ -163,12 +298,21 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
     const pageNum = selectionRange.page;
     setSelectionRange(null);
 
+    // Compute actual text position in page text
+    const pageEl = document.getElementById(`pdf-page-${pageNum}`);
+    const pageText = pageEl ? pageEl.textContent || "" : "";
+    const cleanQuote = quote.replace(/\s+/g, " ").trim();
+    const cleanText = pageText.replace(/\s+/g, " ");
+    const foundIdx = cleanText.indexOf(cleanQuote);
+    const start_offset = foundIdx >= 0 ? foundIdx : 0;
+    const end_offset = start_offset + quote.length;
+
     const supabase = getSupabase();
     const { error } = await supabase.from("highlights").insert({
       room_id: roomId,
       block_id: `p${pageNum}`,
-      start_offset: 0,
-      end_offset: quote.length,
+      start_offset,
+      end_offset,
       quote,
       author_name: authorName,
       author_color: penColor,
@@ -189,26 +333,23 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
 
     startExplaining(async () => {
       try {
-        const res = await fetch(`/api/rooms/${roomId}/ask`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: `Explain this passage: "${quote}"`, name: authorName }),
-        });
-        if (!res.ok) throw new Error("AI query failed");
-        const data = await res.json();
+        // Enforce backend 500-char question budget using backendQuestion
+        const question = backendQuestion({ question: "Explain this passage", quote });
+        const data = await api.ask(roomId, { question, name: authorName.slice(0, 40) });
         setAiExplanation({ quote, text: data.answer || "No response generated." });
-      } catch {
-        toast.error("Could not explain with AI at this time");
+      } catch (err) {
+        toast.error(err instanceof ApiError ? err.message : "Could not explain with AI at this time");
       }
     });
   };
 
-  // Drawing mouse handlers
+  // Drawing mouse handlers (store coordinates in normalized 0..1000 page space)
   const handleCanvasMouseDown = (e: React.PointerEvent<SVGSVGElement>, pageNum: number) => {
     if (activeTool !== "pen") return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    if (!rect.width || !rect.height) return;
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1000);
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1000);
     setDrawingPage(pageNum);
     setCurrentPath([{ x, y }]);
   };
@@ -216,8 +357,9 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
   const handleCanvasMouseMove = (e: React.PointerEvent<SVGSVGElement>, pageNum: number) => {
     if (activeTool !== "pen" || drawingPage !== pageNum || !currentPath.length) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    if (!rect.width || !rect.height) return;
+    const x = Math.round(((e.clientX - rect.left) / rect.width) * 1000);
+    const y = Math.round(((e.clientY - rect.top) / rect.height) * 1000);
     setCurrentPath((prev) => [...prev, { x, y }]);
   };
 
@@ -275,7 +417,7 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
 
   // Export summary handler
   const downloadSummary = (format: "md" | "txt") => {
-    window.open(`/api/rooms/${roomId}/summary/export?format=${format}`, "_blank");
+    window.open(api.summaryExportUrl(roomId, format), "_blank");
   };
 
   // Convert points array to SVG path string
@@ -461,6 +603,7 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
           return (
             <div
               key={`page_${pageNum}`}
+              id={`pdf-page-${pageNum}`}
               className="relative shadow-2xl rounded-xl overflow-hidden ring-1 ring-foreground/10 bg-white"
               onMouseUp={() => handleMouseUp(pageNum)}
             >
@@ -473,8 +616,18 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
                 className="select-text"
               />
 
+              {/* Render Saved Highlights on Page */}
+              <PdfPageHighlights
+                pageNum={pageNum}
+                highlights={highlights}
+                scale={scale}
+                onSelectHighlight={(id) => setActiveHighlightId(id)}
+              />
+
               {/* Drawing Layer Overlay (SVG) */}
               <svg
+                viewBox="0 0 1000 1000"
+                preserveAspectRatio="none"
                 className={`absolute inset-0 size-full ${activeTool === "pen" ? "cursor-crosshair pointer-events-auto" : "pointer-events-none"}`}
                 onPointerDown={(e) => handleCanvasMouseDown(e, pageNum)}
                 onPointerMove={(e) => handleCanvasMouseMove(e, pageNum)}
@@ -487,6 +640,7 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
                     d={pointsToSvgPath(d.path_data.points)}
                     stroke={d.path_data.color || d.author_color}
                     strokeWidth={d.path_data.width || 2}
+                    vectorEffect="non-scaling-stroke"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     fill="none"
@@ -499,6 +653,7 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
                     d={pointsToSvgPath(currentPath)}
                     stroke={penColor}
                     strokeWidth={penWidth}
+                    vectorEffect="non-scaling-stroke"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     fill="none"

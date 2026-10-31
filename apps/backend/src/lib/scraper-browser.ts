@@ -1,5 +1,5 @@
 import { chromium, type Browser } from "playwright";
-import { assertPublicUrl, isPrivateHost } from "./extract";
+import { assertPublicUrl } from "./extract";
 import { HttpError } from "../middleware/error";
 
 const DEFAULT_PLAYWRIGHT_TIMEOUT_MS = 15_000;
@@ -17,13 +17,14 @@ export type PlaywrightScrapedPage = {
  * Headless Playwright scraper fallback for dynamic or client-rendered pages
  * (e.g., Notion, Medium, Substack, dynamic SPAs, client-rendered blogs & research portals).
  *
- * Enforces SSRF defense on the initial URL and on all navigations/redirects.
+ * Enforces strict DNS-aware SSRF defense on the initial URL, on all sub-requests/redirects,
+ * and on the final destination URL.
  */
 export async function scrapeWithPlaywright(
   targetUrl: URL,
   timeoutMs = DEFAULT_PLAYWRIGHT_TIMEOUT_MS,
 ): Promise<PlaywrightScrapedPage> {
-  // 1. Initial SSRF check
+  // 1. Initial SSRF check (validates protocol, hostname, and resolved IP addresses)
   await assertPublicUrl(targetUrl);
 
   let browser: Browser | null = null;
@@ -47,10 +48,41 @@ export async function scrapeWithPlaywright(
     const page = await context.newPage();
     page.setDefaultTimeout(timeoutMs);
 
-    // SSRF interceptor: abort any request attempting to route to private IP ranges
+    // Host validation cache so repeat assets (css, js, images) avoid redundant DNS lookups
+    const validatedHosts = new Map<string, boolean>();
+
+    const checkHostAllowed = async (url: URL): Promise<boolean> => {
+      if (!["http:", "https:"].includes(url.protocol)) return false;
+      const host = url.hostname.toLowerCase();
+      if (validatedHosts.has(host)) return validatedHosts.get(host)!;
+
+      try {
+        await assertPublicUrl(url);
+        validatedHosts.set(host, true);
+        return true;
+      } catch {
+        validatedHosts.set(host, false);
+        return false;
+      }
+    };
+
+    // SSRF interceptor: abort any request attempting to route to private/internal IP ranges or DNS names
     await page.route("**/*", async (route) => {
-      const reqUrl = new URL(route.request().url());
-      if (["http:", "https:"].includes(reqUrl.protocol) && isPrivateHost(reqUrl.hostname)) {
+      let reqUrl: URL;
+      try {
+        reqUrl = new URL(route.request().url());
+      } catch {
+        await route.abort("accessdenied");
+        return;
+      }
+
+      if (!["http:", "https:"].includes(reqUrl.protocol)) {
+        await route.abort("accessdenied");
+        return;
+      }
+
+      const isAllowed = await checkHostAllowed(reqUrl);
+      if (!isAllowed) {
         await route.abort("accessdenied");
       } else {
         await route.continue();
@@ -81,9 +113,8 @@ export async function scrapeWithPlaywright(
 
     const finalHref = page.url();
     const finalUrl = new URL(finalHref);
-    if (isPrivateHost(finalUrl.hostname)) {
-      throw new HttpError(400, "Invalid URL");
-    }
+    // 2. Strict DNS-aware verification on final destination
+    await assertPublicUrl(finalUrl);
 
     const html = await page.content();
     const title = (await page.title()) || "";

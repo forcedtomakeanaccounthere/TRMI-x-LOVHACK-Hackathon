@@ -12,7 +12,8 @@
     "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
-    "test:e2e": "vitest run --project e2e"
+    "test:e2e": "vitest run --project e2e",
+    "setup:playwright": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@linkroom/shared": "*",

@@ -82,6 +82,28 @@ describe("PPT parser (lib/ppt.ts)", () => {
     }
   });
 
+  it("recursively extracts text from nested container records (recVer === 0x0f)", () => {
+    // A slide container (recType = 1006, recVer = 0x0f)
+    // Containing a nested TextHeader container or shape container
+    // Containing RT_TextCharsAtom (recType = 4000)
+    const innerTextPayload = Buffer.from("Nested Slide Title\r\nBullet Point Content", "utf16le");
+    const innerTextAtom = makeRecord(4000, innerTextPayload, 0); // atom (recVer = 0)
+
+    // Inner shape container (recType = 1009, recVer = 0x0f) wrapping the text atom
+    const shapeContainer = makeRecord(1009, innerTextAtom, 0x0f);
+
+    // Slide container (recType = 1006, recVer = 0x0f) wrapping the shape container
+    const slideContainer = makeRecord(1006, shapeContainer, 0x0f);
+
+    const pptBuffer = createMockPptBuffer(slideContainer);
+    const html = pptToHtml(pptBuffer);
+
+    expect(html).toContain('data-block="p1"');
+    expect(html).toContain("Slide 1");
+    expect(html).toContain("Nested Slide Title");
+    expect(html).toContain("Bullet Point Content");
+  });
+
   it("throws 400 if PPT file is corrupted or not a valid CFB", () => {
     const badBuffer = Buffer.from("Not an OLE file at all");
     expect(() => pptToHtml(badBuffer)).toThrow(HttpError);

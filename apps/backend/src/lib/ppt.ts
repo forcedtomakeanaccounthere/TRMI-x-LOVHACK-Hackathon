@@ -37,6 +37,8 @@ function cleanString(str: string): string[] {
 
 /**
  * Extracts slides text from a "PowerPoint Document" stream buffer.
+ * Recursively walks PPT container records (recVer === 0x0F) to find nested
+ * text atoms (RT_TextCharsAtom, RT_TextBytesAtom, RT_CString) within slide containers.
  * Groups paragraphs into slide arrays: slide[0] = paragraphs of Slide 1, etc.
  */
 export function extractPptSlides(streamBuf: Buffer): string[][] {
@@ -50,44 +52,50 @@ export function extractPptSlides(streamBuf: Buffer): string[][] {
     }
   };
 
-  let offset = 0;
-  const len = streamBuf.length;
+  const walkRecords = (start: number, end: number, depth = 0) => {
+    if (depth > 32) return;
 
-  while (offset + 8 <= len) {
-    const recType = streamBuf.readUInt16LE(offset + 2);
-    const recLen = streamBuf.readUInt32LE(offset + 4);
+    let offset = start;
+    while (offset + 8 <= end) {
+      const recVerInstance = streamBuf.readUInt16LE(offset);
+      const recVer = recVerInstance & 0x0f;
+      const recType = streamBuf.readUInt16LE(offset + 2);
+      const recLen = streamBuf.readUInt32LE(offset + 4);
 
-    if (offset + 8 + recLen > len) {
-      // Record length exceeds stream; stop reading further.
-      break;
+      if (offset + 8 + recLen > end) {
+        break;
+      }
+
+      const payloadOffset = offset + 8;
+      const isContainer = recVer === 0x0f;
+
+      if (recType === RT_SLIDE_PERSIST_ATOM || recType === RT_SLIDE) {
+        startNewSlide();
+      }
+
+      if (isContainer) {
+        walkRecords(payloadOffset, payloadOffset + recLen, depth + 1);
+      } else {
+        if (recType === RT_TEXT_CHARS_ATOM || recType === RT_CSTRING) {
+          if (recLen > 0) {
+            const text = streamBuf.toString("utf16le", payloadOffset, payloadOffset + recLen);
+            const lines = cleanString(text);
+            if (lines.length > 0) currentSlide.push(...lines);
+          }
+        } else if (recType === RT_TEXT_BYTES_ATOM) {
+          if (recLen > 0) {
+            const text = streamBuf.toString("latin1", payloadOffset, payloadOffset + recLen);
+            const lines = cleanString(text);
+            if (lines.length > 0) currentSlide.push(...lines);
+          }
+        }
+      }
+
+      offset += 8 + recLen;
     }
+  };
 
-    const payloadOffset = offset + 8;
-
-    if (recType === RT_SLIDE_PERSIST_ATOM || recType === RT_SLIDE) {
-      startNewSlide();
-    } else if (recType === RT_TEXT_CHARS_ATOM) {
-      if (recLen > 0) {
-        const text = streamBuf.toString("utf16le", payloadOffset, payloadOffset + recLen);
-        const lines = cleanString(text);
-        if (lines.length > 0) currentSlide.push(...lines);
-      }
-    } else if (recType === RT_TEXT_BYTES_ATOM) {
-      if (recLen > 0) {
-        const text = streamBuf.toString("latin1", payloadOffset, payloadOffset + recLen);
-        const lines = cleanString(text);
-        if (lines.length > 0) currentSlide.push(...lines);
-      }
-    } else if (recType === RT_CSTRING) {
-      if (recLen > 0) {
-        const text = streamBuf.toString("utf16le", payloadOffset, payloadOffset + recLen);
-        const lines = cleanString(text);
-        if (lines.length > 0) currentSlide.push(...lines);
-      }
-    }
-
-    offset += 8 + recLen;
-  }
+  walkRecords(0, streamBuf.length, 0);
 
   if (currentSlide.length > 0) {
     slides.push(currentSlide);
