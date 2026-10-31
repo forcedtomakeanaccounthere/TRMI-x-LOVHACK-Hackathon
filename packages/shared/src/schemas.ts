@@ -17,15 +17,18 @@ export const Room = z.object({
 });
 export type Room = z.infer<typeof Room>;
 
+const notBlank = (s: string) => s.trim().length > 0;
+
 export const Author = z.object({
-  author_name: z.string().min(1).max(40),
+  author_name: z.string().min(1).max(40).refine(notBlank, "Name can't be blank"),
   author_color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
-// Limits match the check constraints in supabase/migrations/0002_auth_and_phase1.sql.
+// Limits match the check constraints in supabase/migrations/0002_auth_and_phase1.sql and
+// 0004_browser_write_checks.sql.
 const HighlightFields = Author.extend({
   room_id: z.string(),
-  block_id: z.string(), // link: "b12" | pdf: "p3"
+  block_id: z.string().regex(/^[bp][0-9]{1,6}$/), // link: "b12" | pdf: "p3"
   start_offset: z.number().int().nonnegative(),
   end_offset: z.number().int().nonnegative(),
   quote: z.string().min(1).max(1000),
@@ -46,7 +49,7 @@ export type Highlight = z.infer<typeof Highlight>;
 export const NewComment = Author.extend({
   room_id: z.string(),
   highlight_id: z.string().uuid(),
-  body: z.string().min(1).max(2000),
+  body: z.string().min(1).max(2000).refine(notBlank, "Comment can't be blank"),
 });
 export type NewComment = z.infer<typeof NewComment>;
 

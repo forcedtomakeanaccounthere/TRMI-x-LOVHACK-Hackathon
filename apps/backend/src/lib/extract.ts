@@ -107,7 +107,7 @@ async function followRedirects(start: URL, signal: AbortSignal) {
 
     const location = res.headers.get("location");
     if (res.status >= 300 && res.status < 400 && location) {
-      await res.body?.cancel();
+      await discardBody(res);
       try {
         url = new URL(location, url);
       } catch {
@@ -117,12 +117,12 @@ async function followRedirects(start: URL, signal: AbortSignal) {
     }
 
     if (!res.ok) {
-      await res.body?.cancel();
+      await discardBody(res);
       throw new HttpError(422, UNREADABLE);
     }
     const type = res.headers.get("content-type") ?? "";
     if (!/text\/html|application\/xhtml\+xml/i.test(type)) {
-      await res.body?.cancel();
+      await discardBody(res);
       throw new HttpError(422, "That link isn't a web page. Drop PDFs in directly, or paste the text instead.");
     }
 
@@ -132,10 +132,16 @@ async function followRedirects(start: URL, signal: AbortSignal) {
   throw new HttpError(422, UNREADABLE);
 }
 
+// Frees the connection. A body that already errored (connection dropped mid-response) rejects
+// on cancel; that must not replace the friendly error the caller is about to throw.
+async function discardBody(res: Response) {
+  await res.body?.cancel().catch(() => {});
+}
+
 async function readLimited(res: Response) {
   const tooLarge = () => new HttpError(422, "This page is too large to read. Try pasting the text instead.");
   if (Number(res.headers.get("content-length") ?? 0) > MAX_PAGE_BYTES) {
-    await res.body?.cancel();
+    await discardBody(res);
     throw tooLarge();
   }
   if (!res.body) return "";
@@ -149,7 +155,7 @@ async function readLimited(res: Response) {
       if (done) break;
       size += value.byteLength;
       if (size > MAX_PAGE_BYTES) {
-        await reader.cancel();
+        await reader.cancel().catch(() => {});
         throw tooLarge();
       }
       chunks.push(value);
