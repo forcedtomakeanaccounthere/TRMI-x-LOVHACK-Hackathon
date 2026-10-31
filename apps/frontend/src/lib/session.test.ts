@@ -42,7 +42,19 @@ describe("safeNext", () => {
     expect(safeNext(next)).toBe(next);
   });
 
-  it.each([null, undefined, "", "r/abc", "https://evil.example", "//evil.example", "/\\evil.example", "/\t/evil.example"])(
+  it.each([
+    null,
+    undefined,
+    "",
+    "r/abc",
+    "https://evil.example",
+    "//evil.example",
+    "/\\evil.example",
+    "/\t/evil.example",
+    "/a/..//evil.example",
+    "/./..//evil.example",
+    "/%2e%2e//evil.example",
+  ])(
     "falls back for %j",
     async (next) => {
       const { safeNext } = await load();
@@ -128,13 +140,63 @@ describe("getFreshSession", () => {
     expect(getSession()).toBeNull();
   });
 
-  it("keeps the session when the refresh fails for another reason", async () => {
+  it.each([500, 503, 429])("keeps the session when the refresh fails with %i", async (status) => {
     const { getFreshSession, getSession, setSession } = await load();
     const session = makeSession(now() - 10);
     setSession(session);
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "Internal server error" }), { status: 500 }));
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: "Try again" }), { status }));
 
-    await expect(getFreshSession()).rejects.toMatchObject({ status: 500 });
+    await expect(getFreshSession()).rejects.toMatchObject({ status });
     expect(getSession()).toEqual(session);
+  });
+
+  describe("when the session changes while the refresh is in flight", () => {
+    // Holds the refresh response until the test decides how it ends.
+    function pendingRefresh() {
+      let respond!: (res: Response) => void;
+      fetchMock.mockReturnValue(new Promise<Response>((resolve) => (respond = resolve)));
+      return respond;
+    }
+
+    it("does not undo a sign-out", async () => {
+      const { getFreshSession, getSession, setSession } = await load();
+      setSession(makeSession(now() - 10, "old"));
+      const respond = pendingRefresh();
+
+      const result = getFreshSession();
+      setSession(null);
+      respond(new Response(JSON.stringify(makeSession(now() + 3600, "new")), { status: 200 }));
+
+      await expect(result).resolves.toBeNull();
+      expect(getSession()).toBeNull();
+    });
+
+    it("keeps a newer sign-in instead of the refreshed old account", async () => {
+      const { getFreshSession, getSession, setSession } = await load();
+      setSession(makeSession(now() - 10, "old"));
+      const respond = pendingRefresh();
+
+      const result = getFreshSession();
+      const other = makeSession(now() + 3600, "other-account");
+      setSession(other);
+      respond(new Response(JSON.stringify(makeSession(now() + 3600, "old-refreshed")), { status: 200 }));
+
+      await expect(result).resolves.toEqual(other);
+      expect(getSession()).toEqual(other);
+    });
+
+    it("does not let a late rejection clear a newer sign-in", async () => {
+      const { getFreshSession, getSession, setSession } = await load();
+      setSession(makeSession(now() - 10, "old"));
+      const respond = pendingRefresh();
+
+      const result = getFreshSession();
+      const other = makeSession(now() + 3600, "other-account");
+      setSession(other);
+      respond(new Response(JSON.stringify({ error: "Session expired. Please log in again." }), { status: 401 }));
+
+      await expect(result).resolves.toEqual(other);
+      expect(getSession()).toEqual(other);
+    });
   });
 });

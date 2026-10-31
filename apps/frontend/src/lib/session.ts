@@ -51,7 +51,11 @@ export function setSession(session: AuthSession | null) {
   window.dispatchEvent(new Event(EVENT));
 }
 
-let refreshing: Promise<AuthSession | null> | null = null;
+// The backend answers 401 only when Auth refused the refresh token (400: the saved session is malformed).
+// Anything else, such as 503 or a network error, leaves the session for a retry.
+const REFRESH_REJECTED = [400, 401];
+
+let refreshing: { token: string; promise: Promise<AuthSession | null> } | null = null;
 
 // The saved session with a usable access token, refreshing it when it is about to expire.
 // Resolves to null (and forgets the session) when there is none or it can no longer be refreshed.
@@ -60,25 +64,34 @@ export async function getFreshSession(): Promise<AuthSession | null> {
   if (!session) return null;
   if (session.expires_at - REFRESH_MARGIN_S > Date.now() / 1000) return session;
 
-  // Concurrent callers share one refresh, since Supabase rotates the refresh token.
-  refreshing ??= api.auth
-    .refresh(session.refresh_token)
-    .then((next) => {
-      setSession(next);
-      return next;
-    })
-    .catch((err: unknown) => {
-      // Only a rejected refresh token ends the session; network errors leave it for a retry.
-      if (err instanceof ApiError && err.status < 500) {
-        setSession(null);
-        return null;
-      }
-      throw err;
-    })
-    .finally(() => {
-      refreshing = null;
-    });
-  return refreshing;
+  // Concurrent callers share one refresh per token, since Supabase rotates the refresh token.
+  if (refreshing?.token !== session.refresh_token) {
+    const token = session.refresh_token;
+    // A sign-out or another sign-in during the request wins: its result is then ignored.
+    const unchanged = () => getSession()?.refresh_token === token;
+    const promise = api.auth.refresh(token).then(
+      (next) => {
+        if (!unchanged()) return getSession();
+        setSession(next);
+        return next;
+      },
+      (err: unknown) => {
+        if (!unchanged()) return getSession();
+        if (err instanceof ApiError && REFRESH_REJECTED.includes(err.status)) {
+          setSession(null);
+          return null;
+        }
+        throw err;
+      },
+    );
+    refreshing = { token, promise };
+    void promise
+      .catch(() => {})
+      .finally(() => {
+        if (refreshing?.promise === promise) refreshing = null;
+      });
+  }
+  return refreshing.promise;
 }
 
 function subscribe(onChange: () => void) {
@@ -104,12 +117,15 @@ export async function signOut() {
 const SAME_SITE = "https://linkroom.invalid";
 
 // Only allow same-site relative paths as post-login destinations. Resolving the path catches
-// tricks a prefix check misses, such as "/\evil.example" or "/\t/evil.example".
+// tricks a prefix check misses, such as "/\evil.example" or "/\t/evil.example", and the result
+// must not start with "//" either: "/a/..//evil.example" resolves to the path "//evil.example",
+// which the router would treat as another host.
 export function safeNext(next: string | null | undefined, fallback = "/") {
   if (!next?.startsWith("/")) return fallback;
   try {
     const url = new URL(next, SAME_SITE);
-    return url.origin === SAME_SITE ? `${url.pathname}${url.search}${url.hash}` : fallback;
+    const path = `${url.pathname}${url.search}${url.hash}`;
+    return url.origin === SAME_SITE && !path.startsWith("//") ? path : fallback;
   } catch {
     return fallback;
   }
