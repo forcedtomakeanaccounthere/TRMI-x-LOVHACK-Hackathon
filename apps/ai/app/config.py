@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     embedding_dim: int = 1024
     embedding_timeout_seconds: float = 30.0
 
+    # Moderation of questions and answers shown to the whole room, through Mistral's moderation
+    # API when MISTRAL_API_KEY is set. A failure lets the text through (and is logged): it must
+    # never take Ask down. Only these categories block; "dangerous" or "criminal" would also catch a
+    # study group's ordinary questions about history or the news.
+    moderation_enabled: bool = True
+    moderation_model: str = "mistral-moderation-latest"
+    moderation_timeout_seconds: float = 5.0
+    moderation_categories: str = "sexual,hate_and_discrimination,violence_and_threats,selfharm"
+
     @model_validator(mode="after")
     def _token_in_production(self) -> "Settings":
         if self.environment == "production" and not self.ai_internal_token:

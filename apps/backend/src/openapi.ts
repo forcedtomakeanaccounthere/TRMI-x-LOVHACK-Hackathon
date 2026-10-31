@@ -509,6 +509,7 @@ export const openApiDocument = createDocument({
           ...invalidInput,
           "404": failure("Room not found or deleted"),
           "409": failure("The room is archived, or the AI is still reading it or couldn't read it"),
+          "422": failure("Moderation refused the question; it is not saved or shown to the room"),
           "429": failure("Too many questions from this IP or in this room in the last minute"),
           "502": failure("The AI service failed, timed out or returned an unexpected shape"),
           "503": failure("No AI provider is configured"),

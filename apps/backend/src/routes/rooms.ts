@@ -669,7 +669,10 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
 
   // Nothing matched: the document can't answer, and there is nothing to send the AI.
   const answer: AnswerResponse = chunks.length
-    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
+    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS, {
+        // Moderation refused it: nothing is saved, so the room never sees the question.
+        400: new HttpError(422, "That question can't be asked here. Try rephrasing it."),
+      })
     : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] };
 
   // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.

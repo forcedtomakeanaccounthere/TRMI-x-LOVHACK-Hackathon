@@ -22,11 +22,14 @@ from app.guardrails import (
 )
 from app.schemas import AnswerChunk, AnswerData, AnswerRequest, Citation
 from app.services.fallback import AllProvidersFailed, complete_with_fallback
+from app.services.moderation import flagged_categories
 from app.services.providers import configured_providers
 
 log = logging.getLogger(__name__)
 
 NOT_FOUND = "I couldn't find that in this document."
+# Shown instead of an answer that moderation flagged: the room sees that one was withheld, not it.
+WITHHELD = "This answer was withheld because it may break the room's content rules."
 
 MAX_ANSWER_CHARS = 2000
 MAX_CITATIONS = 5
@@ -58,6 +61,10 @@ class InvalidQuestion(AnswerError):
     pass
 
 
+class QuestionRefused(AnswerError):
+    """Moderation flagged the question. It is never answered, and apps/backend doesn't save it."""
+
+
 async def answer_question(req: AnswerRequest) -> AnswerData:
     if not configured_providers():
         raise NoProviderError("No AI provider configured: set at least one *_API_KEY")
@@ -65,6 +72,9 @@ async def answer_question(req: AnswerRequest) -> AnswerData:
         question = check_question(req.question)
     except ValueError as e:
         raise InvalidQuestion(str(e)) from e
+    # Before any model call: a flagged question costs nothing and reaches no one.
+    if flagged := await flagged_categories(question):
+        raise QuestionRefused(f"Question refused by moderation ({', '.join(flagged)})")
 
     flag_injection("document", "\n".join(c.content for c in req.chunks))
     user = "\n\n".join(
@@ -87,7 +97,11 @@ async def answer_question(req: AnswerRequest) -> AnswerData:
         )
     except AllProvidersFailed as e:
         raise AnswerError(str(e)) from e
-    return verify_answer(answer, req.chunks)
+    checked = verify_answer(answer, req.chunks)
+    # The answer goes to everyone in the room, so it is moderated too. NOT_FOUND needs no check.
+    if checked.found_in_document and await flagged_categories(checked.answer):
+        return AnswerData(answer=WITHHELD, found_in_document=False, citations=[])
+    return checked
 
 
 def format_chunks(chunks: list[AnswerChunk]) -> str:

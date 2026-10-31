@@ -58,6 +58,7 @@ describe("POST /api/rooms/:id/ask", () => {
       { question: "How do plants get energy?", chunks: [{ content: CHUNKS[0]!.content }, { content: CHUNKS[1]!.content }] },
       expect.anything(),
       30_000,
+      { 400: expect.objectContaining({ status: 422 }) },
     ]);
 
     const saved = {
@@ -76,6 +77,20 @@ describe("POST /api/rooms/:id/ask", () => {
     expect(state.inserts.ai_messages).toEqual([saved]);
     expect(res.body).toMatchObject(saved);
     expect(state.inserts.ai_queries).toEqual([expect.objectContaining({ room_id: "room0001", kind: "ask", prompt: "How do plants get energy?" })]);
+  });
+
+  it("refuses a question moderation flagged with a 422, and saves nothing", async () => {
+    state.matches = CHUNKS;
+    // The real callAi throws the mapped error when apps/ai answers 400.
+    callAi.mockImplementation(async (path: string, _b: unknown, _s: unknown, _t: unknown, onStatus?: Record<number, Error>) => {
+      if (path === "/embed") return { model: "m", vectors: [[1]] };
+      throw onStatus![400];
+    });
+    const res = await ask({ question: "something hateful" });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("That question can't be asked here. Try rephrasing it.");
+    expect(state.inserts.ai_messages ?? []).toEqual([]);
+    expect(state.inserts.ai_queries ?? []).toEqual([]);
   });
 
   it("still answers by keyword when the question can't be embedded", async () => {
