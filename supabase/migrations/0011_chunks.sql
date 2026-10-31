@@ -111,5 +111,5 @@ create trigger rooms_queue_ai
 -- Rooms made before this migration are queued too, so they get indexed on the next startup.
 insert into room_ai (room_id) select id from rooms on conflict (room_id) do nothing;
 
--- The startup query: rooms left waiting, oldest first.
-create index room_ai_waiting_idx on room_ai (created_at) where status in ('pending', 'indexing');
+-- The startup query: rooms left waiting, paged by room id.
+create index room_ai_waiting_idx on room_ai (room_id) where status in ('pending', 'indexing');

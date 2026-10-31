@@ -90,31 +90,57 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
   }
 }
 
-// Rooms resumed per startup. More than this waiting means something else is wrong.
-export const RESUME_LIMIT = 1000;
+// Waiting rooms read per query while resuming.
+export const RESUME_BATCH = 100;
+
+const WAITING: RoomAiStatus[] = ["pending", "indexing"];
 
 /**
  * Indexes every room left "pending" or "indexing": rooms whose job was lost to a restart, and rooms
- * made before indexing existed. Call once at startup. One room at a time, oldest first, so a
- * backlog doesn't flood the embedding provider. Deleted rooms wait until they are restored.
+ * made before indexing existed. Call once at startup. Reads the waiting rooms a batch at a time
+ * until none are left, and indexes them one at a time, so a backlog doesn't flood the embedding
+ * provider. Deleted rooms are skipped: restoring one starts its indexing (startIndexingIfWaiting).
  * Assumes one backend instance: another one's running jobs would look interrupted here.
  */
 export async function resumeIndexing(): Promise<number> {
-  const { data, error } = await supabaseAdmin()
-    .from("room_ai")
-    .select("room_id, rooms!inner(status)")
-    .in("status", ["pending", "indexing"])
-    .neq("rooms.status", "deleted")
-    .order("created_at")
-    .limit(RESUME_LIMIT);
-  if (error) throw error;
+  let resumed = 0;
+  // Paged by room id: it never repeats or skips a room, even when a room's job leaves it waiting
+  // (it was already running) or many rooms were queued at the same moment.
+  let after = "";
+  for (;;) {
+    const { data, error } = await supabaseAdmin()
+      .from("room_ai")
+      .select("room_id, rooms!inner(status)")
+      .in("status", WAITING)
+      .neq("rooms.status", "deleted")
+      .gt("room_id", after)
+      .order("room_id")
+      .limit(RESUME_BATCH);
+    if (error) throw error;
 
-  const rooms = (data as { room_id: string }[]).map((row) => row.room_id);
-  if (rooms.length) console.log(`[ai-jobs] resuming indexing for ${rooms.length} room(s)`);
-  for (const roomId of rooms) {
-    await indexRoom(roomId).catch((err: unknown) => markFailed(roomId, err));
+    const rooms = (data as { room_id: string }[]).map((row) => row.room_id);
+    if (!rooms.length) break;
+    if (!resumed) console.log("[ai-jobs] resuming indexing for rooms left waiting");
+    for (const roomId of rooms) {
+      await indexRoom(roomId).catch((err: unknown) => markFailed(roomId, err));
+    }
+    resumed += rooms.length;
+    after = rooms.at(-1)!;
   }
-  return rooms.length;
+  if (resumed) console.log(`[ai-jobs] resumed indexing for ${resumed} room(s)`);
+  return resumed;
+}
+
+/**
+ * Starts indexing a room in the background if it is still waiting ("pending" or "indexing"), as a
+ * restored room may be: startup skips deleted rooms. Never throws.
+ */
+export function startIndexingIfWaiting(roomId: string) {
+  void (async () => {
+    const { data, error } = await supabaseAdmin().from("room_ai").select("status").eq("room_id", roomId).maybeSingle();
+    if (error) throw error;
+    if (data && WAITING.includes(data.status as RoomAiStatus)) await indexRoom(roomId);
+  })().catch((err: unknown) => markFailed(roomId, err));
 }
 
 /** Records a failed run in room_ai. Never throws, since it runs where nobody is waiting. */

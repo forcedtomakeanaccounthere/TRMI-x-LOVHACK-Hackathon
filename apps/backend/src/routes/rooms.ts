@@ -19,7 +19,7 @@ import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
-import { startIndexing } from "../lib/ai-jobs";
+import { startIndexing, startIndexingIfWaiting } from "../lib/ai-jobs";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
@@ -395,6 +395,8 @@ roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  // Indexing skips deleted rooms, so a room deleted before its chunks were made gets them now.
+  startIndexingIfWaiting(id);
   res.json(withGroup(data));
 });
 

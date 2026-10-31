@@ -7,14 +7,18 @@ type Result = { data?: unknown; error?: unknown };
 const calls: Record<string, unknown[][]> = {};
 const results: Record<string, Result[]> = {};
 
+// Writes to room_ai (upserts) answer from "room_ai:upsert", so they don't take the results queued
+// for reads of the same table.
 function table(name: string) {
   const log = (calls[name] ??= []);
+  let key = name;
   const builder: Record<string, unknown> = {
-    then: (resolve: (r: Result) => unknown) => resolve({ data: null, error: null, ...results[name]?.shift() }),
+    then: (resolve: (r: Result) => unknown) => resolve({ data: null, error: null, ...results[key]?.shift() }),
   };
-  for (const method of ["select", "eq", "single", "delete", "insert", "upsert", "in", "neq", "order", "limit"]) {
+  for (const method of ["select", "eq", "single", "maybeSingle", "delete", "insert", "upsert", "in", "neq", "gt", "order", "limit"]) {
     builder[method] = (...args: unknown[]) => {
       log.push([method, ...args]);
+      if (method === "upsert") key = `${name}:upsert`;
       return builder;
     };
   }
@@ -26,9 +30,8 @@ vi.mock("../../src/lib/supabase", () => ({ supabaseAdmin: () => ({ from: table }
 const callAi = vi.fn();
 vi.mock("../../src/lib/ai", () => ({ callAi: (...args: unknown[]) => callAi(...args) }));
 
-const { EMBED_BATCH, indexRoom, markFailed, RESUME_LIMIT, resumeIndexing, startIndexing } = await import(
-  "../../src/lib/ai-jobs"
-);
+const { EMBED_BATCH, indexRoom, markFailed, RESUME_BATCH, resumeIndexing, startIndexing, startIndexingIfWaiting } =
+  await import("../../src/lib/ai-jobs");
 
 const called = (name: string, method: string) => (calls[name] ?? []).filter(([m]) => m === method).map(([, ...a]) => a);
 const statuses = () => called("room_ai", "upsert").map(([row]) => (row as { status: string }).status);
@@ -164,35 +167,48 @@ describe("startIndexing and markFailed", () => {
   });
 
   it("swallows a failure to record the failure", async () => {
-    results.room_ai = [{ error: new Error("database down") }];
+    results["room_ai:upsert"] = [{ error: new Error("database down") }];
     await expect(markFailed("room0001", new Error("x"))).resolves.toBeUndefined();
   });
 });
 
 describe("resumeIndexing", () => {
-  it("indexes every room left pending or indexing, one at a time, skipping deleted rooms", async () => {
-    results.room_ai = [{ data: [{ room_id: "room0001" }, { room_id: "room0002" }] }];
-    results.rooms = [{ data: roomWith(1) }, { data: roomWith(1) }];
+  it("indexes every waiting room, a batch at a time until none are left, skipping deleted rooms", async () => {
+    results.room_ai = [
+      { data: [{ room_id: "room0001" }, { room_id: "room0002" }] },
+      { data: [{ room_id: "room0003" }] },
+      { data: [] },
+    ];
+    results.rooms = [{ data: roomWith(1) }, { data: roomWith(1) }, { data: roomWith(1) }];
 
-    expect(await resumeIndexing()).toBe(2);
+    expect(await resumeIndexing()).toBe(3);
 
-    // The query for waiting rooms, before the indexing runs write their states.
-    expect(calls.room_ai!.slice(0, 5)).toEqual([
+    const reads = calls.room_ai!.filter(([m]) => m !== "upsert");
+    expect(reads.slice(0, 7)).toEqual([
       ["select", "room_id, rooms!inner(status)"],
       ["in", "status", ["pending", "indexing"]],
       ["neq", "rooms.status", "deleted"],
-      ["order", "created_at"],
-      ["limit", RESUME_LIMIT],
+      ["gt", "room_id", ""],
+      ["order", "room_id"],
+      ["limit", RESUME_BATCH],
+      ["select", "room_id, rooms!inner(status)"],
+    ]);
+    // Each batch starts after the last room of the one before, so the reads always move on.
+    expect(called("room_ai", "gt")).toEqual([
+      ["room_id", ""],
+      ["room_id", "room0002"],
+      ["room_id", "room0003"],
     ]);
     expect(called("rooms", "eq")).toEqual([
       ["id", "room0001"],
       ["id", "room0002"],
+      ["id", "room0003"],
     ]);
-    expect(called("chunks", "insert")).toHaveLength(2);
+    expect(called("chunks", "insert")).toHaveLength(3);
   });
 
   it("marks a room that fails and goes on to the next", async () => {
-    results.room_ai = [{ data: [{ room_id: "room0001" }, { room_id: "room0002" }] }];
+    results.room_ai = [{ data: [{ room_id: "room0001" }, { room_id: "room0002" }] }, { data: [] }];
     results.rooms = [{ error: new Error("gone") }, { data: roomWith(1) }];
 
     expect(await resumeIndexing()).toBe(2);
@@ -208,5 +224,29 @@ describe("resumeIndexing", () => {
   it("throws when the waiting rooms can't be read", async () => {
     results.room_ai = [{ error: new Error("database down") }];
     await expect(resumeIndexing()).rejects.toThrow("database down");
+  });
+});
+
+describe("startIndexingIfWaiting (a restored room)", () => {
+  it.each(["pending", "indexing"])("indexes a room still %s", async (status) => {
+    results.room_ai = [{ data: { status } }];
+    results.rooms = [{ data: roomWith(1) }];
+    startIndexingIfWaiting("room0001");
+    await vi.waitFor(() => expect(statuses()).toEqual(["indexing", "ready"]));
+  });
+
+  it.each([["ready"], ["failed"], [null]])("leaves a room whose state is %s alone", async (status) => {
+    results.room_ai = [{ data: status ? { status } : null }];
+    startIndexingIfWaiting("room0001");
+    await vi.waitFor(() => expect(called("room_ai", "maybeSingle")).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls.rooms).toBeUndefined();
+    expect(statuses()).toEqual([]);
+  });
+
+  it("records a failure and never throws", async () => {
+    results.room_ai = [{ error: new Error("database down") }];
+    startIndexingIfWaiting("room0001");
+    await vi.waitFor(() => expect(statuses()).toEqual(["failed"]));
   });
 });
