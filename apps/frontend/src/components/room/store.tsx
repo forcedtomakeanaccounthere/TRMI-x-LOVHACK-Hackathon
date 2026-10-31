@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
+import { loadDoc, loadSavedHighlights, newRemoveKey, removeSavedHighlight, saveHighlight } from "./docs";
 import type { Identity } from "./identity";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
@@ -238,24 +238,25 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       emit({ type: "doc.remove", doc_id: id });
     },
     annotate(a: NewAnnotation) {
+      const text = (a.kind === "highlight" || a.kind === "underline") && realDoc(a.doc);
       const annotation = {
         ...a,
         id: a.id ?? crypto.randomUUID(),
         author: actor,
         at: new Date().toISOString(),
+        // Saved text marks carry the key that lets the room remove their row later.
+        ...(text ? { remove_key: newRemoveKey() } : {}),
       } as Annotation;
       if (!emit({ type: "annot.add", annotation }).length) return annotation;
-      if (annotation.kind === "highlight" || annotation.kind === "underline") {
-        if (realDoc(annotation.doc)) saveHighlight(annotation);
-      }
+      if (text && (annotation.kind === "highlight" || annotation.kind === "underline")) void saveHighlight(annotation);
       return annotation;
     },
     removeAnnotation(id: string) {
       const target = state.annotations.find((a) => a.id === id);
       if (!emit({ type: "annot.remove", annotation_id: id }).length) return;
       // Text marks are also rows in highlights (for recaps and new browsers): remove the row too.
-      if (target && (target.kind === "highlight" || target.kind === "underline") && realDoc(target.doc)) {
-        removeSavedHighlight(target.id, target.doc);
+      if (target && (target.kind === "highlight" || target.kind === "underline") && target.remove_key) {
+        void removeSavedHighlight(target.id, target.doc, target.remove_key);
       }
     },
     editNote(id: string, body: string) {

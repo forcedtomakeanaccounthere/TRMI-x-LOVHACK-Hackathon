@@ -66,6 +66,9 @@ export type Annotation = AnnotationBase &
         end: number;
         quote: string;
         color: string;
+        // Proves the right to remove the saved highlights row (its hash is stored with the row).
+        // Shared through the ledger, never stored in the database.
+        remove_key?: string;
       }
     | { kind: "region"; rect: Rect; color: string }
     | { kind: "ink"; points: Point[]; color: string; width: number }

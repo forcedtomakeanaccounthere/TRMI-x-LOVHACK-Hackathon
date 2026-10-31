@@ -79,10 +79,22 @@ export async function loadSavedHighlights(docId: string): Promise<Annotation[]> 
   }));
 }
 
+// A random key for removing a saved highlight later, and the SHA-256 hash the row keeps
+// (supabase/migrations/0016_remove_highlight.sql).
+export function newRemoveKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function hashRemoveKey(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 // Text highlights also go to the highlights table so the backend recap sees them. Best effort: the
 // ledger already has the mark, and the insert is refused for rooms that aren't running.
-export function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
-  void getSupabase()
+export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
+  const { error } = await getSupabase()
     .from("highlights")
     .insert({
       id: a.id,
@@ -93,20 +105,16 @@ export function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "unde
       quote: a.quote,
       author_name: a.author.name,
       author_color: a.color,
-    })
-    .then(({ error }) => {
-      if (error) console.warn("[room] highlight not saved to the database", error.message);
+      remove_key_hash: a.remove_key ? await hashRemoveKey(a.remove_key) : null,
     });
+  if (error) console.warn("[room] highlight not saved to the database", error.message);
 }
 
-// Erasing a text mark removes its row too (supabase/migrations/0016_remove_highlight.sql), so recaps
-// and browsers that load the room later don't bring it back. Best effort, like saving.
-export function removeSavedHighlight(id: string, docId: string) {
-  void getSupabase()
-    .rpc("remove_highlight", { p_id: id, p_room: docId })
-    .then(({ error }) => {
-      if (error) console.warn("[room] highlight not removed from the database", error.message);
-    });
+// Erasing a text mark removes its row too, so recaps and browsers that load the room later don't
+// bring it back. Only works with the mark's remove key; best effort, like saving.
+export async function removeSavedHighlight(id: string, docId: string, key: string) {
+  const { error } = await getSupabase().rpc("remove_highlight", { p_id: id, p_room: docId, p_key: key });
+  if (error) console.warn("[room] highlight not removed from the database", error.message);
 }
 
 export function youtubeId(url: string): string | null {
