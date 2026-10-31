@@ -2,6 +2,7 @@ import { Room } from "@linkroom/shared";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Logo } from "@/components/brand/logo";
+import { RoomActivityTracker } from "@/components/room/room-activity-tracker";
 import { getSupabase } from "@/lib/supabase";
 
 // A shared room. Anyone with the link can open it without an account (rooms are public-read under RLS).
@@ -40,6 +41,7 @@ async function RoomContent({ id }: { id: string }) {
 
   return (
     <article className="mx-auto max-w-[68ch] pt-8 md:pt-14">
+      <RoomActivityTracker roomId={id} />
       <h1 className="font-display text-[clamp(2.2rem,5vw,3.6rem)] font-normal">{room.title || "Untitled room"}</h1>
       {room.source_url && (
         <a

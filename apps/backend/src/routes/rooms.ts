@@ -23,6 +23,7 @@ import {
   RoomDetail,
   TranscriptResponse,
   UpdateRoomRequest,
+  roomChannel,
   type SourceMeta,
   type CreateRoomResponse,
   type DashboardResponse,
@@ -255,7 +256,7 @@ export const MAX_PARTICIPATION = 1000;
 const DELETED_PDFS = "pdfs-deleted";
 
 export const ROOM_DETAIL =
-  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, deleted_at, room_group_items(group_id)";
+  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, archived_at, deleted_at, room_group_items(group_id)";
 
 // The filing lives in its own private table; callers see it as the room's group_id.
 type Filed = { room_group_items?: { group_id: string } | null };
@@ -385,6 +386,100 @@ roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
   res.json(room as RoomStatusResponse);
 });
 
+// POST /api/rooms/:id/activity: records active user interaction (keystrokes, mouse events, scrolls).
+// Resets the 2-hour idle pause countdown. If authenticated, also updates participant last_seen_at.
+roomsRouter.post("/:id/activity", optionalAuth, async (req, res) => {
+  const { id } = req.params;
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("id, status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+  if (room.status !== "running") throw new HttpError(409, `Room is ${room.status}`);
+
+  const now = new Date().toISOString();
+  const { data: updated, error: touchError } = await db
+    .from("rooms")
+    .update({ last_activity_at: now })
+    .eq("id", id)
+    .eq("status", "running")
+    .select("id, status, last_activity_at")
+    .maybeSingle();
+  if (touchError) throw touchError;
+  if (!updated) {
+    const { data: current } = await db.from("rooms").select("status").eq("id", id).maybeSingle();
+    if (!current || current.status === "deleted") throw new HttpError(404, "Room not found");
+    throw new HttpError(409, `Room is ${current.status}`);
+  }
+
+  if (req.user) {
+    const { error: joinError } = await db
+      .from("room_participants")
+      .upsert(
+        { room_id: id, user_id: req.user.id, last_seen_at: now },
+        { onConflict: "room_id,user_id" },
+      );
+    if (joinError) throw joinError;
+  }
+
+  res.json({ id: updated.id, status: updated.status, last_activity_at: updated.last_activity_at });
+});
+
+// POST /api/rooms/:id/heartbeat: records reader presence (both authenticated users and guests).
+// Keeps last_presence_at current without resetting the 2-hour idle pause activity timer.
+roomsRouter.post("/:id/heartbeat", optionalAuth, async (req, res) => {
+  const { id } = req.params;
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("id, status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const now = new Date().toISOString();
+  if (room.status === "running") {
+    const { error: touchError } = await db
+      .from("rooms")
+      .update({ last_presence_at: now })
+      .eq("id", id)
+      .eq("status", "running");
+    if (touchError) throw touchError;
+  }
+
+  if (req.user) {
+    const { error: joinError } = await db
+      .from("room_participants")
+      .upsert(
+        { room_id: id, user_id: req.user.id, last_seen_at: now },
+        { onConflict: "room_id,user_id" },
+      );
+    if (joinError) throw joinError;
+  }
+
+  res.json(room as RoomStatusResponse);
+});
+
+async function broadcastRoomStatus(
+  db: ReturnType<typeof supabaseAdmin>,
+  roomId: string,
+  status: string,
+  reason: string,
+) {
+  if (typeof db.channel !== "function") return;
+  try {
+    const channel = db.channel(roomChannel(roomId));
+    await channel.send({
+      type: "broadcast",
+      event: "status",
+      payload: { id: roomId, status, reason },
+    });
+    if (typeof db.removeChannel === "function") {
+      await db.removeChannel(channel);
+    }
+  } catch (err) {
+    console.warn(`[rooms] Failed to broadcast status update for room ${roomId}:`, err);
+  }
+}
+
 // PATCH /api/rooms/:id  { status?, group_id? }: owner only. Someone else's room looks like it
 // doesn't exist. Deleting has its own endpoints so a PDF is never left public by accident.
 roomsRouter.patch("/:id", requireAuth, async (req, res) => {
@@ -428,6 +523,10 @@ roomsRouter.patch("/:id", requireAuth, async (req, res) => {
   }
   if (!saved) throw new HttpError(409, "The room just changed. Try again.");
 
+  if (body.status && body.status !== room.status) {
+    await broadcastRoomStatus(db, id, body.status, "owner_update");
+  }
+
   res.json(await roomDetail(db, id));
 });
 
@@ -455,6 +554,8 @@ roomsRouter.delete("/:id", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  await broadcastRoomStatus(db, id, "deleted", "owner_delete");
+
   res.json(withGroup(data));
 });
 
@@ -479,6 +580,7 @@ roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  await broadcastRoomStatus(db, id, "running", "owner_restore");
   // Indexing skips deleted rooms, so a room deleted before its chunks were made gets them now.
   startIndexingIfWaiting(id);
   res.json(withGroup(data));

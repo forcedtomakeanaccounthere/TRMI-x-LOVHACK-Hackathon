@@ -485,6 +485,34 @@ export const openApiDocument = createDocument({
         },
       },
     },
+    "/api/rooms/{id}/activity": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Record keystrokes, mouse events, or interaction in a room",
+        description:
+          "Updates the room's last_activity_at timestamp to prevent auto-pausing. " +
+          "When authenticated, also refreshes participant last_seen_at.",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("Activity recorded", RoomStatusResponse),
+          "404": failure("Room not found or deleted"),
+          "409": failure("Room is not running (e.g. paused, closed, archived)"),
+        },
+      },
+    },
+    "/api/rooms/{id}/heartbeat": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Record reader presence heartbeat",
+        description:
+          "Records presence for both signed-in readers and guests without resetting the idle activity timer.",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("Presence recorded", RoomStatusResponse),
+          "404": failure("Room not found or deleted"),
+        },
+      },
+    },
     "/api/rooms/{id}/invites": {
       post: {
         tags: ["Rooms"],
