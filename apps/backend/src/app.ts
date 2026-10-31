@@ -7,14 +7,20 @@ import { env } from "./env";
 import { errorHandler, notFound } from "./middleware/error";
 import { openApiDocument } from "./openapi";
 import { authRouter } from "./routes/auth";
+import { groupsRouter } from "./routes/groups";
 import { healthRouter } from "./routes/health";
+import { meRouter } from "./routes/me";
 import { roomsRouter } from "./routes/rooms";
+import { usersRouter } from "./routes/users";
 
 // Every API router, by mount path. test/unit/openapi.test.ts checks each route is documented.
 export const apiRouters = {
   "/health": healthRouter,
   "/api/auth": authRouter,
+  "/api/me": meRouter,
   "/api/rooms": roomsRouter,
+  "/api/groups": groupsRouter,
+  "/api/users": usersRouter,
 };
 
 export function createApp() {
