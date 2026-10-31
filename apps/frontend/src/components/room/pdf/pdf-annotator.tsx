@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { api, ApiError } from "@/lib/api";
 import { backendQuestion } from "@/components/room/ai";
+import { hashRemoveKey, newRemoveKey, rememberRemoveKey } from "@/components/room/docs";
 import { getSupabase } from "@/lib/supabase";
 
 // Configure pdfjs worker
@@ -379,17 +380,26 @@ export function PdfAnnotator({ roomId, pdfUrl, title }: PdfAnnotatorProps) {
     setCurrentPath([]);
     setDrawingPage(null);
 
+    // Only this browser keeps the remove key; the row gets its hash (0019_drawing_remove_key.sql).
+    const key = newRemoveKey();
     const supabase = getSupabase();
-    const { error } = await supabase.from("drawings").insert({
-      room_id: roomId,
-      page_num: pageNum,
-      author_name: authorName,
-      author_color: penColor,
-      path_data: pathData,
-    });
+    const { data, error } = await supabase
+      .from("drawings")
+      .insert({
+        room_id: roomId,
+        page_num: pageNum,
+        author_name: authorName,
+        author_color: penColor,
+        path_data: pathData,
+        remove_key_hash: await hashRemoveKey(key),
+      })
+      .select("id")
+      .single();
 
     if (error) {
       toast.error("Could not save drawing stroke");
+    } else {
+      rememberRemoveKey(data.id as string, key);
     }
   };
 

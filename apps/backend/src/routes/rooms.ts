@@ -18,6 +18,7 @@ import {
   CreateTextRoomRequest,
   CreateYoutubeRoomRequest,
   CreateDrawingRequest,
+  RemoveDrawingRequest,
   ExportSummaryQuery,
   type Drawing,
   DashboardQuery,
@@ -1083,6 +1084,7 @@ roomsRouter.post("/:id/drawings", optionalAuth, async (req, res) => {
       author_name: body.author_name,
       author_color: body.author_color,
       path_data: body.path_data,
+      remove_key_hash: body.remove_key_hash ?? null,
     })
     .select()
     .single();
@@ -1090,14 +1092,23 @@ roomsRouter.post("/:id/drawings", optionalAuth, async (req, res) => {
   res.status(201).json(data as Drawing);
 });
 
-// DELETE /api/rooms/:id/drawings/:drawingId
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// DELETE /api/rooms/:id/drawings/:drawingId  { key }: the remove key the stroke was saved with.
 roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) => {
   const id = req.params.id as string;
   const drawingId = req.params.drawingId as string;
+  const { key } = RemoveDrawingRequest.parse(req.body ?? {});
+  if (!UUID.test(drawingId)) throw new HttpError(404, "Drawing not found");
   await readableRoom(id);
-  const db = supabaseAdmin();
-  const { error } = await db.from("drawings").delete().eq("id", drawingId).eq("room_id", id);
+  // remove_drawing deletes only when the key matches the stroke's hash, so a public id is no proof.
+  const { data: removed, error } = await supabaseAdmin().rpc("remove_drawing", {
+    p_id: drawingId,
+    p_room: id,
+    p_key: key,
+  });
   if (error) throw error;
+  if (!removed) throw new HttpError(404, "Drawing not found");
   res.json({ ok: true });
 });
 

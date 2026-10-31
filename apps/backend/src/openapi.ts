@@ -12,6 +12,7 @@ import {
   CreateTextRoomRequest,
   CreateYoutubeRoomRequest,
   CreateDrawingRequest,
+  RemoveDrawingRequest,
   Drawing as DrawingSchema,
   ExportSummaryQuery,
   CatchupRequest,
@@ -700,9 +701,14 @@ export const openApiDocument = createDocument({
       delete: {
         tags: ["Rooms"],
         summary: "Delete a drawing stroke",
+        description:
+          "Only with the remove key the stroke was saved with (its SHA-256 is the stroke's `remove_key_hash`).",
         requestParams: { path: z.object({ id: z.string(), drawingId: z.string() }) },
+        requestBody: body(RemoveDrawingRequest),
         responses: {
           "200": reply("Success", z.object({ ok: z.boolean() })),
+          ...invalidInput,
+          "404": failure("Room or drawing not found, or the key does not match"),
         },
       },
     },

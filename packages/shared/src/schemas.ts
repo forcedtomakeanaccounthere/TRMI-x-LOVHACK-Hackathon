@@ -550,8 +550,14 @@ export const CreateDrawingRequest = z.object({
   author_name: z.string().min(1).max(40),
   author_color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   path_data: DrawingPathData,
+  // SHA-256 of a remove key the saving browser keeps (supabase/migrations/0019_drawing_remove_key.sql).
+  remove_key_hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 });
 export type CreateDrawingRequest = z.infer<typeof CreateDrawingRequest>;
+
+// DELETE /api/rooms/:id/drawings/:drawingId: only the key whose hash the stroke was saved with.
+export const RemoveDrawingRequest = z.object({ key: z.string().min(32).max(128) });
+export type RemoveDrawingRequest = z.infer<typeof RemoveDrawingRequest>;
 
 export const Drawing = z.object({
   id: z.string().uuid(),
