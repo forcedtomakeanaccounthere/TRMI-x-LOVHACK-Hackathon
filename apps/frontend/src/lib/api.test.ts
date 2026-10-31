@@ -142,6 +142,22 @@ describe("api dashboard", () => {
     expect(init.method).toBe("POST");
   });
 
+  it("heartbeat posts to the room's heartbeat route", async () => {
+    await api.heartbeat("x7Kp2qLm", "tok");
+    const { url, init, headers } = lastCall();
+    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm/heartbeat");
+    expect(init.method).toBe("POST");
+    expect(headers.get("Authorization")).toBe("Bearer tok");
+  });
+
+  it("recordActivity posts to the room's activity route", async () => {
+    await api.recordActivity("x7Kp2qLm", "tok");
+    const { url, init, headers } = lastCall();
+    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm/activity");
+    expect(init.method).toBe("POST");
+    expect(headers.get("Authorization")).toBe("Bearer tok");
+  });
+
   it("updateRoom sends a JSON PATCH to the room", async () => {
     await api.updateRoom("x7Kp2qLm", { status: "archived" }, "tok");
     const { url, init, headers } = lastCall();

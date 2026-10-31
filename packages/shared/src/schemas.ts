@@ -253,6 +253,7 @@ export const DashboardRoom = z.object({
   group_id: z.string().uuid().nullable(),
   created_at: z.string(),
   last_activity_at: z.string(),
+  archived_at: z.string().nullable().optional(),
   last_opened_at: z.string().nullable(), // null until this user joins the room
   highlight_count: z.number().int(),
   comment_count: z.number().int(),
@@ -290,9 +291,18 @@ export const RoomDetail = z.object({
   last_activity_at: z.string(),
   paused_at: z.string().nullable(),
   closed_at: z.string().nullable(),
+  archived_at: z.string().nullable().optional(),
   deleted_at: z.string().nullable(),
 });
 export type RoomDetail = z.infer<typeof RoomDetail>;
+
+export const RoomLifecycleSweepResult = z.object({
+  room_id: z.string(),
+  old_status: RoomStatus,
+  new_status: RoomStatus,
+  transition_reason: z.string(),
+});
+export type RoomLifecycleSweepResult = z.infer<typeof RoomLifecycleSweepResult>;
 
 export const RoomStatusResponse = z.object({ id: z.string(), status: RoomStatus });
 export type RoomStatusResponse = z.infer<typeof RoomStatusResponse>;
