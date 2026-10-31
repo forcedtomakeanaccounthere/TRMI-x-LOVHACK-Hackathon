@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.16.2",
     "rapidfuzz>=3.14.6",
     "uvicorn[standard]>=0.54.0",
+    "youtube-transcript-api>=1.2",
 ]
 
 [dependency-groups]

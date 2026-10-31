@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     moderation_timeout_seconds: float = 5.0
     moderation_categories: str = "sexual,hate_and_discrimination,violence_and_threats,selfharm"
 
+    # YouTube transcripts. YouTube often blocks requests from cloud hosts; set YT_PROXY_URL (an
+    # http(s) proxy URL, credentials included) to fetch through a proxy in production.
+    yt_proxy_url: str | None = None
+    transcript_timeout_seconds: float = 20.0
+
     @model_validator(mode="after")
     def _token_in_production(self) -> "Settings":
         if self.environment == "production" and not self.ai_internal_token:

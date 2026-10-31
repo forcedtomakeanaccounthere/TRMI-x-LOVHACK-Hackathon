@@ -148,3 +148,29 @@ class AnswerData(BaseModel):
     answer: str
     found_in_document: bool
     citations: list[Citation]
+
+
+# --- YouTube transcripts (POST /transcript) ---
+
+# Enough for a long lecture; a transcript with more segments is cut here.
+MAX_TRANSCRIPT_SEGMENTS = 20_000
+
+
+class TranscriptRequest(BaseModel):
+    video_id: str = Field(pattern=r"^[A-Za-z0-9_-]{11}$")
+    # Tried in order; any other language the video has is the fallback.
+    languages: list[Annotated[str, Field(min_length=2, max_length=12)]] = Field(
+        default=["en", "hi"], max_length=10
+    )
+
+
+class TranscriptSegment(BaseModel):
+    start: float = Field(ge=0)
+    duration: float = Field(ge=0)
+    text: str
+
+
+class TranscriptResponse(BaseModel):
+    language: str
+    is_generated: bool  # YouTube's automatic captions, usually without punctuation
+    segments: list[TranscriptSegment]

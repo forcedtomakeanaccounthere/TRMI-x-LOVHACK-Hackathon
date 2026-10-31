@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(117);
+select plan(118);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -56,8 +56,11 @@ select throws_ok(
   '23514', null, 'a requested_by over 40 characters is refused'
 );
 
+insert into room_sources (room_id, data) values ('room0001', '{"kind": "transcript"}');
+
 -- Guests (anon key, not logged in) -------------------------------------------------------------
 set local role anon;
+select is_empty($$select 1 from room_sources$$, 'anon cannot read a room''s raw transcript');
 
 select isnt_empty($$select 1 from rooms where id = 'room0001'$$, 'anon can read rooms');
 select isnt_empty($$select 1 from highlights where room_id = 'room0001'$$, 'anon can read highlights');

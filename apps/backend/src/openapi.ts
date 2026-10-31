@@ -9,6 +9,7 @@ import {
   CreateLinkRoomRequest,
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
+  CreateYoutubeRoomRequest,
   DashboardQuery,
   DashboardResponse as DashboardResponseSchema,
   FollowStateResponse as FollowStateResponseSchema,
@@ -373,6 +374,27 @@ export const openApiDocument = createDocument({
           ...needsVerifiedUser,
           "413": failure("The PDF is over 20 MB"),
           "422": failure("The PDF is damaged or password-protected"),
+        },
+      },
+    },
+    "/api/rooms/youtube": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Create a room from a YouTube video's transcript",
+        description:
+          "The transcript is fetched from YouTube's captions (preferring English, then Hindi, then any " +
+          "language), or taken from `transcript` when given: text copied from YouTube's \"Show " +
+          "transcript\", with or without its timestamps. Paragraphs become t{n} blocks that keep their " +
+          "time range in `data-start` / `data-end`, so answers and summaries can point into the video. " +
+          "The detailed summary is written in the background.",
+        security: bearer,
+        requestBody: body(CreateYoutubeRoomRequest),
+        responses: {
+          ...roomCreated,
+          "400": failure("Not a YouTube video link, or an invalid body"),
+          ...needsVerifiedUser,
+          "422": failure("No readable captions, YouTube blocked the fetch, or the transcript is empty: paste it instead"),
+          "502": failure("Fetching the transcript failed or timed out"),
         },
       },
     },

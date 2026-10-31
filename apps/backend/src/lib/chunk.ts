@@ -4,7 +4,8 @@ import { JSDOM } from "jsdom";
 //
 // A chunk is about 400 tokens: blocks are joined until it reaches TARGET_CHUNK_CHARS, never past
 // MAX_CHUNK_CHARS, and it always ends where a block ends, so every chunk can say exactly which
-// blocks (b{n} paragraphs, p{n} pages or slides) it came from. The one exception is a single block
+// blocks (b{n} paragraphs, p{n} pages or slides, t{n} video transcript) it came from, and a video
+// room's chunk where it is in the video. The one exception is a single block
 // longer than MAX_CHUNK_CHARS (a dense PDF page, a huge paragraph): it is split at sentence ends
 // into several chunks that all point at that block.
 
@@ -21,6 +22,8 @@ export type Chunk = {
   block_ids: string[];
   page: number | null; // PDF page or slide of the first block
   heading_path: string[]; // the h1-h3 headings the chunk sits under
+  start_sec: number | null; // video rooms: where the chunk starts and ends in the video
+  end_sec: number | null;
 };
 
 type Block = {
@@ -29,6 +32,8 @@ type Block = {
   page: number | null;
   headingPath: string[];
   isHeading: boolean;
+  start: number | null; // t{n} blocks: data-start / data-end, in seconds
+  end: number | null;
 };
 
 export type RoomText = { kind: string; content_html: string | null; content_text: string | null };
@@ -77,6 +82,8 @@ export function htmlBlocks(html: string): Block[] {
       page: pageOf(ids[0]!),
       headingPath: headings.filter((h): h is string => Boolean(h)),
       isHeading: Boolean(level),
+      start: seconds(el.getAttribute("data-start")),
+      end: seconds(el.getAttribute("data-end")),
     });
   };
 
@@ -106,7 +113,15 @@ export function pdfBlocks(text: string): Block[] {
   for (const [, page, body] of text.matchAll(/\[Page (\d+)\] ([\s\S]*?)(?=\n\n\[Page \d+\] |$)/g)) {
     const pageText = clean(body ?? "");
     if (pageText) {
-      blocks.push({ ids: [`p${page}`], text: pageText, page: Number(page), headingPath: [], isHeading: false });
+      blocks.push({
+        ids: [`p${page}`],
+        text: pageText,
+        page: Number(page),
+        headingPath: [],
+        isHeading: false,
+        start: null,
+        end: null,
+      });
     }
   }
   return blocks;
@@ -125,6 +140,8 @@ export function chunkBlocks(blocks: Block[]): Chunk[] {
       block_ids: [...new Set(parts.flatMap((b) => b.ids))],
       page: parts.find((b) => b.page !== null)?.page ?? null,
       heading_path: parts[0]!.headingPath,
+      start_sec: parts.find((b) => b.start !== null)?.start ?? null,
+      end_sec: [...parts].reverse().find((b) => b.end !== null)?.end ?? null,
     });
   };
   const flush = () => {
@@ -175,6 +192,12 @@ export function splitText(text: string, max: number): string[] {
 /** The text sent to the embedding model: the chunk with its headings, which say what it is about. */
 export function embeddingText(chunk: Chunk) {
   return chunk.heading_path.length ? `${chunk.heading_path.join(" > ")}\n\n${chunk.content}` : chunk.content;
+}
+
+// A time attribute of a t{n} block (lib/youtube.ts), or null when missing or not a number.
+function seconds(value: string | null) {
+  const n = value === null ? NaN : Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 // p{n} is a PDF page or a slide; b{n} and t{n} have no page.

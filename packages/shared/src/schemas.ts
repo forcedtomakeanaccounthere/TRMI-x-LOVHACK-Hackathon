@@ -10,8 +10,17 @@ export type RoomKind = z.infer<typeof RoomKind>;
 export const FileFormat = z.enum(["pdf", "docx", "pptx", "md", "txt"]);
 export type FileFormat = z.infer<typeof FileFormat>;
 
-// rooms.source_meta for uploaded rooms (0010_ai_foundation.sql).
-export const SourceMeta = z.object({ format: FileFormat, file_name: z.string() });
+// rooms.source_meta (0010_ai_foundation.sql): an uploaded file, or a YouTube video.
+export const FileSourceMeta = z.object({ format: FileFormat, file_name: z.string() });
+export const YoutubeSourceMeta = z.object({
+  format: z.literal("youtube"),
+  video_id: z.string(),
+  language: z.string().nullable(), // null for a pasted transcript
+  // YouTube's automatic captions (usually without punctuation), its manual ones, or pasted text.
+  transcript: z.enum(["auto", "manual", "pasted"]),
+  duration_sec: z.number().nullable(), // null when a pasted transcript has no timestamps
+});
+export const SourceMeta = z.union([FileSourceMeta, YoutubeSourceMeta]);
 export type SourceMeta = z.infer<typeof SourceMeta>;
 
 // Block anchors: "b12" paragraph | "p3" PDF page or slide | "t7" transcript segment.
@@ -450,3 +459,21 @@ export type MessageResponse = z.infer<typeof MessageResponse>;
 
 export const ApiError = z.object({ error: z.string() });
 export type ApiError = z.infer<typeof ApiError>;
+
+// --- YouTube rooms (POST /api/rooms/youtube) ---
+
+// A pasted transcript (YouTube's "Show transcript", copied with or without its timestamps) is
+// used instead of fetching one, for videos whose captions can't be fetched from the server.
+export const CreateYoutubeRoomRequest = z.object({
+  url: z.string().url(),
+  transcript: z.string().max(500_000).optional(),
+});
+export type CreateYoutubeRoomRequest = z.infer<typeof CreateYoutubeRoomRequest>;
+
+// POST /transcript on apps/ai (apps/ai/app/schemas.py must match).
+export const TranscriptResponse = z.object({
+  language: z.string(),
+  is_generated: z.boolean(),
+  segments: z.array(z.object({ start: z.number(), duration: z.number(), text: z.string() })),
+});
+export type TranscriptResponse = z.infer<typeof TranscriptResponse>;
