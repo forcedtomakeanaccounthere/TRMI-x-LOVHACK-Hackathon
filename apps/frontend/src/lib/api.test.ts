@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 
 const fetchMock = vi.fn();
 
@@ -45,6 +45,15 @@ describe("api.auth", () => {
     await expect(api.auth.login({ email: "a@b.co", password: "x" })).rejects.toThrow(
       "Please verify your email first",
     );
+  });
+
+  it("exposes the HTTP status on the error", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Please verify your email first" }), { status: 403 }),
+    );
+    const err = await api.auth.login({ email: "a@b.co", password: "x" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(403);
   });
 
   it("falls back to the status code when the body is not JSON", async () => {

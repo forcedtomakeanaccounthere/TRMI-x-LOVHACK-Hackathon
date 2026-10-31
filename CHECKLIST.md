@@ -156,7 +156,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **FE**
 - [ ] `PresenceBar`: avatars with initials and colour ring, max 5 then "+N", tooltip names
-- [ ] "Priya joined" / "Priya left" toasts
+- [ ] "abhishek joined" / "abhishek left" toasts
 - [ ] `CursorLayer`: arrow plus name tag in the person's colour, framer-motion spring, fade after 5 s idle, own cursor hidden
 - [ ] `lib/highlights.ts`: `selectionToHighlight()` returns `{ block_id, start_offset, end_offset, quote }`, or null if the selection spans blocks
 - [ ] `HighlightToolbar`: floating above a selection with Highlight and Comment buttons
@@ -216,7 +216,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] **Bring everyone here** button sends a `summon` event that every client obeys
 
 **FE: Follow mode**
-- [ ] `FollowBanner`: "Following Priya · Stop"
+- [ ] `FollowBanner`: "Following abhishek · Stop"
 - [ ] Avatar shows a small "following" indicator
 
 **AI: Group recap**
@@ -262,7 +262,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Footer with GitHub link
 
 **FE: Room polish**
-- [ ] Activity feed tab: "Priya highlighted…", "Arun commented…", newest first
+- [ ] Activity feed tab: "abhishek highlighted…", "Arun commented…", newest first
 - [ ] Skeleton loaders for room, PDF pages and recap
 - [ ] Empty states for comments, activity and recap
 - [ ] Dark mode checked on every screen

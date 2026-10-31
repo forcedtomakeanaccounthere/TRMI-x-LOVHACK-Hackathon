@@ -247,7 +247,7 @@ The recap is structured JSON validated with zod:
 {
   "one_line_summary": "string",
   "key_points": ["string"],
-  "what_the_group_cared_about": [{ "quote": "string", "who": ["Priya"], "why": "string" }],
+  "what_the_group_cared_about": [{ "quote": "string", "who": ["abhishek"], "why": "string" }],
   "disagreements": ["string"],
   "open_questions": ["string"],
   "next_steps": ["string"]
@@ -266,7 +266,7 @@ The look is **calm reader first, playful multiplayer second**. The content must 
 
 1. **Content is the hero.** Reader-mode typography, generous whitespace, a narrow text column.
 2. **People are colour.** Each person has one colour used everywhere: cursor, avatar ring, highlights, comment accent. The rest of the UI is neutral.
-3. **Show life immediately.** Something should move within 2 seconds of joining: cursors, a "Priya joined" toast, a reaction.
+3. **Show life immediately.** Something should move within 2 seconds of joining: cursors, a "abhishek joined" toast, a reaction.
 4. **Never dead-end.** Every error has a next action (Paste text instead, Try another link, Retry).
 5. **One click to share.** The Share button is always visible in the room header.
 
@@ -343,13 +343,13 @@ Load fonts with `next/font` to avoid layout shift.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ← LinkRoom │ Internet – Wikipedia      (A)(P)(R)+2  [QR] [Share] [◐]│  header 56px
 ├──────────────────────────────────────────────────────────────────────┤
-│ Following Priya · Stop                                               │  follow banner (only when following)
+│ Following abhishek · Stop                                               │  follow banner (only when following)
 ├──────────┬─────────────────────────────────────┬─────────────────────┤
 │ heatmap  │                                     │ [Comments][Activity]│
 │ (P2)     │   Article title                     │ [Recap]             │
 │          │                                     │                     │
 │          │   Paragraph text with ▓highlights▓  │  "quoted text"      │
-│          │      ↖ Priya                        │  Priya: why is…     │
+│          │      ↖ abhishek                        │  abhishek: why is…     │
 │          │                                     │  Arun: because…     │
 │          │   Paragraph text…   🔥              │  [Reply…]           │
 │          │                                     │                     │
@@ -382,14 +382,14 @@ Load fonts with `next/font` to avoid layout shift.
 | HighlightToolbar | Appears on selection, disappears on click away, keyboard accessible |
 | CommentPanel | Threads grouped by highlight, newest last, author colour dot, relative time |
 | RecapPanel | Loading skeleton, sections for each recap field, "Recapped by Arun · 2 min ago" |
-| FollowBanner | "Following Priya · Stop", stops automatically if you scroll yourself |
+| FollowBanner | "Following abhishek · Stop", stops automatically if you scroll yourself |
 | Toasts | Joined / left, link copied, recap ready, errors |
 | Empty states | "No highlights yet. Select any text to start." |
 | Error state | Friendly message, Paste text instead, Try another link |
 
 ### Copy tone
 
-Short, friendly, plain English. Examples: "Building your room…", "Priya joined", "Link copied. Send it to your friends.", "We couldn't read this page. Paste the text instead?".
+Short, friendly, plain English. Examples: "Building your room…", "abhishek joined", "Link copied. Send it to your friends.", "We couldn't read this page. Paste the text instead?".
 
 ### Accessibility
 
