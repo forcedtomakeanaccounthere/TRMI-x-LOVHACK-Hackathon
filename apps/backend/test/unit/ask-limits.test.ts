@@ -18,7 +18,7 @@ beforeEach(() => {
   // Every request reads the room and its AI state; nothing matches, so no AI answer is needed.
   state.results.rooms = Array.from({ length: 10 }, () => ({ data: { status: "running" } }));
   state.results.room_ai = Array.from({ length: 10 }, () => ({ data: { status: "ready" } }));
-  callAi.mockResolvedValue({ model: "m", vectors: [[1]] });
+  callAi.mockImplementation(async (path: string) => (path === "/moderate" ? { flagged: [] } : { model: "m", vectors: [[1]] }));
 });
 
 describe("POST /api/rooms/:id/ask rate limits", () => {

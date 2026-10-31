@@ -148,8 +148,15 @@ export const AnswerResponse = z.object({
   answer: z.string(),
   found_in_document: z.boolean(),
   citations: z.array(z.object({ chunk: z.number().int(), quote: z.string() })),
+  withheld: z.boolean().default(false), // moderation flagged the answer
 });
 export type AnswerResponse = z.infer<typeof AnswerResponse>;
+
+// POST /moderate on apps/ai: the blocking categories a question falls into (empty when fine).
+export const ModerateResponse = z.object({ flagged: z.array(z.string()) });
+
+// Saved instead of an answer moderation flagged, so the room sees that one was withheld, not it.
+export const ANSWER_WITHHELD = "This answer was withheld because it may break the room's content rules.";
 
 // A checked citation as saved and shown: where in the room the quote is. Page and times come from
 // the chunk, never from the model.

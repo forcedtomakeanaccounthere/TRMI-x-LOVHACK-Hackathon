@@ -150,6 +150,20 @@ class AnswerData(BaseModel):
     citations: list[Citation]
 
 
+class AnswerResult(AnswerData):
+    """What POST /answer returns. Not in the model's schema, so the model can't set withheld."""
+
+    withheld: bool = False  # moderation flagged the answer; apps/backend shows its own message
+
+
+class ModerateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class ModerateResponse(BaseModel):
+    flagged: list[str]  # the blocking categories; empty when fine or moderation is unavailable
+
+
 # --- YouTube transcripts (POST /transcript) ---
 
 # Enough for a long lecture; a transcript with more segments is cut here.

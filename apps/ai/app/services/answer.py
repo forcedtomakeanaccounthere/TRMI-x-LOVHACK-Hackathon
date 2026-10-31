@@ -20,7 +20,7 @@ from app.guardrails import (
     urls_in,
     wrap_untrusted,
 )
-from app.schemas import AnswerChunk, AnswerData, AnswerRequest, Citation
+from app.schemas import AnswerChunk, AnswerData, AnswerRequest, AnswerResult, Citation
 from app.services.fallback import AllProvidersFailed, complete_with_fallback
 from app.services.moderation import flagged_categories
 from app.services.providers import configured_providers
@@ -61,20 +61,15 @@ class InvalidQuestion(AnswerError):
     pass
 
 
-class QuestionRefused(AnswerError):
-    """Moderation flagged the question. It is never answered, and apps/backend doesn't save it."""
 
 
-async def answer_question(req: AnswerRequest) -> AnswerData:
+async def answer_question(req: AnswerRequest) -> AnswerResult:
     if not configured_providers():
         raise NoProviderError("No AI provider configured: set at least one *_API_KEY")
     try:
         question = check_question(req.question)
     except ValueError as e:
         raise InvalidQuestion(str(e)) from e
-    # Before any model call: a flagged question costs nothing and reaches no one.
-    if flagged := await flagged_categories(question):
-        raise QuestionRefused(f"Question refused by moderation ({', '.join(flagged)})")
 
     flag_injection("document", "\n".join(c.content for c in req.chunks))
     user = "\n\n".join(
@@ -98,10 +93,11 @@ async def answer_question(req: AnswerRequest) -> AnswerData:
     except AllProvidersFailed as e:
         raise AnswerError(str(e)) from e
     checked = verify_answer(answer, req.chunks)
-    # The answer goes to everyone in the room, so it is moderated too. NOT_FOUND needs no check.
+    # The answer goes to everyone in the room, so it is moderated (the question was, by apps/backend
+    # through POST /moderate, before the search). NOT_FOUND needs no check.
     if checked.found_in_document and await flagged_categories(checked.answer):
-        return AnswerData(answer=WITHHELD, found_in_document=False, citations=[])
-    return checked
+        return AnswerResult(answer=WITHHELD, found_in_document=False, citations=[], withheld=True)
+    return AnswerResult(**checked.model_dump())
 
 
 def format_chunks(chunks: list[AnswerChunk]) -> str:

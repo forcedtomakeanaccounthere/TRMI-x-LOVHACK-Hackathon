@@ -3,6 +3,8 @@ import {
   AskRequest,
   CreateInviteRequest,
   EmbedResponse,
+  ANSWER_WITHHELD,
+  ModerateResponse,
   NOT_IN_DOCUMENT,
   type AiCitation,
   type AiMessage,
@@ -665,6 +667,8 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
 // Chunks a question is answered from (match_chunks p_k).
 const ASK_CHUNKS = 8;
 // apps/ai answers within 25 s; embedding the question is quick or not worth waiting for.
+// apps/ai gives Mistral's moderation 5 s.
+const MODERATE_TIMEOUT_MS = 8_000;
 const ANSWER_TIMEOUT_MS = 30_000;
 const QUESTION_EMBED_TIMEOUT_MS = 10_000;
 
@@ -716,6 +720,14 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
     throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
   }
 
+  // The question is shown to the whole room, so it is moderated before anything else, whether or not
+  // the search finds anything. Moderation fails open: if apps/ai can't check it, it goes through.
+  const moderation = await callAi("/moderate", { text: question }, ModerateResponse, MODERATE_TIMEOUT_MS).catch(() => {
+    console.warn(`[rooms] moderation unavailable for a question in room ${id}, allowing it`);
+    return { flagged: [] };
+  });
+  if (moderation.flagged.length) throw new HttpError(422, "That question can't be asked here. Try rephrasing it.");
+
   // Without an embedding the search is by keyword only.
   let embedding: number[] | null = null;
   try {
@@ -736,11 +748,8 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
 
   // Nothing matched: the document can't answer, and there is nothing to send the AI.
   const answer: AnswerResponse = chunks.length
-    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS, {
-        // Moderation refused it: nothing is saved, so the room never sees the question.
-        400: new HttpError(422, "That question can't be asked here. Try rephrasing it."),
-      })
-    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] };
+    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
+    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
 
   // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
   const citations = answer.citations.flatMap((citation): AiCitation[] => {
@@ -757,7 +766,8 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
       kind: "ask",
       asked_by: askedBy,
       question,
-      answer: inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
+      // Our own text for a withheld answer: never the model's.
+      answer: answer.withheld ? ANSWER_WITHHELD : inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
       found_in_document: inDocument,
       citations: inDocument ? citations : [],
     })

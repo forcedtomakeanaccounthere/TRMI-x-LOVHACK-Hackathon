@@ -66,6 +66,7 @@ def test_keeps_citations_whose_quote_is_in_the_chunk(client, auth, fake):
         "answer": "Plants turn sunlight into energy.",
         "found_in_document": True,
         "citations": [{"chunk": 1, "quote": "turns sunlight into chemical energy"}],
+        "withheld": False,
     }
 
 
@@ -91,6 +92,7 @@ def test_an_answer_with_no_citation_left_is_not_found(client, auth, fake):
         "answer": NOT_FOUND,
         "found_in_document": False,
         "citations": [],
+        "withheld": False,
     }
 
 
@@ -101,7 +103,12 @@ def test_the_model_saying_not_found_wins(client, auth, fake):
         citations=[cite(1, "turns sunlight into chemical energy")],
     )
     body = ask(client, auth, question="What is the capital of France?").json()
-    assert body == {"answer": NOT_FOUND, "found_in_document": False, "citations": []}
+    assert body == {
+        "answer": NOT_FOUND,
+        "found_in_document": False,
+        "citations": [],
+        "withheld": False,
+    }
 
 
 def test_merges_repeated_citations_and_caps_them(client, auth, fake):

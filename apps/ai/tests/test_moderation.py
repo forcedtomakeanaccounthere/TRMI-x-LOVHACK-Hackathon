@@ -91,14 +91,16 @@ class TestFlaggedCategories:
 
 
 class TestAskModeration:
-    def test_a_flagged_question_is_refused_before_any_model_call(
-        self, client, auth, answer_ai, moderation
-    ):
+    def test_moderate_reports_a_flagged_question(self, client, auth, moderation):
         moderation.flag["I will hurt them"] = categories(violence_and_threats=True)
-        res = ask(client, auth, question="I will hurt them")
-        assert res.status_code == 400
-        assert "violence_and_threats" in res.json()["detail"]
-        assert answer_ai.calls == []
+        res = client.post("/moderate", json={"text": "I will hurt them"}, headers=auth)
+        assert res.json() == {"flagged": ["violence_and_threats"]}
+        assert client.post("/moderate", json={"text": "fine"}, headers=auth).json() == {
+            "flagged": []
+        }
+
+    def test_moderate_needs_the_internal_token(self, client, moderation):
+        assert client.post("/moderate", json={"text": "x"}).status_code == 401
 
     def test_a_flagged_answer_is_withheld(self, client, auth, answer_ai, moderation):
         answer_ai.answer = AnswerData(
@@ -108,7 +110,12 @@ class TestAskModeration:
         )
         moderation.flag["Hateful text"] = categories(hate_and_discrimination=True)
         body = ask(client, auth, question=QUESTION).json()
-        assert body == {"answer": WITHHELD, "found_in_document": False, "citations": []}
+        assert body == {
+            "answer": WITHHELD,
+            "found_in_document": False,
+            "citations": [],
+            "withheld": True,
+        }
 
     def test_clean_questions_and_answers_pass(self, client, auth, answer_ai, moderation):
         answer_ai.answer = AnswerData(
@@ -117,8 +124,6 @@ class TestAskModeration:
             citations=[Citation(chunk=1, quote="Photosynthesis turns sunlight")],
         )
         body = ask(client, auth, question=QUESTION).json()
-        assert body["found_in_document"] is True
-        assert [r["input"][0] for r in moderation.requests] == [
-            QUESTION,
-            "Plants use photosynthesis.",
-        ]
+        assert body["found_in_document"] is True and body["withheld"] is False
+        # The question is moderated by apps/backend (POST /moderate); /answer checks the answer.
+        assert [r["input"][0] for r in moderation.requests] == ["Plants use photosynthesis."]
