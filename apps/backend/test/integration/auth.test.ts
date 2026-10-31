@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makePdf } from "../support/pdf";
 import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
 
 let supabase: TestSupabase;
@@ -290,30 +291,66 @@ describe("room creation authorization", () => {
     });
   });
 
-  it("pdf rooms upload the file and record the creator", async () => {
+  it("pdf rooms upload the file, keep its text and record the creator", async () => {
     const session = await verifiedSession();
+    const file = makePdf(["Attention is all you need", "Results"]);
     const res = await request(app)
       .post("/api/rooms/pdf")
       .set("Authorization", `Bearer ${session.access_token}`)
-      .attach("file", Buffer.from("%PDF-1.4 test"), { filename: "paper.pdf", contentType: "application/pdf" });
+      .attach("file", file, { filename: "résumé.pdf", contentType: "application/pdf" });
 
     expect(res.status).toBe(201);
-    expect(await (await supabase.pdf(`${res.body.id}.pdf`))?.text()).toBe("%PDF-1.4 test");
+    const stored = await supabase.pdf(`${res.body.id}.pdf`);
+    expect(Buffer.from(await stored!.arrayBuffer()).equals(file)).toBe(true);
     expect(await supabase.room(res.body.id)).toMatchObject({
       kind: "pdf",
-      title: "paper.pdf",
+      title: "résumé.pdf",
+      pdf_path: `${res.body.id}.pdf`,
+      content_text: "[Page 1] Attention is all you need\n\n[Page 2] Results",
       created_by: session.user.id,
     });
   });
 
+  const uploadPdf = async (file: Buffer, contentType = "application/pdf") => {
+    const session = await verifiedSession();
+    return request(app)
+      .post("/api/rooms/pdf")
+      .set("Authorization", `Bearer ${session.access_token}`)
+      .attach("file", file, { filename: "paper.pdf", contentType });
+  };
+
   it("pdf rooms reject other file types", async () => {
+    const res = await uploadPdf(Buffer.from("hello"), "text/plain");
+    expect(res.status).toBe(400);
+  });
+
+  it("pdf rooms check the bytes, not the Content-Type", async () => {
+    const res = await uploadPdf(Buffer.from("<html>not a pdf</html>"));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "That file is not a PDF" });
+  });
+
+  it("pdf rooms refuse a damaged PDF", async () => {
+    const res = await uploadPdf(Buffer.from("%PDF-1.4 but nothing else"));
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: "We couldn't read this PDF. It may be damaged." });
+  });
+
+  it("pdf rooms refuse files over 20 MB with a 413", async () => {
+    const big = Buffer.concat([makePdf(["big"]), Buffer.alloc(20 * 1024 * 1024)]);
+    const res = await uploadPdf(big);
+    expect(res.status).toBe(413);
+    expect(res.body).toEqual({ error: "PDF must be 20 MB or smaller" });
+  });
+
+  it("pdf rooms need a file", async () => {
     const session = await verifiedSession();
     const res = await request(app)
       .post("/api/rooms/pdf")
       .set("Authorization", `Bearer ${session.access_token}`)
-      .attach("file", Buffer.from("hello"), { filename: "notes.txt", contentType: "text/plain" });
-
+      .field("title", "no file");
     expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "A PDF file is required" });
   });
 
   it("link rooms pass auth and then apply URL checks", async () => {

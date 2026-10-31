@@ -28,6 +28,7 @@
     "multer": "^2.0.2",
     "nanoid": "^5.1.5",
     "swagger-ui-express": "5.0.1",
+    "unpdf": "^1.7.0",
     "zod": "^4.1.0",
     "zod-openapi": "6.0.2"
   },

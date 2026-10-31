@@ -12,6 +12,8 @@ export const Room = z.object({
   title: z.string().nullable(),
   content_html: z.string().nullable(),
   pdf_path: z.string().nullable(),
+  // pdf rooms: text of the first pages, for the AI recap. Optional so pages can leave it out of the select.
+  content_text: z.string().nullable().optional(),
   created_by: z.string().uuid().nullable(), // auth.users id of the creator
   created_at: z.string(),
 });

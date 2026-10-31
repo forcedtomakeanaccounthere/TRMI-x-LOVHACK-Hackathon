@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startBackend, WEB, type Backend } from "../support/backend-process";
+import { makePdf } from "../support/pdf";
 import { uniqueEmail } from "../support/supabase";
 
 // User stories run against the production build as a separate process, over HTTP.
@@ -92,14 +93,17 @@ describe("user stories (production build)", () => {
     expect((await createTextRoom(be, first.access_token, "Notes"))?.created_by).toBe(first.user.id);
 
     const form = new FormData();
-    form.append("file", new Blob(["%PDF-1.4 e2e"], { type: "application/pdf" }), "paper.pdf");
+    const file = makePdf(["e2e"]);
+    form.append("file", new Blob([new Uint8Array(file)], { type: "application/pdf" }), "paper.pdf");
     const pdf = await be.postForm("/api/rooms/pdf", form, first.access_token);
     expect(pdf.status).toBe(201);
     const { id: pdfId } = (await pdf.json()) as { id: string };
-    expect(await (await be.supabase.pdf(`${pdfId}.pdf`))?.text()).toBe("%PDF-1.4 e2e");
+    const stored = await be.supabase.pdf(`${pdfId}.pdf`);
+    expect(Buffer.from(await stored!.arrayBuffer()).equals(file)).toBe(true);
     expect(await be.supabase.room(pdfId)).toMatchObject({
       kind: "pdf",
       title: "paper.pdf",
+      content_text: "[Page 1] e2e",
       created_by: first.user.id,
     });
 
