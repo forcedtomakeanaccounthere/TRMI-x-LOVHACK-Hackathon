@@ -1,8 +1,13 @@
 import {
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
+  DashboardQuery,
   RecapData,
+  UpdateRoomStatusRequest,
   type CreateRoomResponse,
+  type DashboardResponse,
+  type DashboardRoom,
+  type RoomStatusResponse,
 } from "@linkroom/shared";
 import { Router } from "express";
 import multer from "multer";
@@ -84,6 +89,134 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
+// The most rooms a user's visit history contributes to their dashboard.
+const MAX_VISITS = 1000;
+const DELETED_PDFS = "pdfs-deleted";
+
+type RoomRow = Omit<DashboardRoom, "role" | "last_opened_at" | "highlight_count" | "comment_count"> & {
+  created_by: string | null;
+  highlights: { count: number }[];
+  comments: { count: number }[];
+};
+
+// A % or _ in a search is the literal character, not a wildcard.
+export const titlePattern = (q: string) => `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+
+// GET /api/rooms/mine: rooms the user created or joined. Deleted rooms show up for their owner only.
+roomsRouter.get("/mine", requireAuth, async (req, res) => {
+  const { q, status, kind, role, sort, limit, offset } = DashboardQuery.parse(req.query);
+  const userId = req.user!.id;
+  const db = supabaseAdmin();
+
+  const visits = await db
+    .from("room_visits")
+    .select("room_id, last_opened_at")
+    .eq("user_id", userId)
+    .order("last_opened_at", { ascending: false })
+    .limit(MAX_VISITS);
+  if (visits.error) throw visits.error;
+  const lastOpened = new Map(visits.data.map((v) => [v.room_id as string, v.last_opened_at as string]));
+
+  // Room ids are nanoids and userId a uuid, so both are safe inside the filter string.
+  const visited = `id.in.(${[...lastOpened.keys()].join(",")})`;
+  const notMine = `or(created_by.is.null,created_by.neq.${userId})`;
+  const membership = `and(${visited},${notMine},status.neq.deleted)`;
+
+  let query = db
+    .from("rooms")
+    .select("id, kind, source_url, title, status, created_by, created_at, highlights(count), comments(count)", {
+      count: "exact",
+    });
+  if (role === "owner") query = query.eq("created_by", userId);
+  else if (role === "member") query = query.or(membership);
+  else query = query.or(`created_by.eq.${userId},${membership}`);
+
+  if (status) query = query.eq("status", status);
+  else query = query.neq("status", "deleted");
+  if (kind) query = query.eq("kind", kind);
+  if (q) query = query.ilike("title", titlePattern(q));
+
+  query =
+    sort === "title"
+      ? query.order("title", { ascending: true, nullsFirst: false })
+      : query.order("created_at", { ascending: sort === "oldest" });
+
+  // The id tiebreak keeps pages stable when rooms share a title or timestamp.
+  const { data, count, error } = await query.order("id").range(offset, offset + limit - 1);
+  if (error) throw error;
+
+  const rooms = (data as unknown as RoomRow[]).map(
+    ({ created_by, highlights, comments, ...room }): DashboardRoom => ({
+      ...room,
+      role: created_by === userId ? "owner" : "member",
+      last_opened_at: lastOpened.get(room.id) ?? null,
+      highlight_count: highlights[0]?.count ?? 0,
+      comment_count: comments[0]?.count ?? 0,
+    }),
+  );
+  res.json({ rooms, total: count ?? 0 } satisfies DashboardResponse);
+});
+
+// POST /api/rooms/:id/join: remembers the room for a logged-in user. Guests just open the link.
+roomsRouter.post("/:id/join", requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db.from("rooms").select("id, status").eq("id", id).maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const { error: visitError } = await db
+    .from("room_visits")
+    .upsert({ room_id: id, user_id: req.user!.id, last_opened_at: new Date().toISOString() });
+  if (visitError) throw visitError;
+
+  res.json(room as RoomStatusResponse);
+});
+
+// PATCH /api/rooms/:id/status  { status }: owner only. Someone else's room looks like it doesn't exist.
+roomsRouter.patch("/:id/status", requireAuth, async (req, res) => {
+  const { status } = UpdateRoomStatusRequest.parse(req.body);
+  const db = supabaseAdmin();
+
+  const { data: room, error } = await db
+    .from("rooms")
+    .select("status, pdf_path")
+    .eq("id", req.params.id)
+    .eq("created_by", req.user!.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room) throw new HttpError(404, "Room not found");
+
+  const hide = status === "deleted";
+  const pdfPath = (room.status === "deleted") !== hide ? (room.pdf_path as string | null) : null;
+  if (pdfPath) await movePdf(pdfPath, hide);
+
+  // Saves only if the status is still the one read above: the PDF move was decided from it, so a
+  // request that lost a race must undo its move, or a deleted room's PDF could stay public.
+  const { data, error: updateError } = await db
+    .from("rooms")
+    .update({ status })
+    .eq("id", req.params.id)
+    .eq("status", room.status)
+    .select("id, status")
+    .maybeSingle();
+  if (updateError || !data) {
+    if (pdfPath) await movePdf(pdfPath, !hide).catch(console.error);
+    if (updateError) throw updateError;
+    throw new HttpError(409, "The room just changed. Try again.");
+  }
+
+  res.json(data as RoomStatusResponse);
+});
+
+// Public bucket URLs skip RLS, so a deleted room's PDF has to leave the public bucket.
+async function movePdf(path: string, hide: boolean) {
+  const [from, to] = hide ? ["pdfs", DELETED_PDFS] : [DELETED_PDFS, "pdfs"];
+  const { error } = await supabaseAdmin().storage.from(from!).move(path, path, { destinationBucket: to! });
+  if (error) throw error;
+}
+
 // POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap.
 // The insert reaches every client through Supabase Realtime.
 roomsRouter.post("/:id/recap", async (req, res) => {
@@ -91,11 +224,12 @@ roomsRouter.post("/:id/recap", async (req, res) => {
   const db = supabaseAdmin();
 
   const [room, highlights, comments] = await Promise.all([
-    db.from("rooms").select("title, content_html").eq("id", id).single(),
+    db.from("rooms").select("title, content_html, status").eq("id", id).single(),
     db.from("highlights").select("author_name, block_id, quote").eq("room_id", id),
     db.from("comments").select("author_name, highlight_id, body").eq("room_id", id),
   ]);
-  if (room.error) throw new HttpError(404, "Room not found");
+  if (room.error || room.data.status === "deleted") throw new HttpError(404, "Room not found");
+  if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
 
   const aiRes = await fetch(`${env.AI_SERVICE_URL}/recap`, {
     method: "POST",

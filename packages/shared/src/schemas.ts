@@ -5,6 +5,10 @@ import { z } from "zod";
 export const RoomKind = z.enum(["link", "pdf"]);
 export type RoomKind = z.infer<typeof RoomKind>;
 
+// Mirrors the check constraint in supabase/migrations/0005_room_status_and_visits.sql.
+export const RoomStatus = z.enum(["running", "closed", "archived", "deleted"]);
+export type RoomStatus = z.infer<typeof RoomStatus>;
+
 export const Room = z.object({
   id: z.string(),
   kind: RoomKind,
@@ -93,6 +97,45 @@ export type CreateTextRoomRequest = z.infer<typeof CreateTextRoomRequest>;
 
 export const CreateRoomResponse = z.object({ id: z.string() });
 export type CreateRoomResponse = z.infer<typeof CreateRoomResponse>;
+
+// --- Dashboard (apps/backend /api/rooms) ---
+
+export const DashboardQuery = z.object({
+  q: z.string().trim().max(200).optional(), // matches the room title
+  status: RoomStatus.optional(), // left out: every room except deleted ones
+  kind: RoomKind.optional(),
+  role: z.enum(["owner", "member"]).optional(),
+  sort: z.enum(["newest", "oldest", "title"]).default("newest"),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type DashboardQuery = z.infer<typeof DashboardQuery>;
+
+export const DashboardRoom = z.object({
+  id: z.string(),
+  kind: RoomKind,
+  source_url: z.string().nullable(),
+  title: z.string().nullable(),
+  status: RoomStatus,
+  role: z.enum(["owner", "member"]),
+  created_at: z.string(),
+  last_opened_at: z.string().nullable(), // null until this user joins the room
+  highlight_count: z.number().int(),
+  comment_count: z.number().int(),
+});
+export type DashboardRoom = z.infer<typeof DashboardRoom>;
+
+export const DashboardResponse = z.object({
+  rooms: z.array(DashboardRoom),
+  total: z.number().int(), // matching rooms across all pages
+});
+export type DashboardResponse = z.infer<typeof DashboardResponse>;
+
+export const UpdateRoomStatusRequest = z.object({ status: RoomStatus });
+export type UpdateRoomStatusRequest = z.infer<typeof UpdateRoomStatusRequest>;
+
+export const RoomStatusResponse = z.object({ id: z.string(), status: RoomStatus });
+export type RoomStatusResponse = z.infer<typeof RoomStatusResponse>;
 
 // --- Auth (apps/backend /api/auth) ---
 
