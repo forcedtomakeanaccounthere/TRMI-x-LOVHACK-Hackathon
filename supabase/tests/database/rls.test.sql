@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(78);
+select plan(81);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -38,6 +38,20 @@ where oid in (
   'public.ai_queries'::regclass
 )
 order by relname;
+
+-- recaps.requested_by ("Recapped by …") follows the author-name rules (0009).
+select lives_ok(
+  $$insert into recaps (room_id, data, requested_by) values ('room0001', '{}', 'Priya')$$,
+  'a recap can record who asked for it'
+);
+select throws_ok(
+  $$insert into recaps (room_id, data, requested_by) values ('room0001', '{}', E' \n\t ')$$,
+  '23514', null, 'a blank requested_by is refused'
+);
+select throws_ok(
+  $$insert into recaps (room_id, data, requested_by) values ('room0001', '{}', repeat('x', 41))$$,
+  '23514', null, 'a requested_by over 40 characters is refused'
+);
 
 -- Guests (anon key, not logged in) -------------------------------------------------------------
 set local role anon;

@@ -79,7 +79,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 
 **BE**
 - [ ] Create the Supabase project (region closest to the team, e.g. Mumbai)
-- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql`, `0003_comments_highlight_idx.sql`, `0004_browser_write_checks.sql`, `0005_room_status_and_visits.sql` then `0006_pdf_text.sql` in the SQL editor *(in repo)*
+- [ ] Run `supabase/migrations/0001_init.sql`, `0002_auth_and_phase1.sql`, `0003_comments_highlight_idx.sql`, `0004_browser_write_checks.sql`, `0005_room_status_and_visits.sql`, `0006_pdf_text.sql`, `0007_dashboard.sql`, `0008_room_top_members.sql` then `0009_recap_requested_by.sql` in the SQL editor *(in repo)*
   - tables `rooms`, `highlights`, `comments`, `recaps`; realtime publication; RLS (public select, anonymous insert on highlights and comments only)
   - `pdfs` bucket: public read, 20 MB limit, `application/pdf` only
   - length checks: quote ≤ 1,000, comment body ≤ 2,000, author name ≤ 40
@@ -228,10 +228,11 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] For PDF rooms, use the extracted PDF text
 - [ ] Call Claude with the Anthropic SDK, model `claude-opus-5-5`, structured output validated by the zod `Recap` schema
 - [ ] Handle refusal or empty output with a 502 and a friendly message
-- [ ] Retry once on a network error
+- [ ] Retry once on a network error (`callAi`: a refused or dropped connection only, never a timeout) *(in repo)*
 - [ ] Save the result to `recaps`; return it
-- [ ] Rate limit: one recap per room every 30 s (check the latest `recaps.created_at`)
-- [ ] If there are no highlights yet, return a gentle "Highlight a few things first" message instead of calling the API
+- [ ] Rate limit: one recap per room every 30 s (check the latest `recaps.created_at`; 429 with `Retry-After`), and one recap in progress per room (409) *(in repo)*
+- [ ] If there are no highlights yet, return a gentle "Highlight a few things first" message instead of calling the API (422) *(in repo)*
+- [ ] Save who asked as `recaps.requested_by` (body `{ name }`, else the signed-in user's name) for "Recapped by …" *(in repo)*
 
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once

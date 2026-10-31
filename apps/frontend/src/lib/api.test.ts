@@ -117,6 +117,12 @@ describe("room creation", () => {
     expect(lastCall().url).toBe("http://localhost:4000/api/rooms/abcd1234/recap");
     expect(lastCall().headers.has("Authorization")).toBe(false);
   });
+
+  it("recap sends the name to show as the author", async () => {
+    await api.recap("abcd1234", "Priya");
+    expect(lastCall().init.method).toBe("POST");
+    expect(JSON.parse(lastCall().init.body as string)).toEqual({ name: "Priya" });
+  });
 });
 
 describe("api dashboard", () => {
