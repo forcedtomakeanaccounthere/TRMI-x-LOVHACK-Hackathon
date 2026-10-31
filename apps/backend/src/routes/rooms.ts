@@ -450,7 +450,9 @@ async function movePdf(path: string, hide: boolean) {
 // One recap per room at a time, and a pause between recaps, so a burst of clicks costs one AI call.
 // The lock lives in this process: right for one backend instance; several would need a database lock.
 const RECAP_COOLDOWN_MS = 30_000;
-const MAX_RECAP_TEXT_CHARS = 200_000;
+// apps/ai's request limit (MAX_TEXT_CHARS in apps/ai/app/schemas.py). How much of it the model
+// reads is its own max_document_chars setting, so the backend cuts only to keep the request bounded.
+const MAX_RECAP_TEXT_CHARS = 1_000_000;
 const recapsInFlight = new Set<string>();
 
 // POST /api/rooms/:id/recap  { name? }: gathers room data, asks the AI service, stores the recap.
@@ -504,8 +506,7 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
       "/recap",
       {
         title: room.data.title ?? "",
-        // PDF rooms have no HTML: their text was extracted on upload. apps/ai reads only the first
-        // 60,000 characters, so a long article isn't sent whole.
+        // PDF rooms have no HTML: their text was extracted on upload.
         text: (room.data.content_text ?? htmlToText(room.data.content_html ?? "")).slice(0, MAX_RECAP_TEXT_CHARS),
         highlights: highlights.data,
         comments: comments.data,
