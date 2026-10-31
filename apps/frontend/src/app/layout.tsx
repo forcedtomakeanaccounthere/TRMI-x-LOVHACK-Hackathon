@@ -51,7 +51,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <SmoothScroll>
           <TooltipProvider>{children}</TooltipProvider>
         </SmoothScroll>
-        <Toaster position="bottom-center" />
+        <Toaster position="top-right" />
       </body>
     </html>
   );

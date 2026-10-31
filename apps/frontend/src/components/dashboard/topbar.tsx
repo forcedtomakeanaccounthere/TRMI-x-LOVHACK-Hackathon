@@ -65,7 +65,7 @@ export function Topbar({ onMenu, onProfile }: { onMenu: () => void; onProfile: (
             </button>
           ) : (
             <kbd className="hidden rounded-md bg-foreground/6 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground md:block">
-              ⌘K
+              ⌘
             </kbd>
           )}
         </label>
