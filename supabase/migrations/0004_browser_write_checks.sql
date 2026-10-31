@@ -14,12 +14,14 @@ alter table highlights
   add constraint highlights_author_color_hex check (author_color ~ '^#[0-9a-fA-F]{6}$'),
   -- Block anchors: "b{n}" for a link room's blocks, "p{n}" for a PDF page.
   add constraint highlights_block_id_format check (block_id ~ '^[bp][0-9]{1,6}$'),
-  add constraint highlights_author_name_blank check (btrim(author_name) <> '');
+  -- Not blank: at least one non-whitespace character. btrim() would only strip spaces, so a name of
+  -- newlines or tabs would get through; this matches .trim() in the zod schemas.
+  add constraint highlights_author_name_blank check (author_name ~ '[^[:space:]]');
 
 alter table comments
   add constraint comments_author_color_hex check (author_color ~ '^#[0-9a-fA-F]{6}$'),
-  add constraint comments_author_name_blank check (btrim(author_name) <> ''),
-  add constraint comments_body_blank check (btrim(body) <> '');
+  add constraint comments_author_name_blank check (author_name ~ '[^[:space:]]'),
+  add constraint comments_body_blank check (body ~ '[^[:space:]]');
 
 -- A comment's highlight must be in the same room as the comment, or a thread could show up in a room
 -- it was never written in. The composite key lets the foreign key check both columns at once; a

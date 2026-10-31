@@ -132,8 +132,8 @@ select lives_ok(
 );
 select throws_ok(
   $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
-    values ('room0001', '   ', '#00ff00', 'b1', 0, 4, 'text')$$,
-  '23514', null, 'a blank author name is rejected'
+    values ('room0001', E' \t ', '#00ff00', 'b1', 0, 4, 'text')$$,
+  '23514', null, 'an author name of only whitespace is rejected'
 );
 select throws_ok(
   $$insert into comments (room_id, author_name, author_color, body) values ('room0001', 'Guest', '#00ff00', E' \n ')$$,
