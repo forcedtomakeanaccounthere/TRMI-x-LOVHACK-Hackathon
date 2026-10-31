@@ -204,6 +204,16 @@ describe("extractArticle with a fetched page", () => {
     expect(cancel).toHaveBeenCalled();
   });
 
+  it("returns 422, not 500, when an error response's body has already failed", async () => {
+    const broken = new ReadableStream({
+      start(controller) {
+        controller.error(new Error("socket dropped"));
+      },
+    });
+    fetchMock.mockResolvedValue(new Response(broken, { status: 500, headers: { "content-type": "text/html" } }));
+    await expect(extractArticle("https://example.com/")).rejects.toMatchObject({ status: 422 });
+  });
+
   it("gives up after too many redirects", async () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 302, headers: { location: "/loop" } }));
     await expect(extractArticle("https://example.com/")).rejects.toMatchObject({ status: 422 });

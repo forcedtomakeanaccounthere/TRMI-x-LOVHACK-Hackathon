@@ -144,9 +144,25 @@ describe("room contracts", () => {
     it("rejects an author name over 40 chars", () => {
       expect(NewHighlight.safeParse({ ...highlight, author_name: "x".repeat(41) }).success).toBe(false);
     });
+
+    it.each(["b0", "b12", "p1", "p999999"])("accepts the block id %s", (block_id) => {
+      expect(NewHighlight.safeParse({ ...highlight, block_id }).success).toBe(true);
+    });
+
+    it.each(["", "b", "x1", "B1", "b1 ", "b-1", "p1234567"])("rejects the block id %j", (block_id) => {
+      expect(NewHighlight.safeParse({ ...highlight, block_id }).success).toBe(false);
+    });
+
+    it.each(["#0f0", "red", "#3b82f6; x: y", "url(x)"])("rejects the colour %j", (author_color) => {
+      expect(NewHighlight.safeParse({ ...highlight, author_color }).success).toBe(false);
+    });
+
+    it("rejects a blank author name", () => {
+      expect(NewHighlight.safeParse({ ...highlight, author_name: "   " }).success).toBe(false);
+    });
   });
 
-  it("NewComment limits the body to 2000 chars", () => {
+  describe("NewComment (matches the database checks)", () => {
     const comment = {
       room_id: "abcd1234",
       highlight_id: "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f",
@@ -154,7 +170,14 @@ describe("room contracts", () => {
       author_color: "#3b82f6",
       body: "x".repeat(2000),
     };
-    expect(NewComment.safeParse(comment).success).toBe(true);
-    expect(NewComment.safeParse({ ...comment, body: "x".repeat(2001) }).success).toBe(false);
+
+    it("limits the body to 2000 chars", () => {
+      expect(NewComment.safeParse(comment).success).toBe(true);
+      expect(NewComment.safeParse({ ...comment, body: "x".repeat(2001) }).success).toBe(false);
+    });
+
+    it("rejects a body of only whitespace", () => {
+      expect(NewComment.safeParse({ ...comment, body: " \n\t " }).success).toBe(false);
+    });
   });
 });
