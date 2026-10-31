@@ -816,12 +816,15 @@ roomsRouter.post("/:id/catchup", askPerIp, askPerRoom, async (req, res) => {
   const { since } = CatchupRequest.parse(req.body ?? {});
   const room = await readableRoom(id);
   const db = supabaseAdmin();
+  // The newest items when there are more than fit, put back in time order for the summary.
   const [highlights, comments] = await Promise.all([
-    db.from("highlights").select("author_name, block_id, quote").eq("room_id", id).gt("created_at", since).order("created_at").limit(MAX_CATCHUP_ITEMS),
-    db.from("comments").select("author_name, highlight_id, body").eq("room_id", id).gt("created_at", since).order("created_at").limit(MAX_CATCHUP_ITEMS),
+    db.from("highlights").select("author_name, block_id, quote").eq("room_id", id).gt("created_at", since).order("created_at", { ascending: false }).limit(MAX_CATCHUP_ITEMS),
+    db.from("comments").select("author_name, highlight_id, body").eq("room_id", id).gt("created_at", since).order("created_at", { ascending: false }).limit(MAX_CATCHUP_ITEMS),
   ]);
   if (highlights.error) throw highlights.error;
   if (comments.error) throw comments.error;
+  highlights.data.reverse();
+  comments.data.reverse();
   if (!highlights.data.length && !comments.data.length) {
     res.json({ summary: NOTHING_NEW, key_points: [], active_people: [] } satisfies CatchupResponse);
     return;

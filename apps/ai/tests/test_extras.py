@@ -121,6 +121,13 @@ class TestQuiz:
         }
         assert all("block" not in x["question"] for x in questions)
 
+    def test_accepts_a_chunk_of_many_short_blocks(self, client, auth, ai):
+        ai.answers[QuizData] = QuizData(questions=[q(sources=("b59",))])
+        chunk = {"block_ids": [f"b{i}" for i in range(60)], "content": "Line. " * 60}
+        res = client.post("/quiz", json={"title": "T", "chunks": [chunk]}, headers=auth)
+        assert res.status_code == 200
+        assert res.json()["questions"][0]["source_blocks"] == ["b59"]
+
     def test_a_quiz_with_no_usable_question_is_a_502(self, client, auth, ai):
         ai.answers[QuizData] = QuizData(questions=[q(sources=("b99",))])
         assert self.post(client, auth).status_code == 502

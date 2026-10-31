@@ -42,6 +42,16 @@ describe("POST /api/rooms/:id/catchup", () => {
     ]);
   });
 
+  it("keeps the newest items when there are too many, in time order", async () => {
+    // The query reads newest first; the route puts them back in time order.
+    state.results.highlights = [{ data: [{ author_name: "B", block_id: "b2", quote: "newer" }, { author_name: "A", block_id: "b1", quote: "older" }] }];
+    state.results.comments = [{ data: [] }];
+    callAi.mockResolvedValue({ summary: "s", key_points: [], active_people: [] });
+    await post("catchup", { since: "2026-10-31T10:00:00Z" });
+    const sent = callAi.mock.calls[0]![1] as { highlights: { quote: string }[] };
+    expect(sent.highlights.map((h) => h.quote)).toEqual(["older", "newer"]);
+  });
+
   it("says nothing is new without calling the AI", async () => {
     state.results.highlights = [{ data: [] }];
     state.results.comments = [{ data: [] }];

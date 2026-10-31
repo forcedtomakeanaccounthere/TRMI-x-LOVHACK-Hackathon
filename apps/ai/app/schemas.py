@@ -223,7 +223,9 @@ class ExplainResult(ExplainData):
 
 
 class QuizChunk(BaseModel):
-    block_ids: list[str] = Field(min_length=1, max_length=50)
+    # A chunk of many short blocks (60 one-line paragraphs) lists every one, so this only bounds
+    # the request: chunks are at most 2,000 characters, so they can't cover more blocks than that.
+    block_ids: list[str] = Field(min_length=1, max_length=2000)
     content: str = Field(min_length=1, max_length=4000)
 
 
