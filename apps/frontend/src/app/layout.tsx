@@ -3,7 +3,7 @@ import { Cinzel, Cormorant_Garamond, Geist_Mono, Manrope } from "next/font/googl
 import { SmoothScroll } from "@/components/providers/smooth-scroll";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { themeInitScript } from "@/lib/theme";
+import { themeInitScript } from "@/lib/theme-script";
 import "./globals.css";
 
 // Display: high-contrast Garamond for headlines. Regal: engraved Roman capitals for eyebrows.
