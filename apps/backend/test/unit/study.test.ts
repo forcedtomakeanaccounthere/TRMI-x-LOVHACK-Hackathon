@@ -41,6 +41,7 @@ vi.mock("../../src/lib/supabase", () => ({
 }));
 
 const { createApp } = await import("../../src/app");
+const { shareBudget } = await import("../../src/routes/study");
 const app = createApp();
 
 const called = (name: string, method: string) => (calls[name] ?? []).filter(([m]) => m === method).map(([, ...a]) => a);
@@ -72,7 +73,11 @@ let fetchSpy: MockInstance<typeof fetch>;
 const aiCalls = () => fetchSpy.mock.calls.filter(([url]) => String(url).endsWith("/study"));
 const aiBody = () => JSON.parse(String(aiCalls()[0]![1]!.body)) as { kind: string; documents: { id: string; text: string }[]; count: number };
 
+// The cooldown remembers each user's last AI call in memory, so every test starts a minute later.
+let clock = Date.parse("2026-11-01T00:00:00Z");
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime((clock += 60_000));
   for (const key of Object.keys(calls)) delete calls[key];
   for (const key of Object.keys(results)) delete results[key];
   fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(quiz));
@@ -80,6 +85,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const create = (body: object) => auth(request(app).post("/api/study")).send(body);
@@ -199,6 +205,50 @@ describe("POST /api/study", () => {
     );
     expect((await create({ kind: "quiz", all: true })).status).toBe(502);
     expect(called("study_sets", "insert")).toEqual([]);
+  });
+});
+
+describe("shareBudget", () => {
+  it("gives what short texts don't use to the long ones", () => {
+    const short = Array.from({ length: 19 }, () => "x".repeat(10));
+    const cut = shareBudget(["y".repeat(60_000), ...short], 1000);
+    expect(cut.slice(1).every((t) => t.length === 10)).toBe(true);
+    expect(cut[0]).toHaveLength(810);
+    expect(shareBudget(["a".repeat(5), "b".repeat(500)], 100).map((t) => t.length)).toEqual([5, 95]);
+    expect(shareBudget(["abc", "de"], 100)).toEqual(["abc", "de"]);
+  });
+});
+
+describe("study cooldown", () => {
+  it("still applies after the user deletes the set it came from", async () => {
+    results.study_sets = [{ data: null }, saved()];
+    results.room_participants = [{ data: [] }];
+    results.rooms = [{ data: [room("roomA")] }, { data: [text("roomA")] }];
+    expect((await create({ kind: "quiz", all: true })).status).toBe(201);
+
+    // The set is gone, so the database has no recent row, but the pause holds.
+    results.study_sets = [{ data: null }];
+    vi.setSystemTime((clock += 3000));
+    const res = await create({ kind: "quiz", all: true });
+    expect(res.status).toBe(429);
+    expect(aiCalls()).toHaveLength(1);
+
+    results.study_sets = [{ data: null }, saved()];
+    results.room_participants = [{ data: [] }];
+    results.rooms = [{ data: [room("roomA")] }, { data: [text("roomA")] }];
+    vi.setSystemTime((clock += 10_000));
+    expect((await create({ kind: "quiz", all: true })).status).toBe(201);
+  });
+
+  it("counts a failed AI call too", async () => {
+    results.study_sets = [{ data: null }];
+    results.room_participants = [{ data: [] }];
+    results.rooms = [{ data: [room("roomA")] }, { data: [text("roomA")] }];
+    fetchSpy.mockImplementationOnce(async () => Response.json({ detail: "down" }, { status: 502 }));
+    expect((await create({ kind: "quiz", all: true })).status).toBe(502);
+
+    results.study_sets = [{ data: null }];
+    expect((await create({ kind: "quiz", all: true })).status).toBe(429);
   });
 });
 
