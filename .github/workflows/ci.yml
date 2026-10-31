@@ -58,6 +58,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
       # The Supabase CLI comes from devDependencies. Applies supabase/migrations and supabase/config.toml.
       # Services the tests don't use are skipped to start faster.
       - run: npx supabase start -x realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor

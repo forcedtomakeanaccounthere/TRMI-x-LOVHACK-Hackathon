@@ -13,7 +13,16 @@ from youtube_transcript_api._errors import (
 )
 
 from app.config import get_settings
-from app.services.transcript import TranscriptError, _client, _TimeoutSession, fetch_transcript
+from app.services.transcript import (
+    NoTranscript,
+    TranscriptError,
+    _client,
+    _fetch_with_ytdlp,
+    _pick_track,
+    _TimeoutSession,
+    fetch_transcript,
+    parse_vtt,
+)
 
 VIDEO = "dQw4w9WgXcQ"
 
@@ -88,6 +97,12 @@ def youtube(monkeypatch):
     FakeYouTube.listed = []
     FakeYouTube.delay = 0.0
     monkeypatch.setattr("app.services.transcript.YouTubeTranscriptApi", FakeYouTube)
+
+    # Default yt-dlp fallback to also report no captions in unit tests unless explicitly mocked
+    def _fail_ytdlp(*a, **k):
+        raise NoTranscript("This video has no captions")
+
+    monkeypatch.setattr("app.services.transcript._fetch_with_ytdlp", _fail_ytdlp)
     return FakeYouTube
 
 
@@ -189,3 +204,108 @@ def test_uses_the_proxy_when_set(client, auth, youtube, monkeypatch):
 def test_refuses_an_invalid_video_id(client, auth, youtube, video_id):
     assert client.post("/transcript", json={"video_id": video_id}, headers=auth).status_code == 422
     assert youtube.instances == []
+
+
+def test_ytdlp_fallback_when_transcript_api_disabled(client, auth, youtube, monkeypatch):
+    youtube.error = TranscriptsDisabled(VIDEO)
+    from app.schemas import TranscriptResponse, TranscriptSegment
+
+    monkeypatch.setattr(
+        "app.services.transcript._fetch_with_ytdlp",
+        lambda vid, langs: TranscriptResponse(
+            language="en",
+            is_generated=True,
+            segments=[TranscriptSegment(start=1.2, duration=3.4, text="Recovered by yt-dlp")],
+        ),
+    )
+    res = post(client, auth)
+    assert res.status_code == 200
+    assert res.json()["segments"][0]["text"] == "Recovered by yt-dlp"
+
+
+VTT = """WEBVTT
+Kind: captions
+Language: en
+
+NOTE a comment block
+
+00:00:01.000 --> 00:00:03.500 align:start position:0%
+Hello <c>everyone</c>
+
+00:00:03.500 --> 00:00:06.000
+Hello everyone
+and welcome &amp; enjoy
+
+1:02:03.250 --> 1:02:04.000
+Late line
+"""
+
+
+def test_parse_vtt_gives_timed_segments():
+    segments = parse_vtt(VTT)
+    assert [(s.start, s.duration, s.text) for s in segments] == [
+        (1.0, 2.5, "Hello everyone"),
+        # The line rolled over from the previous cue is kept once.
+        (3.5, 2.5, "and welcome & enjoy"),
+        (3723.25, 0.75, "Late line"),
+    ]
+
+
+def test_parse_vtt_skips_cues_without_text_or_timing():
+    assert parse_vtt("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c></c>\n\nnot a cue\n") == []
+
+
+def test_pick_track_prefers_the_requested_language_even_when_only_automatic():
+    manual = {"fr": [{"ext": "vtt"}]}
+    auto = {"en": [{"ext": "json3"}]}
+    assert _pick_track(manual, auto, ["en"]) == ("en", auto["en"], True)
+
+
+def test_pick_track_prefers_manual_within_a_language_then_any_manual_then_any_auto():
+    manual = {"en": [{"ext": "vtt"}], "de": [{"ext": "vtt"}]}
+    auto = {"en": [{"ext": "json3"}], "es": [{"ext": "json3"}]}
+    assert _pick_track(manual, auto, ["en"]) == ("en", manual["en"], False)
+    assert _pick_track(manual, auto, ["ja"]) == ("en", manual["en"], False)
+    assert _pick_track({}, auto, ["ja"]) == ("en", auto["en"], True)
+    assert _pick_track({}, {}, ["en"]) == (None, None, False)
+
+
+def test_ytdlp_fallback_uses_the_configured_proxy(monkeypatch):
+    proxy = "http://user:pw@proxy.example:8080"
+    monkeypatch.setenv("YT_PROXY_URL", proxy)
+    get_settings.cache_clear()
+    seen = {}
+
+    class FakeYDL:
+        def __init__(self, opts):
+            seen["ydl"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download):
+            return {"subtitles": {"en": [{"ext": "vtt", "url": "https://captions.example/en.vtt"}]}}
+
+    class FakeResponse:
+        text = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHi\n"
+
+        def raise_for_status(self):
+            pass
+
+    def fake_get(url, **kwargs):
+        seen["get"] = kwargs
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.transcript.yt_dlp.YoutubeDL", FakeYDL)
+    monkeypatch.setattr("app.services.transcript.requests.get", fake_get)
+    try:
+        result = _fetch_with_ytdlp("dQw4w9WgXcQ", ["en"])
+    finally:
+        get_settings.cache_clear()
+
+    assert seen["ydl"]["proxy"] == proxy
+    assert seen["get"]["proxies"] == {"http": proxy, "https": proxy}
+    assert [s.text for s in result.segments] == ["Hi"]

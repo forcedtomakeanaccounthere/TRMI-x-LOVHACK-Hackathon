@@ -18,8 +18,9 @@ All commands run from the repo root. They are written for bash: on Windows, use 
 ## 2. Install dependencies
 
 ```bash
-npm ci             # JS workspaces, including the Supabase CLI
-npm run setup:ai   # Python deps for apps/ai
+npm ci                   # JS workspaces, including the Supabase CLI
+npm run setup:ai         # Python deps for apps/ai
+npm run setup:playwright # install Playwright Chromium browser & OS deps
 ```
 
 `npm ci` may warn that esbuild and unrs-resolver install scripts are "not yet covered by allowScripts". That is safe to ignore.
