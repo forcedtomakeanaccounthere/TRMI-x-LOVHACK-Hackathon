@@ -484,3 +484,42 @@ export const TranscriptResponse = z.object({
   segments: z.array(z.object({ start: z.number(), duration: z.number(), text: z.string() })),
 });
 export type TranscriptResponse = z.infer<typeof TranscriptResponse>;
+
+// --- Step 9 extras (POST /api/rooms/:id/catchup, /explain, /quiz) ---
+
+const OptionalName = z
+  .string()
+  .trim()
+  .max(40)
+  .optional()
+  .transform((name) => name || undefined);
+
+// What the group did since `since` (an ISO time: when the reader left). Shown only to them.
+export const CatchupRequest = z.object({ since: z.string().datetime({ offset: true }) });
+export const CatchupResponse = z.object({
+  summary: z.string(),
+  key_points: z.array(z.string()),
+  active_people: z.array(z.string()),
+});
+export type CatchupResponse = z.infer<typeof CatchupResponse>;
+export const NOTHING_NEW = "Nothing new since you were last here.";
+
+// Explain a highlight, simply or in Hinglish. The explanation is saved as an ai_messages row
+// (kind "explain") that the whole room sees.
+export const ExplainRequest = z.object({
+  highlight_id: z.string().uuid(),
+  level: z.enum(["simple", "hinglish"]).default("simple"),
+  name: OptionalName,
+});
+export const ExplainResponse = z.object({ explanation: z.string(), withheld: z.boolean().default(false) });
+
+// A five-question quiz on the room. Not stored: answers go over Realtime broadcast.
+export const QuizQuestion = z.object({
+  question: z.string(),
+  options: z.array(z.string()),
+  answer_index: z.number().int(),
+  explanation: z.string(),
+  source_blocks: z.array(z.string()),
+});
+export const QuizResponse = z.object({ questions: z.array(QuizQuestion) });
+export type QuizResponse = z.infer<typeof QuizResponse>;

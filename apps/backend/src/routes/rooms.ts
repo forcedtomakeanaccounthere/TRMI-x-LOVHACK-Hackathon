@@ -1,5 +1,11 @@
 import {
   AnswerResponse,
+  CatchupRequest,
+  CatchupResponse,
+  ExplainRequest,
+  ExplainResponse,
+  NOTHING_NEW,
+  QuizResponse,
   AskRequest,
   CreateInviteRequest,
   EmbedResponse,
@@ -31,6 +37,7 @@ import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
 import { startIndexing, startIndexingIfWaiting } from "../lib/ai-jobs";
+import { htmlBlocks, pdfBlocks } from "../lib/chunk";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
@@ -782,4 +789,108 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   if (historyError) console.error("[rooms] could not record the question", historyError);
 
   res.status(201).json(message as AiMessage);
+});
+
+// --- Step 9 extras. Rate-limited like Ask, since each one costs an AI call. ---
+
+const MAX_CATCHUP_ITEMS = 200;
+const QUIZ_CHUNKS = 12;
+const EXTRAS_TIMEOUT_MS = 30_000; // apps/ai gives these 25 s, like an answer
+
+// A readable room, or the error for one that isn't (deleted, unknown).
+async function readableRoom(id: string) {
+  const { data, error } = await supabaseAdmin()
+    .from("rooms")
+    .select("kind, title, status, content_html, content_text")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || data.status === "deleted") throw new HttpError(404, "Room not found");
+  return data as { kind: string; title: string | null; status: string; content_html: string | null; content_text: string | null };
+}
+
+// POST /api/rooms/:id/catchup  { since }: what the group highlighted and said since the reader left.
+// Only for them, so nothing is saved; with nothing new, the AI isn't called.
+roomsRouter.post("/:id/catchup", askPerIp, askPerRoom, async (req, res) => {
+  const id = req.params.id as string;
+  const { since } = CatchupRequest.parse(req.body ?? {});
+  const room = await readableRoom(id);
+  const db = supabaseAdmin();
+  const [highlights, comments] = await Promise.all([
+    db.from("highlights").select("author_name, block_id, quote").eq("room_id", id).gt("created_at", since).order("created_at").limit(MAX_CATCHUP_ITEMS),
+    db.from("comments").select("author_name, highlight_id, body").eq("room_id", id).gt("created_at", since).order("created_at").limit(MAX_CATCHUP_ITEMS),
+  ]);
+  if (highlights.error) throw highlights.error;
+  if (comments.error) throw comments.error;
+  if (!highlights.data.length && !comments.data.length) {
+    res.json({ summary: NOTHING_NEW, key_points: [], active_people: [] } satisfies CatchupResponse);
+    return;
+  }
+  const data = await callAi(
+    "/catchup",
+    { title: (room.title ?? "").slice(0, 300), highlights: highlights.data, comments: comments.data },
+    CatchupResponse,
+    EXTRAS_TIMEOUT_MS,
+  );
+  res.json(data);
+});
+
+// POST /api/rooms/:id/explain  { highlight_id, level, name? }: explains a highlight with the blocks
+// around it, and saves the explanation as an ai_messages row the whole room sees.
+roomsRouter.post("/:id/explain", askPerIp, askPerRoom, optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { highlight_id, level, name } = ExplainRequest.parse(req.body ?? {});
+  const room = await readableRoom(id);
+  if (room.status === "archived") throw new HttpError(409, "This room is archived");
+  const db = supabaseAdmin();
+
+  const { data: highlight, error } = await db
+    .from("highlights")
+    .select("block_id, quote")
+    .eq("id", highlight_id)
+    .eq("room_id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!highlight) throw new HttpError(404, "Highlight not found");
+
+  // The highlighted block and one on each side, as context.
+  const blocks = room.kind === "pdf" ? pdfBlocks(room.content_text ?? "") : htmlBlocks(room.content_html ?? "");
+  const at = blocks.findIndex((b) => b.ids.includes(highlight.block_id as string));
+  const context = at < 0 ? [] : blocks.slice(Math.max(0, at - 1), at + 2).map((b) => b.text.slice(0, 4000));
+
+  const explained = await callAi("/explain", { quote: highlight.quote, context, level }, ExplainResponse, EXTRAS_TIMEOUT_MS);
+  const { data: message, error: insertError } = await db
+    .from("ai_messages")
+    .insert({
+      room_id: id,
+      kind: "explain",
+      asked_by: name ?? (req.user?.name.trim().slice(0, 40) || null),
+      question: `Explain: "${highlight.quote as string}"`.slice(0, 500),
+      answer: explained.withheld ? ANSWER_WITHHELD : explained.explanation.slice(0, 4000),
+      found_in_document: !explained.withheld,
+      citations: explained.withheld
+        ? []
+        : [{ quote: highlight.quote, block_ids: [highlight.block_id], page: blocks[at]?.page ?? null, start_sec: null, end_sec: null }],
+    })
+    .select()
+    .single();
+  if (insertError) throw insertError;
+  res.status(201).json(message as AiMessage);
+});
+
+// POST /api/rooms/:id/quiz: five multiple-choice questions on the room, each with the blocks it
+// comes from. Not saved: answers go over Realtime broadcast. Needs the room's chunks.
+roomsRouter.post("/:id/quiz", askPerIp, askPerRoom, async (req, res) => {
+  const id = req.params.id as string;
+  const room = await readableRoom(id);
+  const db = supabaseAdmin();
+  const { data: chunks, error } = await db.from("chunks").select("block_ids, content").eq("room_id", id).order("idx");
+  if (error) throw error;
+  if (!chunks.length) throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
+
+  // Spread over the whole room, not just its start.
+  const step = Math.max(1, chunks.length / QUIZ_CHUNKS);
+  const picked = Array.from({ length: Math.min(QUIZ_CHUNKS, chunks.length) }, (_, i) => chunks[Math.floor(i * step)]!);
+  const quiz = await callAi("/quiz", { title: (room.title ?? "").slice(0, 300), chunks: picked }, QuizResponse, EXTRAS_TIMEOUT_MS);
+  res.json(quiz satisfies QuizResponse);
 });
