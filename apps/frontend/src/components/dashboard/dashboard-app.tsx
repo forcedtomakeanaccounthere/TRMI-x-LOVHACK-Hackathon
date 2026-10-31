@@ -1,6 +1,6 @@
 "use client";
 
-import type { AuthUser, Person } from "@linkroom/shared";
+import type { AuthUser } from "@linkroom/shared";
 import { DoorOpenIcon, InfoIcon, PlusIcon } from "@phosphor-icons/react";
 import { motion } from "motion/react";
 import Link from "next/link";
@@ -25,7 +25,7 @@ import { Sidebar } from "./sidebar";
 import { StatCards } from "./stat-cards";
 import { type DataSource, DashboardProvider, useDashboard } from "./store";
 import { Topbar } from "./topbar";
-import { fromApiRoom, type RoomView } from "./types";
+import { fromApiRoom, type Person, type RoomView } from "./types";
 
 const noop = () => () => {};
 

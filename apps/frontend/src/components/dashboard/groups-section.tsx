@@ -1,6 +1,6 @@
 "use client";
 
-import type { Person, RoomGroup } from "@linkroom/shared";
+import type { GroupView, Person } from "./types";
 import { ArrowRightIcon, CheckIcon, FolderSimpleIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import { useLenis } from "lenis/react";
 import { motion } from "motion/react";
@@ -18,7 +18,7 @@ export function GroupsSection() {
   const { state, dispatch, actions } = useDashboard();
   const lenis = useLenis();
   const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState<RoomGroup | null>(null);
+  const [deleting, setDeleting] = useState<GroupView | null>(null);
 
   // Filter first, scroll on the next frame: by then the room list has re-rendered, so the scroll
   // target is measured after the layout change rather than during it.
@@ -138,7 +138,7 @@ export function GroupsSection() {
   );
 }
 
-export function newGroup(name: string, color: string): RoomGroup {
+export function newGroup(name: string, color: string): GroupView {
   return { id: `g-${Date.now().toString(36)}`, name, color, created_at: new Date().toISOString() };
 }
 
@@ -218,7 +218,7 @@ function NewGroupDialog({
 }
 
 // Deleting a group asks room by room: keep it (it stays, with no group) or delete it along with the group.
-function DeleteGroupDialog({ group, onClose }: { group: RoomGroup | null; onClose: () => void }) {
+function DeleteGroupDialog({ group, onClose }: { group: GroupView | null; onClose: () => void }) {
   return (
     <Dialog open={group !== null} onOpenChange={(o) => !o && onClose()}>
       <DialogContent
@@ -231,7 +231,7 @@ function DeleteGroupDialog({ group, onClose }: { group: RoomGroup | null; onClos
   );
 }
 
-function DeleteGroupForm({ group, onDone }: { group: RoomGroup; onDone: () => void }) {
+function DeleteGroupForm({ group, onDone }: { group: GroupView; onDone: () => void }) {
   const { state, actions } = useDashboard();
   const rooms = state.rooms.filter((r) => r.group_id === group.id && r.status !== "deleted");
   // Only rooms the user owns can be deleted; the rest can only be released from the group.

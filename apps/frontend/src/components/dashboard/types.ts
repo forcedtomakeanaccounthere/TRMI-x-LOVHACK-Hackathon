@@ -1,10 +1,32 @@
-import type { DashboardRoom, Person, RoomKind, RoomStatus } from "@linkroom/shared";
+import type { DashboardRoom, RoomKind, RoomStatus } from "@linkroom/shared";
+
+// Preview shapes for the people, groups and profile parts of the dashboard, which still run on demo
+// data. The backend's own contracts (Profile, RoomGroup, UserSummary in @linkroom/shared) differ, so
+// these keep separate names until the dashboard is wired to GET /api/me/profile, /api/groups, etc.
+export type Person = {
+  id: string;
+  name: string;
+  handle: string;
+  color: string;
+  avatar_url: string | null;
+};
+
+export type PastParticipant = Person & { rooms_together: number; last_seen_at: string };
+
+export type GroupView = { id: string; name: string; color: string; created_at: string };
+
+export type ProfileView = Person & {
+  email: string;
+  bio: string | null;
+  created_at: string;
+  stats: { rooms_hosted: number; highlights: number; followers: number; following: number };
+};
 
 // "paused" is a dashboard-only status for now: the backend's RoomStatus has no paused state yet
 // (CHECKLIST.md "Dashboard"), so only preview data uses it.
 export type ViewStatus = RoomStatus | "paused";
 
-// What a room card, the calendar and the filters work with. Real rooms come from GET /api/rooms/mine
+// What a room card, the calendar and the filters work with. Real rooms come from GET /api/me/rooms
 // (see fromApiRoom); fields the API doesn't return yet get neutral defaults.
 export type RoomView = {
   id: string;

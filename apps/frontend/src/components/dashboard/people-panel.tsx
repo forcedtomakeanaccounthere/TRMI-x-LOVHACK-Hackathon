@@ -1,6 +1,6 @@
 "use client";
 
-import type { Person } from "@linkroom/shared";
+import type { Person } from "./types";
 import { UserPlusIcon } from "@phosphor-icons/react";
 import { LayoutGroup, motion } from "motion/react";
 import { useState } from "react";

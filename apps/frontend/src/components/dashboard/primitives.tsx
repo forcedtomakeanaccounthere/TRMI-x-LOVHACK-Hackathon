@@ -1,8 +1,7 @@
 "use client";
 
-import type { Person } from "@linkroom/shared";
 import { cn } from "@/lib/utils";
-import type { ViewStatus } from "./types";
+import type { Person, ViewStatus } from "./types";
 
 export const STATUS_META: Record<ViewStatus, { label: string; dot: string; badge: string }> = {
   running: {

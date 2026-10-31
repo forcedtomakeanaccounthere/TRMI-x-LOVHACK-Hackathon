@@ -1,13 +1,13 @@
 "use client";
 
-import type { Person, RoomGroup, RoomKind } from "@linkroom/shared";
+import type { RoomKind } from "@linkroom/shared";
 import { createContext, use, useEffect, useMemo, useReducer, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
 import type { DashboardData } from "./demo-data";
 import { saveGroups, saveProfileOverride, saveRoomMeta } from "./local-prefs";
-import type { RoomView, ViewStatus } from "./types";
+import type { GroupView, Person, RoomView, ViewStatus } from "./types";
 
 export type StatusFilter = ViewStatus | "all";
 export type SortKey = "activity" | "created" | "comments" | "title";
@@ -44,7 +44,7 @@ type Action =
   | { type: "room-replace"; room: RoomView }
   | { type: "room-move"; id: string; group: string | null }
   | { type: "profile-update"; patch: { name?: string; avatar_url?: string | null } }
-  | { type: "group-create"; group: RoomGroup }
+  | { type: "group-create"; group: GroupView }
   // Removes the group; its rooms drop back to no group (deleting them is a separate room-delete).
   | { type: "group-delete"; id: string }
   | { type: "follow-toggle"; person: Person };
@@ -115,7 +115,7 @@ export type RoomActions = {
   // Saved in this browser until PATCH /api/me/profile exists. False if the browser refused it.
   updateProfile: (patch: { name?: string; avatar_url?: string | null }) => boolean;
   // Groups live in this browser until the groups API exists (see local-prefs).
-  createGroup: (group: RoomGroup) => void;
+  createGroup: (group: GroupView) => void;
   moveRoom: (room: RoomView, groupId: string | null) => void;
   // Deletes the group; rooms listed in deleteRoomIds are deleted too, the rest stay without a group.
   deleteGroup: (groupId: string, deleteRoomIds: string[]) => void;
@@ -129,7 +129,7 @@ type DashboardContextValue = {
   // The backend has no paused status yet, so pause and resume exist only in preview data.
   canPause: boolean;
   visibleRooms: RoomView[];
-  groupById: Map<string, RoomGroup>;
+  groupById: Map<string, GroupView>;
 };
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
@@ -164,7 +164,14 @@ export function DashboardProvider({
         try {
           const session = await getFreshSession();
           if (!session) throw new ApiError("Sign in again to change your rooms.", 401);
-          await api.setRoomStatus(before.id, status, session.access_token);
+          const token = session.access_token;
+          if (status === "deleted") {
+            await api.deleteRoom(before.id, token);
+          } else {
+            // A deleted room has to be restored (it comes back running) before its status can change.
+            if (before.status === "deleted") await api.restoreRoom(before.id, token);
+            if (before.status !== "deleted" || status !== "running") await api.updateRoom(before.id, { status }, token);
+          }
         } catch (err) {
           dispatch({ type: "room-replace", room: before });
           toast.error(err instanceof ApiError ? err.message : "Couldn't update the room. Check your connection.");
@@ -235,7 +242,7 @@ export function useDashboard() {
 
 const SINCE_DAYS: Record<SinceFilter, number | null> = { any: null, "7d": 7, "30d": 30 };
 
-export function filterRooms(rooms: RoomView[], f: Filters, groups: Map<string, RoomGroup>) {
+export function filterRooms(rooms: RoomView[], f: Filters, groups: Map<string, GroupView>) {
   const q = f.query.trim().toLowerCase();
   const sinceDays = SINCE_DAYS[f.since];
   const cutoff = sinceDays === null ? null : new Date(Date.now() - sinceDays * 86_400_000).toISOString();

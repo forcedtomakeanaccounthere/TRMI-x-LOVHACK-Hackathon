@@ -1,6 +1,5 @@
 "use client";
 
-import type { Person } from "@linkroom/shared";
 import { CheckIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -8,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { cn } from "@/lib/utils";
 import { PersonAvatar, StatusBadge } from "./primitives";
 import { useDashboard } from "./store";
-import type { RoomView } from "./types";
+import type { Person, RoomView } from "./types";
 
 export type InviteTarget = { room: RoomView } | { person: Person } | null;
 

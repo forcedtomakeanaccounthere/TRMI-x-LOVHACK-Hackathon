@@ -9,10 +9,15 @@ const room = (patch: Partial<DashboardRoom> = {}): DashboardRoom => ({
   title: "Internet",
   status: "running",
   role: "owner",
+  group_id: null,
   created_at: "2026-10-20T10:00:00.000Z",
+  last_activity_at: "2026-10-30T18:00:00.000Z",
   last_opened_at: "2026-10-30T18:00:00.000Z",
   highlight_count: 7,
   comment_count: 3,
+  participant_count: 1,
+  live_count: 0,
+  people: [],
   ...patch,
 });
 

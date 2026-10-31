@@ -1,4 +1,4 @@
-import type { RoomGroup } from "@linkroom/shared";
+import type { GroupView } from "./types";
 
 // Browser-only stand-ins for data the backend doesn't store yet (CHECKLIST.md "Dashboard"): a room's
 // colour, custom name and group (rooms.color / title / group_id), the user's groups (room_groups) and
@@ -40,11 +40,11 @@ export function saveRoomMeta(roomId: string, patch: RoomMeta) {
 }
 
 // Null until the user first changes their groups; callers then fall back to a default list.
-export function getSavedGroups(userId: string): RoomGroup[] | null {
-  return read<RoomGroup[] | null>(groupsKey(userId), null);
+export function getSavedGroups(userId: string): GroupView[] | null {
+  return read<GroupView[] | null>(groupsKey(userId), null);
 }
 
-export function saveGroups(userId: string, groups: RoomGroup[]) {
+export function saveGroups(userId: string, groups: GroupView[]) {
   write(groupsKey(userId), groups);
 }
 

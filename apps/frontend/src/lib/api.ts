@@ -9,9 +9,10 @@ import type {
   LoginRequest,
   MessageResponse,
   RecapData,
-  RoomStatus,
+  RoomDetail,
   RoomStatusResponse,
   SignupRequest,
+  UpdateRoomRequest,
 } from "@linkroom/shared";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -80,18 +81,22 @@ export const api = {
   myRooms: (query: Partial<DashboardQuery>, token: string) => {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
-    return request<DashboardResponse>(`/api/rooms/mine?${params}`, { method: "GET" }, token);
+    return request<DashboardResponse>(`/api/me/rooms?${params}`, { method: "GET" }, token);
   },
 
   // Remembers the room for a signed-in user; 404 when it doesn't exist or was deleted.
   joinRoom: (roomId: string, token: string) =>
     request<RoomStatusResponse>(`/api/rooms/${encodeURIComponent(roomId)}/join`, { method: "POST" }, token),
 
-  // Owner only: close, reopen, archive, delete or restore. 409 when another change won the race.
-  setRoomStatus: (roomId: string, status: RoomStatus, token: string) =>
-    request<RoomStatusResponse>(
-      `/api/rooms/${encodeURIComponent(roomId)}/status`,
-      { ...json({ status }), method: "PATCH" },
-      token,
-    ),
+  // Owner only. 409 when the room is deleted (restore it first) or another change won the race.
+  updateRoom: (roomId: string, data: UpdateRoomRequest, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}`, { ...json(data), method: "PATCH" }, token),
+
+  // Owner only: soft delete. A deleted room stays restorable.
+  deleteRoom: (roomId: string, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" }, token),
+
+  // Owner only: brings a deleted room back as running.
+  restoreRoom: (roomId: string, token: string) =>
+    request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}/restore`, { method: "POST" }, token),
 };

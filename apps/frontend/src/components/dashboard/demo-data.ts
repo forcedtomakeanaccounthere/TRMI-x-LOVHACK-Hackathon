@@ -1,13 +1,13 @@
-import type { PastParticipant, Person, Profile, RoomGroup, RoomKind } from "@linkroom/shared";
-import type { RoomView, ViewStatus } from "./types";
+import type { RoomKind } from "@linkroom/shared";
+import type { GroupView, PastParticipant, Person, ProfileView, RoomView, ViewStatus } from "./types";
 
 // Stand-in for the /dashboard API until apps/backend serves it (see CHECKLIST.md "Dashboard").
 // Every date is relative to `now`, so the calendar always has live rooms in the current month.
 
 export type DashboardData = {
-  profile: Profile;
+  profile: ProfileView;
   rooms: RoomView[];
-  groups: RoomGroup[];
+  groups: GroupView[];
   following: Person[];
   followers: Person[];
   participants: PastParticipant[];
@@ -245,7 +245,7 @@ export function createDemoDashboard(now: Date, me: { id: string; name: string; e
     };
   });
 
-  const groups: RoomGroup[] = [
+  const groups: GroupView[] = [
     { id: "g-study", name: "ML study group", color: GROUP_COLORS[0], created_at: at(40 * DAY) },
     { id: "g-product", name: "Product team", color: GROUP_COLORS[1], created_at: at(35 * DAY) },
     { id: "g-books", name: "Book club", color: GROUP_COLORS[2], created_at: at(30 * DAY) },

@@ -124,7 +124,7 @@ describe("api dashboard", () => {
     await api.myRooms({ status: "deleted", limit: 100, q: undefined }, "tok");
     const { url, init, headers } = lastCall();
 
-    expect(url).toBe("http://localhost:4000/api/rooms/mine?status=deleted&limit=100");
+    expect(url).toBe("http://localhost:4000/api/me/rooms?status=deleted&limit=100");
     expect(init.method).toBe("GET");
     expect(headers.get("Authorization")).toBe("Bearer tok");
   });
@@ -136,12 +136,28 @@ describe("api dashboard", () => {
     expect(init.method).toBe("POST");
   });
 
-  it("setRoomStatus sends a JSON PATCH", async () => {
-    await api.setRoomStatus("x7Kp2qLm", "archived", "tok");
+  it("updateRoom sends a JSON PATCH to the room", async () => {
+    await api.updateRoom("x7Kp2qLm", { status: "archived" }, "tok");
     const { url, init, headers } = lastCall();
-    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm/status");
+    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm");
     expect(init.method).toBe("PATCH");
     expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Authorization")).toBe("Bearer tok");
     expect(JSON.parse(init.body as string)).toEqual({ status: "archived" });
+  });
+
+  it("deleteRoom sends a DELETE to the room", async () => {
+    await api.deleteRoom("x7Kp2qLm", "tok");
+    const { url, init, headers } = lastCall();
+    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm");
+    expect(init.method).toBe("DELETE");
+    expect(headers.get("Authorization")).toBe("Bearer tok");
+  });
+
+  it("restoreRoom posts to the room's restore route", async () => {
+    await api.restoreRoom("x7Kp2qLm", "tok");
+    const { url, init } = lastCall();
+    expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm/restore");
+    expect(init.method).toBe("POST");
   });
 });
