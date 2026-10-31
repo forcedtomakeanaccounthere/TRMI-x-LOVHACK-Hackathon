@@ -359,6 +359,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   return {
     roomId,
     isDemo,
+    realDoc, // a document the backend has a room for (not demo, bundled or an unsaved link)
     me,
     primary,
     ownerId,
