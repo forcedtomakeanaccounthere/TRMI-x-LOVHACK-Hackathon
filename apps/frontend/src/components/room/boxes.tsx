@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { initials } from "@/components/dashboard/primitives";
 import { cn } from "@/lib/utils";
 import { AiText, Avatar, ByLine, PreviewTag, Thinking, timeAgo } from "./bits";
-import { useRoom } from "./store";
+import { useAwaitingAnswer, useRoom } from "./store";
 import type { Annotation } from "./types";
 
 type Note = Extract<Annotation, { kind: "note" }>;
@@ -16,14 +16,14 @@ const CARD =
   "liquid-glass liquid-glass-strong pointer-events-auto absolute z-30 w-72 rounded-2xl text-left shadow-[0_24px_60px_-24px_rgb(14_30_90/0.45)]";
 
 function useCanRemove(a: Annotation) {
-  const { me, perms } = useRoom();
-  return a.author.id === me.id || perms.manage;
+  return useRoom().canRemove(a.author.id);
 }
 
 // A text comment pinned anywhere on the page. New notes open in edit mode for their author.
 export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CSSProperties; autoEdit: boolean }) {
-  const { me, actions, focusAnnotation, setFocusAnnotation } = useRoom();
-  const mine = note.author.id === me.id;
+  const { me, actions, focusAnnotation, setFocusAnnotation, readOnly } = useRoom();
+  // Only the author edits a note, and not once the room is read only.
+  const mine = note.author.id === me.id && !readOnly;
   const [editing, setEditing] = useState(autoEdit && mine && !note.body);
   const [draft, setDraft] = useState(note.body);
   const [open, setOpen] = useState(autoEdit || !note.body);
@@ -142,7 +142,7 @@ export function AiBox({ box, style, autoFocus }: { box: AiNote; style: React.CSS
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const canRemove = useCanRemove(box);
-  const pending = thread.length > 0 && thread.at(-1)!.role === "user";
+  const pending = useAwaitingAnswer(thread);
   const focused = focusAnnotation === box.id;
 
   useEffect(() => {

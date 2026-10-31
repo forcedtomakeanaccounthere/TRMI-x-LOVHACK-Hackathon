@@ -74,7 +74,8 @@ export function DocViewer() {
         </motion.div>
       </AnimatePresence>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center px-4">
+      {/* Below lg the room's bottom bar (Sources / Room) sits at the bottom, so the dock goes above it. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-20 z-40 flex justify-center px-4 lg:bottom-5">
         <ToolDock />
       </div>
       <FollowBanner />
@@ -142,6 +143,7 @@ function Scroller({
     setFollowing,
     jump,
     readOnly,
+    canRemove,
   } = room;
   const lenisRef = useRef<LenisRef>(null);
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
@@ -264,7 +266,7 @@ function Scroller({
     return () => window.removeEventListener("keydown", onKey);
   }, [interactive, lens, perms.annotate, perms.useAi, setLens, setTool]);
 
-  const canErase = (a: Annotation) => a.author.id === me.id || perms.manage;
+  const canErase = (a: Annotation) => canRemove(a.author.id);
 
   // --- Making marks from a text selection ---
   const markSelection = (sel: TextSelection, kind: "highlight" | "underline", c = color) => {

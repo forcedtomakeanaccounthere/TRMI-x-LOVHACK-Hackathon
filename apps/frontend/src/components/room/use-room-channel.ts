@@ -48,6 +48,19 @@ type Handlers = {
 
 export type ChannelStatus = "solo" | "connecting" | "live";
 
+// Asks peers for the events this browser lacks, by listing the ids it has. A list too long for one
+// realtime message (ids: null) means "send me everything".
+export type SyncRequest = { from: string; ids: string[] | null; to?: string; reply?: boolean };
+const MAX_ID_BYTES = 100_000;
+export function syncRequest(
+  from: string,
+  events: LedgerEvent[],
+  extra: { to?: string; reply?: boolean } = {},
+): SyncRequest {
+  const ids = events.map((e) => e.id);
+  return { from, ids: JSON.stringify(ids).length > MAX_ID_BYTES ? null : ids, ...extra };
+}
+
 function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   const next = { ...record };
   delete next[key];
@@ -199,17 +212,24 @@ export function useRoomChannel(
         if (!p.to || p.to === meId) handlersRef.current.onEvents(p.events);
       })
       .on("broadcast", { event: "sync-req" }, ({ payload }) => {
-        // A newcomer says how many events it has; anyone holding more sends theirs, and anyone holding
-        // fewer asks back, so both sides end up with the union.
-        const p = payload as { from: string; count: number };
+        // A newcomer lists the event ids it holds. Each peer sends the events it is missing and, when
+        // the newcomer holds events this peer lacks, asks back once (reply: true) with its own ids, so
+        // both sides end up with the union even when each changed something different offline.
+        const p = payload as SyncRequest;
+        if (p.to && p.to !== meId) return;
         const mine = handlersRef.current.allEvents();
-        if (mine.length > p.count) sendEvents(mine, p.from);
-        else if (mine.length < p.count)
+        const theirs = p.ids ? new Set(p.ids) : null;
+        const missing = theirs ? mine.filter((e) => !theirs.has(e.id)) : mine;
+        if (missing.length) sendEvents(missing, p.from);
+        if (p.reply) return;
+        const have = new Set(mine.map((e) => e.id));
+        if (!p.ids || p.ids.some((id) => !have.has(id))) {
           void channel.send({
             type: "broadcast",
             event: "sync-req",
-            payload: { from: meId, count: mine.length },
+            payload: syncRequest(meId, mine, { to: p.from, reply: true }),
           });
+        }
       })
       .on("broadcast", { event: "kick" }, ({ payload }) => {
         if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
@@ -228,10 +248,7 @@ export function useRoomChannel(
           void channel.send({
             type: "broadcast",
             event: "sync-req",
-            payload: {
-              from: meId,
-              count: handlersRef.current.allEvents().length,
-            },
+            payload: syncRequest(meId, handlersRef.current.allEvents()),
           });
         } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
           setStatus("solo");

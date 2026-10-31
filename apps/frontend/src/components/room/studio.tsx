@@ -90,7 +90,7 @@ export function Studio() {
 }
 
 export function ArtifactList({ artifacts, onOpen }: { artifacts: Artifact[]; onOpen: (a: Artifact) => void }) {
-  const { me, perms, actions } = useRoom();
+  const { canRemove, actions } = useRoom();
   if (artifacts.length === 0)
     return (
       <p className="mt-3 rounded-2xl border border-dashed border-(--hairline) p-5 text-center text-[0.75rem] text-muted-foreground">
@@ -125,7 +125,7 @@ export function ArtifactList({ artifacts, onOpen }: { artifacts: Artifact[]; onO
                 <ByLine actor={a.author} at={a.at} />
               </span>
             </button>
-            {(a.author.id === me.id || perms.manage) && (
+            {canRemove(a.author.id) && (
               <button
                 type="button"
                 aria-label={`Delete ${a.title}`}

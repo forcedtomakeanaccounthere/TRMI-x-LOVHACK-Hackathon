@@ -99,6 +99,16 @@ export function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "unde
     });
 }
 
+// Erasing a text mark removes its row too (supabase/migrations/0016_remove_highlight.sql), so recaps
+// and browsers that load the room later don't bring it back. Best effort, like saving.
+export function removeSavedHighlight(id: string, docId: string) {
+  void getSupabase()
+    .rpc("remove_highlight", { p_id: id, p_room: docId })
+    .then(({ error }) => {
+      if (error) console.warn("[room] highlight not removed from the database", error.message);
+    });
+}
+
 export function youtubeId(url: string): string | null {
   try {
     const u = new URL(url.trim());

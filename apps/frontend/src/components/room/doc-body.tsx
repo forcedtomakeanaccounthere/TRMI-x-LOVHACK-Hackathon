@@ -35,6 +35,8 @@ export function PdfBody({
 }) {
   const [pages, setPages] = useState(0);
   const [ratio, setRatio] = useState(1.294); // A4 until the first page says otherwise
+  // Each page's own height / width once it has loaded, so mixed portrait and landscape pages fit.
+  const [ratios, setRatios] = useState<Record<number, number>>({});
   const [width, setWidth] = useState(0);
   const [visible, setVisible] = useState<Set<number>>(new Set([1, 2]));
   const host = useRef<HTMLDivElement>(null);
@@ -64,7 +66,7 @@ export function PdfBody({
     return () => io.disconnect();
   }, [pages, scroller]);
 
-  useEffect(onLayout, [width, pages, onLayout]);
+  useEffect(onLayout, [width, pages, ratios, onLayout]);
 
   return (
     <div ref={host} className="w-full">
@@ -87,8 +89,8 @@ export function PdfBody({
               data-page={n}
               className="relative overflow-hidden rounded-xl bg-white shadow-[0_20px_50px_-30px_rgb(14_30_90/0.5)] ring-1 ring-(--hairline)"
               style={{
-                height: width ? Math.round(width * ratio) : undefined,
-                aspectRatio: width ? undefined : `1 / ${ratio}`,
+                height: width ? Math.round(width * (ratios[n] ?? ratio)) : undefined,
+                aspectRatio: width ? undefined : `1 / ${ratios[n] ?? ratio}`,
               }}
             >
               {width > 0 && visible.has(n) ? (
@@ -98,6 +100,11 @@ export function PdfBody({
                   renderAnnotationLayer={false}
                   renderTextLayer
                   loading={<PageSkeleton />}
+                  onLoadSuccess={(page) => {
+                    const vp = page.getViewport({ scale: 1 });
+                    const r = vp.height / vp.width;
+                    setRatios((prev) => (prev[n] === r ? prev : { ...prev, [n]: r }));
+                  }}
                   onRenderSuccess={onLayout}
                   onRenderTextLayerSuccess={onLayout}
                 />

@@ -5,18 +5,20 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { loadDoc, loadSavedHighlights, saveHighlight } from "./docs";
+import { loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
 import type { Identity } from "./identity";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
   type Annotation,
   type ArtifactKind,
   type DocContent,
+  type Citation,
   type DocRef,
   INK_COLORS,
   type LedgerEvent,
   type LedgerPayload,
   type Role,
+  type ThreadMessage,
   type Tool,
 } from "./types";
 import { type PresenceChange, useRoomChannel } from "./use-room-channel";
@@ -200,7 +202,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   };
 
   // --- Writing to the ledger ---
+  // A closed or archived room is read only: its documents, marks, notes, threads and artifacts stay as
+  // they are. Only the room's settings, roles and kicks still change.
+  const ADMIN_EVENTS = new Set<LedgerPayload["type"]>(["role.set", "member.kick", "settings.update"]);
   const emit = (...payloads: LedgerPayload[]) => {
+    if (readOnly) payloads = payloads.filter((p) => ADMIN_EVENTS.has(p.type));
+    if (payloads.length === 0) return [];
     const now = Date.now();
     const made = payloads.map((p, i) => ({
       ...p,
@@ -214,6 +221,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   };
 
   const actor = { id: me.id, name: me.name, color: me.color };
+  // Who may delete a mark, note, AI box or artifact: its author or a manager, while the room is open.
+  const canRemove = (authorId: string) => !readOnly && (authorId === me.id || perms.manage);
   const realDoc = (id: string) => !isDemo && !id.startsWith("yt:") && !bundled.some((d) => d.id === id);
 
   const actions = {
@@ -235,14 +244,19 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         author: actor,
         at: new Date().toISOString(),
       } as Annotation;
-      emit({ type: "annot.add", annotation });
+      if (!emit({ type: "annot.add", annotation }).length) return annotation;
       if (annotation.kind === "highlight" || annotation.kind === "underline") {
         if (realDoc(annotation.doc)) saveHighlight(annotation);
       }
       return annotation;
     },
     removeAnnotation(id: string) {
-      emit({ type: "annot.remove", annotation_id: id });
+      const target = state.annotations.find((a) => a.id === id);
+      if (!emit({ type: "annot.remove", annotation_id: id }).length) return;
+      // Text marks are also rows in highlights (for recaps and new browsers): remove the row too.
+      if (target && (target.kind === "highlight" || target.kind === "underline") && realDoc(target.doc)) {
+        removeSavedHighlight(target.id, target.doc);
+      }
     },
     editNote(id: string, body: string) {
       emit({ type: "note.edit", annotation_id: id, body });
@@ -275,38 +289,39 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
           sources: opts.sources,
         },
       });
+      if (!askEvent) return;
       const history = (state.threads[thread] ?? []).slice(-8).map((m) => ({ role: m.role, text: m.text }));
       const docs = loaded.filter((d) => opts.sources.includes(d.id));
-      try {
-        const answer = await askAi(
-          roomId,
-          {
-            question,
-            sources: opts.sources,
-            quote: opts.quote,
-            image: opts.image,
-            history,
-          },
-          docs,
-        );
+      const answer = (reply: { text: string; citations: Citation[]; preview: boolean; failed?: boolean }) =>
         emit({
           type: "thread.answer",
           thread,
           message: {
             id: nanoid(10),
             role: "ai",
-            text: answer.text,
-            citations: answer.citations,
-            preview: answer.preview,
+            ...reply,
             reply_to: askEvent!.type === "thread.ask" ? askEvent!.message.id : "",
             at: new Date().toISOString(),
           },
         });
+      try {
+        answer(
+          await askAi(
+            { question, sources: opts.sources, quote: opts.quote, image: opts.image, history, name: me.name },
+            docs,
+            opts.sources.filter(realDoc),
+          ),
+        );
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "The AI couldn't answer");
+        // A refusal (still indexing, rate limited, …) is answered too, so the thread isn't left waiting
+        // for everyone and anyone can ask again.
+        const reason = err instanceof Error ? err.message : "The AI couldn't answer";
+        toast.error(reason);
+        answer({ text: `Couldn't answer: ${reason}`, citations: [], preview: false, failed: true });
       }
     },
     async generate(kind: ArtifactKind, sources: string[], title: string) {
+      if (readOnly) return null;
       const docs = loaded.filter((d) => sources.includes(d.id));
       if (docs.length === 0) {
         toast.error("Pick at least one source that has loaded");
@@ -360,6 +375,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     role,
     perms,
     readOnly,
+    canRemove,
     tool,
     setTool,
     color,
@@ -389,6 +405,22 @@ const RoomContext = createContext<RoomContextValue | null>(null);
 export function RoomProvider({ children, ...props }: Props) {
   const value = useRoomValue(props);
   return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;
+}
+
+// A thread waits for an answer while its last message is a question asked in the last two minutes.
+// Failed questions get an answer saying so, and a question whose asker left mid-request stops
+// blocking the thread after that.
+const ANSWER_TIMEOUT_MS = 2 * 60_000;
+export function useAwaitingAnswer(thread: ThreadMessage[]) {
+  const last = thread.at(-1);
+  const askedAt = last?.role === "user" ? Date.parse(last.at) : null;
+  const [expired, setExpired] = useState<number | null>(null);
+  useEffect(() => {
+    if (askedAt === null) return;
+    const timer = setTimeout(() => setExpired(askedAt), Math.max(0, askedAt + ANSWER_TIMEOUT_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [askedAt]);
+  return askedAt !== null && expired !== askedAt;
 }
 
 export function useRoom() {

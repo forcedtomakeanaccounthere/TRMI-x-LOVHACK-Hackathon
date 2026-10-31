@@ -52,7 +52,7 @@ export function ToolDock() {
       initial={{ opacity: 0, y: 16, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
-      className="liquid-glass liquid-glass-strong pointer-events-auto flex items-center gap-1 rounded-full p-1.5"
+      className="liquid-glass liquid-glass-strong pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto overscroll-x-contain rounded-full p-1.5 [scrollbar-width:none] [&>*]:shrink-0"
       role="toolbar"
       aria-label="Annotation tools"
     >

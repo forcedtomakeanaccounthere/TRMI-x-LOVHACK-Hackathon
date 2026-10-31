@@ -5,7 +5,7 @@ import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { AiText, Avatar, PreviewTag, Thinking, timeAgo } from "./bits";
-import { useRoom } from "./store";
+import { useAwaitingAnswer, useRoom } from "./store";
 import { ROOM_CHAT_THREAD } from "./types";
 
 const SUGGESTIONS = [
@@ -25,7 +25,7 @@ export function AiChat() {
   const [mention, setMention] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const end = useRef<HTMLDivElement>(null);
-  const pending = thread.length > 0 && thread.at(-1)!.role === "user";
+  const pending = useAwaitingAnswer(thread);
   const titles = useMemo(() => new Map(state.docs.map((d) => [d.id, d.title])), [state.docs]);
 
   useEffect(() => {
@@ -37,13 +37,12 @@ export function AiChat() {
   const send = (text: string) => {
     const q = text.replace(/@all\b/gi, "").trim();
     if (!q || pending || !perms.useAi) return;
-    let chosen = sources;
-    if (/@all\b/i.test(text)) chosen = included;
+    const chosen = /@all\b/i.test(text) ? included : sources;
+    // Every source unticked: nothing to answer from, rather than quietly using them all again.
+    if (chosen.length === 0) return;
     setDraft("");
     setMention(null);
-    void actions.ask(ROOM_CHAT_THREAD, q, {
-      sources: chosen.length ? chosen : docs.map((d) => d.id),
-    });
+    void actions.ask(ROOM_CHAT_THREAD, q, { sources: chosen });
   };
 
   const pick = (id: string | "all") => {
@@ -228,7 +227,7 @@ export function AiChat() {
             />
             <button
               type="submit"
-              disabled={!draft.trim() || pending}
+              disabled={!draft.trim() || pending || (sources.length === 0 && !/@all\b/i.test(draft))}
               aria-label="Send"
               className="grid size-9 shrink-0 place-items-center rounded-xl bg-[linear-gradient(135deg,#2f5bff,#8b5cf6)] text-white shadow-[0_8px_20px_-8px_rgb(47_91_255/0.9)] transition active:scale-95 disabled:opacity-35"
             >
@@ -236,7 +235,9 @@ export function AiChat() {
             </button>
           </form>
           <p className="mt-2 text-center text-[0.625rem] text-muted-foreground">
-            AI can be wrong. Check the cited passages.
+            {sources.length === 0
+              ? "Tick at least one source in Sources to ask about it."
+              : "AI can be wrong. Check the cited passages."}
           </p>
         </div>
       ) : (

@@ -101,6 +101,7 @@ export type ThreadMessage =
       reply_to: string;
       citations: Citation[];
       preview: boolean;
+      failed?: boolean; // the AI refused or errored; the text says why
     };
 
 export type ChatMessage = {

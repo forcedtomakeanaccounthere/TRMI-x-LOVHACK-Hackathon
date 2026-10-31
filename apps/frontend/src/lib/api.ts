@@ -1,4 +1,5 @@
 import type {
+  AiMessage,
   AuthSession,
   AuthUser,
   CreateLinkRoomRequest,
@@ -15,15 +16,17 @@ import type {
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
-// Proposed contract for POST /api/rooms/:id/ask, until it lands in @linkroom/shared.
+// What the room workspace asks the AI: the question plus the documents, passage, snapshot and recent
+// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, which answers
+// one document per call from `question` (and `name`) only.
 export type AskRequest = {
   question: string;
   sources: string[]; // room ids of the documents to answer from
   quote?: string | null; // the selected text an AI box was opened on
   image?: string | null; // a lens snapshot as a JPEG data URL
   history?: { role: "user" | "ai"; text: string }[];
+  name?: string; // shown as "asked by"
 };
-export type AskResponse = { answer: string; citations: { room_id: string; block: string; quote: string }[] };
 
 const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -96,8 +99,9 @@ export const api = {
   createYoutubeRoom: (url: string, token: string) =>
     request<CreateRoomResponse>("/api/rooms/youtube", json({ url }), token),
 
-  // Proposed: answers from the chosen documents' chunks, or from a snapshot image.
-  ask: (roomId: string, body: AskRequest) => request<AskResponse>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
+  // Answers a question about one room's document, with citations into its blocks.
+  ask: (roomId: string, body: { question: string; name?: string }) =>
+    request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
   generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>

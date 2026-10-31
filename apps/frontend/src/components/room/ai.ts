@@ -1,3 +1,4 @@
+import type { AiMessage } from "@linkroom/shared";
 import { api, ApiError, type AskRequest } from "@/lib/api";
 import type { ArtifactBody, ArtifactKind, Citation, DocContent, MindNode } from "./types";
 
@@ -79,20 +80,60 @@ function unavailable(err: unknown) {
   return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
 }
 
-export async function ask(roomId: string, req: AskRequest, docs: DocContent[]): Promise<Answer> {
-  try {
-    const res = await api.ask(roomId, req);
-    return {
-      text: res.answer,
-      citations: res.citations.map((c) => ({
-        doc: c.room_id,
-        block: c.block,
-        quote: c.quote,
-      })),
-      preview: false,
-    };
-  } catch (err) {
-    if (!unavailable(err)) throw err;
+// The backend's /ask takes one question of up to 500 characters about one room. The passage an AI box
+// is about and the previous question go into that text, so follow-ups and "explain this" keep their
+// context.
+const ASK_MAX = 500;
+export function backendQuestion(req: Pick<AskRequest, "question" | "quote" | "history">): string {
+  let text = req.question.trim().slice(0, ASK_MAX);
+  const add = (extra: string) => {
+    if (text.length + extra.length <= ASK_MAX) text += extra;
+    else if (ASK_MAX - text.length > 40) text += `${extra.slice(0, ASK_MAX - text.length - 2)}…"`;
+  };
+  if (req.quote?.trim()) add(`\n\nAbout this passage: "${req.quote.replace(/\s+/g, " ").trim()}"`);
+  const earlier = req.history?.filter((m) => m.role === "user").at(-1)?.text;
+  if (earlier && earlier !== req.question) add(`\n\nEarlier question: "${earlier.replace(/\s+/g, " ").trim()}"`);
+  return text;
+}
+
+// The backend cites block ids; the first one is where the citation jumps.
+export function toCitations(doc: string, message: Pick<AiMessage, "citations">): Citation[] {
+  return message.citations.flatMap((c) => {
+    const block = c.block_ids[0] ?? (c.page ? `p${c.page}` : null);
+    return block ? [{ doc, block, quote: c.quote }] : [];
+  });
+}
+
+// Asks the backend about each chosen document that is a backend room (`remote`), one call per
+// document, and joins the answers. What it can't answer (a snapshot, the demo room's bundled
+// documents, the backend being down) gets the browser preview below, marked as such.
+export async function ask(req: AskRequest, docs: DocContent[], remote: string[]): Promise<Answer> {
+  const targets = req.image ? [] : req.sources.filter((id) => remote.includes(id));
+  if (targets.length > 0) {
+    const question = backendQuestion(req);
+    const results = await Promise.allSettled(targets.map((id) => api.ask(id, { question, name: req.name })));
+    const answered = results.flatMap((r, i) => (r.status === "fulfilled" ? [{ id: targets[i]!, message: r.value }] : []));
+    const failed = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
+    if (failed.length === 0 || answered.length > 0) {
+      const titles = new Map(docs.map((d) => [d.id, d.title]));
+      // With several documents, lead with the ones whose text answered the question.
+      const ordered = [...answered].sort((a, b) => Number(b.message.found_in_document) - Number(a.message.found_in_document));
+      const text =
+        ordered.length === 1
+          ? ordered[0]!.message.answer
+          : ordered.map(({ id, message }) => `**${titles.get(id) ?? "Source"}**\n${message.answer}`).join("\n\n");
+      const note = failed.length
+        ? `\n\n(${failed.length === 1 ? "One source" : `${failed.length} sources`} couldn't answer: ${
+            failed[0] instanceof Error ? failed[0].message : "try again"
+          })`
+        : "";
+      return {
+        text: text + note,
+        citations: ordered.flatMap(({ id, message }) => toCitations(id, message)),
+        preview: false,
+      };
+    }
+    if (!failed.every(unavailable)) throw failed.find((e) => !unavailable(e));
   }
 
   if (req.image) {
