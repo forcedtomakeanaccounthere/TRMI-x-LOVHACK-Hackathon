@@ -15,6 +15,7 @@ Phase-by-phase tasks for the whole project. Inside each phase, tasks are split b
 Rules:
 
 - Tick a box only when the task is merged to `main` **and** works on the deployed URL.
+- `[*]` means the frontend part is built and merged, but not yet checked on the deployed URL. Change it to `[x]` once it is.
 - Finish every P0 phase before any P1 work. P2 (Phase 8) starts only if Phases 1–7 are stable by Sun 4 PM IST.
 - Each phase ends with a **Done when** test. Do not move on until it passes.
 - Feature freeze at **Sun 8 PM IST**. Submit by **Mon 1:30 AM IST**.
@@ -98,10 +99,10 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Supabase dashboard: Confirm email ON; production `.env` has `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`MAIL_FROM` (e.g. a Gmail app password) and the public `API_PUBLIC_URL`
 
 **FE**
-- [ ] Fonts with `next/font` *(in repo, changed from the original Inter / Source Serif 4 / JetBrains Mono plan: Cormorant Garamond for display and reading, Cinzel for eyebrows, Manrope for UI, Geist Mono for code; update MASTER.md section 6 to match)*
-- [ ] Colour tokens in `globals.css` for light and dark, plus the 8 person colours *(tokens in repo; the 8 person colours live in `PRESENCE_COLORS` in `packages/shared/src/realtime.ts`, not yet as CSS tokens)*
-- [ ] Theme provider with system default and a toggle *(in repo: no-flash inline script, `useTheme`, animated toggle with a circular reveal)*
-- [ ] Empty landing page with the hero text *(in repo, and well past empty: full landing page, see Phase 6)*
+- [*] Fonts with `next/font` *(in repo, changed from the original Inter / Source Serif 4 / JetBrains Mono plan: Cormorant Garamond for display and reading, Cinzel for eyebrows, Manrope for UI, Geist Mono for code; update MASTER.md section 6 to match)*
+- [*] Colour tokens in `globals.css` for light and dark, plus the 8 person colours *(tokens in repo; the 8 person colours live in `PRESENCE_COLORS` in `packages/shared/src/realtime.ts`, not yet as CSS tokens)*
+- [*] Theme provider with system default and a toggle *(in repo: no-flash inline script, `useTheme`, animated toggle with a circular reveal)*
+- [*] Empty landing page with the hero text *(in repo, and well past empty: full landing page, see Phase 6)*
 
 **QA**
 - [ ] Live Vercel URL loads in light and dark mode
@@ -131,14 +132,14 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - The backend runs on a Node host (not a Vercel function), so the `jsdom` → `linkedom` size switch is not needed.
 
 **FE**
-- [ ] `LinkInput` on the landing page: autofocus, Enter submits, URL validation, spinner with "Building your room…"
-- [ ] Redirect to `/r/[id]` on success
-- [ ] `app/r/[id]/page.tsx` loads the room on the server; 404 page for unknown rooms
-- [ ] `ArticleView`: renders `content_html` with reader typography (serif, 18–19px, 1.7 line height, 68ch)
-- [ ] Room header: back link, title, Share button (copies the URL, shows a toast)
-- [ ] `lib/identity.ts`: name and random person colour saved in localStorage
-- [ ] `JoinDialog`: shown on first visit, name max 24 chars, colour preview
-- [ ] Error state: "We couldn't read this page" with **Paste text instead** (textarea → `/api/rooms/text`) and **Try another link**
+- [*] `LinkInput` on the landing page: autofocus, Enter submits, URL validation, spinner with "Building your room…"
+- [*] Redirect to `/r/[id]` on success
+- [*] `app/r/[id]/page.tsx` loads the room on the server; 404 page for unknown rooms
+- [*] `ArticleView`: renders `content_html` with reader typography (serif, 18–19px, 1.7 line height, 68ch) *(`HtmlBody` in `components/room/doc-body.tsx`)*
+- [*] Room header: back link, title, Share button (copies the URL, shows a toast) *(plus a QR code)*
+- [*] `lib/identity.ts`: name and random person colour saved in localStorage *(`components/room/identity.ts`)*
+- [*] `JoinDialog`: shown on first visit, name max 24 chars, colour preview *(`JoinGate`, a full-screen join page)*
+- [ ] Error state: "We couldn't read this page" with **Paste text instead** (textarea → `/api/rooms/text`) and **Try another link** *(not built yet)*
 
 **QA**
 - [ ] Each of the 5 demo links creates a clean room
@@ -153,24 +154,24 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 ## Phase 3: Realtime core (Sun 1 – 7 AM IST) · P0
 
 **RT**
-- [ ] `lib/useRoomChannel.ts`: one channel `room:{id}` with presence (key = my id), broadcast (`self: false`) and `postgres_changes` for `highlights` and `comments` filtered by `room_id`
-- [ ] Track `{ name, color, following: null }` once subscribed
-- [ ] Clean up the channel on unmount
-- [ ] `lib/throttle.ts`: cursors every 50 ms, scroll every 200 ms
-- [ ] `lib/anchors.ts`: `toAnchor()` converts a pointer position to `{ block, x, y }`; `fromAnchor()` converts back
-- [ ] Broadcast `cursor` events on pointer move over the content; send `cursor-leave` when the pointer leaves
+- [ ] `lib/useRoomChannel.ts`: one channel `room:{id}` with presence (key = my id), broadcast (`self: false`) and `postgres_changes` for `highlights` and `comments` filtered by `room_id` *(presence and broadcast built in `components/room/use-room-channel.ts`; highlights sync through the room ledger instead of `postgres_changes`)*
+- [*] Track `{ name, color, following: null }` once subscribed
+- [*] Clean up the channel on unmount
+- [*] `lib/throttle.ts`: cursors every 50 ms, scroll every 200 ms *(inside `use-room-channel.ts`)*
+- [*] `lib/anchors.ts`: `toAnchor()` converts a pointer position to `{ block, x, y }`; `fromAnchor()` converts back *(`components/room/anchors.ts`)*
+- [*] Broadcast `cursor` events on pointer move over the content; send `cursor-leave` when the pointer leaves *(leaving sends a null anchor)*
 
 **FE**
-- [ ] `PresenceBar`: avatars with initials and colour ring, max 5 then "+N", tooltip names
-- [ ] "abhishek joined" / "abhishek left" toasts
-- [ ] `CursorLayer`: arrow plus name tag in the person's colour, framer-motion spring, fade after 5 s idle, own cursor hidden
-- [ ] `lib/highlights.ts`: `selectionToHighlight()` returns `{ block_id, start_offset, end_offset, quote }`, or null if the selection spans blocks
-- [ ] `HighlightToolbar`: floating above a selection with Highlight and Comment buttons
-- [ ] Render highlights by wrapping text slices in `<mark data-highlight-id>` with the person colour at 25% (light) / 35% (dark)
-- [ ] Load existing highlights and comments on page load, then apply live inserts
-- [ ] `CommentPanel` in a side panel: threads grouped by highlight, author colour dot, relative time, reply box
-- [ ] Clicking a highlight opens its thread; clicking a thread scrolls to its highlight
-- [ ] Empty state: "No highlights yet. Select any text to start."
+- [*] `PresenceBar`: avatars with initials and colour ring, max 5 then "+N", tooltip names *(top bar shows 4, then "+N")*
+- [ ] "abhishek joined" / "abhishek left" toasts *(shown as lines in the Discussion tab, not toasts)*
+- [*] `CursorLayer`: arrow plus name tag in the person's colour, framer-motion spring, fade after 5 s idle, own cursor hidden
+- [*] `lib/highlights.ts`: `selectionToHighlight()` returns `{ block_id, start_offset, end_offset, quote }`, or null if the selection spans blocks *(`readSelection()` in `components/room/anchors.ts`)*
+- [*] `HighlightToolbar`: floating above a selection with Highlight and Comment buttons *(also Copy, Underline and Ask AI)*
+- [*] Render highlights by wrapping text slices in `<mark data-highlight-id>` with the person colour at 25% (light) / 35% (dark) *(drawn as an overlay over the text instead of `<mark>` tags, so the document HTML is never changed)*
+- [ ] Load existing highlights and comments on page load, then apply live inserts *(saved highlights load; comments and live inserts from the table are not wired)*
+- [ ] `CommentPanel` in a side panel: threads grouped by highlight, author colour dot, relative time, reply box *(not built; the room uses comment boxes pinned on the page instead)*
+- [ ] Clicking a highlight opens its thread; clicking a thread scrolls to its highlight *(not built)*
+- [ ] Empty state: "No highlights yet. Select any text to start." *(not built)*
 
 **BE**
 - [ ] Inserts for `highlights` and `comments` go straight from the browser with the anon key (allowed by RLS)
@@ -195,14 +196,14 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Extract plain text of the first 50 pages (pdf.js via `unpdf`, max 60,000 chars, 10 s deadline) into `rooms.content_text` (`0006_pdf_text.sql`); the recap uses it for PDF rooms *(in repo)*
 
 **FE**
-- [ ] `PdfDropzone` on the landing page: drag and drop or click, shows file name and progress
-- [ ] `PdfView` with react-pdf: text layer on, annotation layer off, each page wrapped in `data-block="p{n}"`
-- [ ] Pages render lazily (only near the viewport), width fits the reading column
-- [ ] Loading skeleton per page
-- [ ] Room page chooses `ArticleView` or `PdfView` by `kind`
+- [ ] `PdfDropzone` on the landing page: drag and drop or click, shows file name and progress *(click to upload is built; drag and drop and progress are not)*
+- [*] `PdfView` with react-pdf: text layer on, annotation layer off, each page wrapped in `data-block="p{n}"` *(`PdfBody` in `components/room/doc-body.tsx`)*
+- [*] Pages render lazily (only near the viewport), width fits the reading column
+- [*] Loading skeleton per page
+- [*] Room page chooses `ArticleView` or `PdfView` by `kind`
 
 **RT**
-- [ ] Reuse cursors, highlights and comments unchanged (block anchors `p1`, `p2`, …)
+- [*] Reuse cursors, highlights and comments unchanged (block anchors `p1`, `p2`, …)
 
 **QA**
 - [ ] Both demo PDFs open; text is selectable; highlights land on the right words after refresh
@@ -215,15 +216,15 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 ## Phase 5: Wow features (Sun 12 – 4 PM IST) · P1
 
 **RT: Follow mode**
-- [ ] Broadcast `scroll` as `{ block, ratio }` for the block at the top of the viewport (200 ms throttle)
-- [ ] Click an avatar to follow; update presence `following`
-- [ ] Followers smooth-scroll to the leader's block
-- [ ] Following stops automatically when the follower scrolls by hand
-- [ ] **Bring everyone here** button sends a `summon` event that every client obeys
+- [*] Broadcast `scroll` as `{ block, ratio }` for the block at the top of the viewport (200 ms throttle)
+- [*] Click an avatar to follow; update presence `following`
+- [*] Followers smooth-scroll to the leader's block
+- [*] Following stops automatically when the follower scrolls by hand
+- [ ] **Bring everyone here** button sends a `summon` event that every client obeys *(not built)*
 
 **FE: Follow mode**
-- [ ] `FollowBanner`: "Following abhishek · Stop"
-- [ ] Avatar shows a small "following" indicator
+- [*] `FollowBanner`: "Following abhishek · Stop"
+- [*] Avatar shows a small "following" indicator
 
 **AI: Group recap**
 - [ ] `POST /api/rooms/[id]/recap` loads title, text (cut to 60,000 chars), highlights and comments
@@ -259,7 +260,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once
 
 **FE: Recap**
-- [ ] **✨ Recap the room** button in the side panel; disabled with a countdown for 30 s after use
+- [ ] **✨ Recap the room** button in the side panel; disabled with a countdown for 30 s after use *(not built in the room yet)*
 - [ ] `RecapPanel`: loading skeleton, then sections for summary, key points, what the group cared about (with names), disagreements, open questions, next steps
 - [ ] "Recapped by Arun · 2 min ago" line; toast "Recap ready" for everyone
 - [ ] Quotes in the recap scroll to the matching highlight when clicked
@@ -270,7 +271,7 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] Emoji floats up and fades over about 1.5 s next to the paragraph
 
 **FE: QR join**
-- [ ] QR button in the header opens a popover with the room QR code (`qrcode.react`) and the short link
+- [*] QR button in the header opens a popover with the room QR code (`qrcode.react`) and the short link *(in the Share popover)*
 
 **QA**
 - [ ] Full demo flow works end to end with 3 browsers
@@ -283,19 +284,19 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 ## Phase 6: Polish (Sun 4 – 8 PM IST) · P1
 
 **FE: Landing page**
-- [ ] Hero, link input, PDF drop zone, "How it works" (Paste → Share → Read together)
+- [ ] Hero, link input, PDF drop zone, "How it works" (Paste → Share → Read together) *(hero, link input, PDF upload and How it works are built; the drop zone has no drag and drop yet)*
 - [ ] **Live rooms right now**: 2–3 pre-made demo rooms with live presence counts
 - [ ] Footer with GitHub link
 
 **FE: Room polish**
-- [ ] Activity feed tab: "abhishek highlighted…", "Arun commented…", newest first
-- [ ] Skeleton loaders for room, PDF pages and recap
+- [*] Activity feed tab: "abhishek highlighted…", "Arun commented…", newest first *(the History tab)*
+- [ ] Skeleton loaders for room, PDF pages and recap *(room and PDF pages done; recap not built)*
 - [ ] Empty states for comments, activity and recap
 - [ ] Dark mode checked on every screen
-- [ ] Mobile layout: compact header, side panel becomes a bottom sheet, long-press to highlight
+- [ ] Mobile layout: compact header, side panel becomes a bottom sheet, long-press to highlight *(bottom sheets done; long-press to highlight not built)*
 - [ ] Keyboard focus rings, `aria-label`s on icon buttons
 - [ ] Respect `prefers-reduced-motion`
-- [ ] Favicon, page titles (`{doc title} · LinkRoom`) and Open Graph image for link previews
+- [ ] Favicon, page titles (`{doc title} · LinkRoom`) and Open Graph image for link previews *(favicon and page titles done; Open Graph image not built)*
 
 **BE**
 - [ ] Create the demo rooms in production and save their IDs in a config file
@@ -316,22 +317,22 @@ A home for signed-in users: every room they created or joined, the people they r
 Room lifecycle (backend `RoomStatus`): **running** → **closed** (readable, no new highlights or comments) → **archived** (filed away) → **deleted** (soft delete, only the owner sees it and can restore it). **Paused** exists only in the dashboard's preview data so far; see BE below.
 
 **FE** (`apps/frontend/src/components/dashboard/*`, route `app/dashboard/page.tsx`)
-- [ ] Layout: glass sidebar (sections + group tree, sheet on mobile), sticky glass top bar, Lenis smooth scroll, Cormorant / Cinzel typography *(in repo)*
-- [ ] Loads real rooms from `GET /api/rooms/mine` (active and deleted) and maps them with `fromApiRoom()`; falls back to preview data with a toast when the API fails *(in repo)*
-- [ ] Room list with status tabs and counts: All, Running, Paused, Closed, Archived, Deleted; one row of 3 cards, then **Show more** adds a row at a time *(in repo)*
-- [ ] Search rooms by title, source, group or participant; ⌘K / Ctrl+K focuses search *(in repo)*
-- [ ] Filters popover: type (link / PDF), group, last active (7 / 30 days), sort (activity, newest, most discussed, A–Z) *(in repo)*
-- [ ] Room menu, owner only: close / reopen, archive / unarchive, delete with Undo, restore, saved through `PATCH /api/rooms/:id/status` with optimistic updates and rollback on error *(in repo)*
-- [ ] Join room dialog: accepts a room code or any `/r/<code>` link; signed-in users go through `POST /api/rooms/:id/join`, which also catches wrong codes *(in repo)*
-- [ ] New room dialog (reuses the landing link / PDF form): optional room name, group dropdown (no group, an existing group, or create one inline) and a colour palette *(in repo; name, colour and group are kept in this browser until `rooms.title` / `color` / `group_id` can be set through the API)*
-- [ ] Room card: colour accent, status badge, source, group chip, up to 3 participant avatars + "+N", counts for highlights, comments, attachments and AI queries, last activity *(in repo; attachments, AI queries and participants are 0 / empty until the API returns them)*
-- [ ] Calendar: three rows per week (active, paused, archived; closed and deleted rooms stay off). A bar runs unbroken while any room has that status and lists up to 3 titles and "+N"; clicking it lists those rooms with each one's start and end dates. Active bars take one colour (the longest-running room's group colour, or its own colour if it has no group) and blink every 5 s; paused are red; archived dark grey *(in repo)*
-- [ ] Past participants ("Read with"), Following / Followers with Follow and "Add to room", invite dialog *(in repo, preview data)*
-- [ ] Paused rooms panel with one-tap Resume *(in repo, preview data only)*
-- [ ] Profile card: name, handle, email, bio, member since, rooms / highlights / followers / following *(in repo; name, email and rooms hosted are real)*
-- [ ] Edit profile (from the top bar or the profile card): change name, upload or remove a photo *(in repo; saved in this browser until `PATCH /api/me/profile` exists)*
-- [ ] Groups / projects: cards, create, delete (tick which rooms to delete too; the rest stay without a group), move a room into a group; the sidebar tree lists each group with its rooms nested under it (collapsible) *(in repo; saved in this browser until the groups API exists. Signed-in users start with no groups)*
-- [ ] Navbar "Dashboard" button while signed in; sign-in lands on `/dashboard` unless `?next=` says otherwise *(in repo)*
+- [*] Layout: glass sidebar (sections + group tree, sheet on mobile), sticky glass top bar, Lenis smooth scroll, Cormorant / Cinzel typography *(in repo)*
+- [*] Loads real rooms from `GET /api/rooms/mine` (active and deleted) and maps them with `fromApiRoom()`; falls back to preview data with a toast when the API fails *(in repo)*
+- [*] Room list with status tabs and counts: All, Running, Paused, Closed, Archived, Deleted; one row of 3 cards, then **Show more** adds a row at a time *(in repo)*
+- [*] Search rooms by title, source, group or participant; ⌘K / Ctrl+K focuses search *(in repo)*
+- [*] Filters popover: type (link / PDF), group, last active (7 / 30 days), sort (activity, newest, most discussed, A–Z) *(in repo)*
+- [*] Room menu, owner only: close / reopen, archive / unarchive, delete with Undo, restore, saved through `PATCH /api/rooms/:id/status` with optimistic updates and rollback on error *(in repo)*
+- [*] Join room dialog: accepts a room code or any `/r/<code>` link; signed-in users go through `POST /api/rooms/:id/join`, which also catches wrong codes *(in repo)*
+- [*] New room dialog (reuses the landing link / PDF form): optional room name, group dropdown (no group, an existing group, or create one inline) and a colour palette *(in repo; name, colour and group are kept in this browser until `rooms.title` / `color` / `group_id` can be set through the API)*
+- [*] Room card: colour accent, status badge, source, group chip, up to 3 participant avatars + "+N", counts for highlights, comments, attachments and AI queries, last activity *(in repo; attachments, AI queries and participants are 0 / empty until the API returns them)*
+- [*] Calendar: three rows per week (active, paused, archived; closed and deleted rooms stay off). A bar runs unbroken while any room has that status and lists up to 3 titles and "+N"; clicking it lists those rooms with each one's start and end dates. Active bars take one colour (the longest-running room's group colour, or its own colour if it has no group) and blink every 5 s; paused are red; archived dark grey *(in repo)*
+- [*] Past participants ("Read with"), Following / Followers with Follow and "Add to room", invite dialog *(in repo, preview data)*
+- [*] Paused rooms panel with one-tap Resume *(in repo, preview data only)*
+- [*] Profile card: name, handle, email, bio, member since, rooms / highlights / followers / following *(in repo; name, email and rooms hosted are real)*
+- [*] Edit profile (from the top bar or the profile card): change name, upload or remove a photo *(in repo; saved in this browser until `PATCH /api/me/profile` exists)*
+- [*] Groups / projects: cards, create, delete (tick which rooms to delete too; the rest stay without a group), move a room into a group; the sidebar tree lists each group with its rooms nested under it (collapsible) *(in repo; saved in this browser until the groups API exists. Signed-in users start with no groups)*
+- [*] Navbar "Dashboard" button while signed in; sign-in lands on `/dashboard` unless `?next=` says otherwise *(in repo)*
 - [ ] Opening `/r/[id]` while signed in should call `POST /api/rooms/:id/join`, so visited rooms show up on the dashboard
 - [ ] Swap the preview people, groups and profile stats for the endpoints below as they land
 
@@ -374,22 +375,68 @@ A room now holds several sources and has three panes, like NotebookLM: Sources o
 
 How state is shared until the backend has tables for it: every change is an event in an append-only **ledger** (`components/room/ledger.ts`). Each browser keeps its copy in localStorage and peers exchange events over the `room:{id}` channel, merged by event id (`sync-req` / `sync` / `ledger` broadcasts). The room's state is the ledger replayed, and the History tab lists it. Text highlights are also written to `highlights`, so the recap still sees them.
 
-**FE** *(in repo: `apps/frontend/src/components/room/`)*
-- [ ] Sources: upload PDF / DOCX / PPTX / MD / TXT from the device (`.doc` / `.ppt` get "save as …x"), Google Drive picker (`NEXT_PUBLIC_GOOGLE_CLIENT_ID` + `NEXT_PUBLIC_GOOGLE_API_KEY`; Docs/Slides exported as DOCX/PPTX), web links (Wikipedia, Notion, Medium, Substack, arXiv, blogs), YouTube (preview → attach to watch, or **Process into document**) and pasted text; tick sources in or out of AI answers
-- [ ] Guests join with a name and colour; admins can remove anyone below them (kick broadcast + ledger entry)
-- [ ] Annotation tools (dock + keys V H U P E N L): highlight in 7 colours (text, or the area dragged over when there's no text), underline, pen in 3 widths, eraser, text comments anywhere; hover shows who made a mark and when
-- [ ] Selection toolbar: Copy, Highlight, Underline, Comment, **Ask AI**. An AI box opens beside the line, shows who asked, and takes follow-up questions
-- [ ] **AI lens**: drag over any part of the page; the snapshot (canvas crop for PDFs, html-to-image for HTML) opens an AI box next to it
-- [ ] Live cursors with name tags; click someone's avatar to **follow** them (switches document and scrolls with them; stops when you scroll)
-- [ ] AI chat about one source, several, or `@all`, with numbered citations that jump to the passage
-- [ ] Discussion: group chat with joined and left lines
-- [ ] Studio: summary, quiz, flashcards, mind map, infographic from chosen sources; Library holds attachments and artifacts, with downloads (PDF, readable HTML, Markdown / JSON / PNG); still available when the room is archived
-- [ ] History: every attachment, mark, AI question, artifact and role change with person and time; filters; click to jump
-- [ ] Roles owner / admin / editor / viewer, defaults for guests and signed-in members, "viewers can use AI"; checked in the UI
-- [ ] Phone layout: bottom bar opens Sources or the room panel as a sheet you can drag down to close
+**FE: the 17 room features** *(code in `apps/frontend/src/components/room/`)*
 
-**BE: still needed** (the frontend already calls these and falls back to a labelled **Preview** when they return 404)
-- [ ] `POST /api/rooms/:id/ask` `{ question, sources: room_id[], quote?, image? (JPEG data URL), history? }` → `{ answer, citations: [{ room_id, block, quote }] }`, answered with `match_chunks` over the chosen rooms; the image is for the AI lens, so it needs a vision model. Save each one to `ai_queries`.
+1. Upload files
+   - [*] Upload PDF, PPTX, DOCX, TXT and MD from the device (drag and drop or browse, 20 MB each, several at once); `.ppt` / `.doc` are refused with "save it as .pptx / .docx first"
+   - [*] Pick files from Google Drive (Docs and Slides are exported as DOCX / PPTX) *(needs `NEXT_PUBLIC_GOOGLE_CLIENT_ID` and `NEXT_PUBLIC_GOOGLE_API_KEY`)*
+2. Add links
+   - [*] Link tab for Wikipedia, Notion, Medium, blogs, research papers, web docs and Substack, through `POST /api/rooms/link`; the backend's site advice is shown when a page can't be read
+   - [ ] Firecrawl and OCR for pages Readability can't read and for scanned PDFs *(BE)*
+3. YouTube
+   - [*] Paste a YouTube link, watch a preview, then **Attach to watch** or **Process into document**
+   - [ ] Processing into a transcript document needs `POST /api/rooms/youtube` *(BE; until then the video is attached to watch)*
+4. Anonymous entry
+   - [*] Guests type a name (max 24) and pick a cursor colour to join a public room
+   - [*] Owners and admins can remove someone (kick); the removed person sees "You were removed" and stays out after a reload
+   - [*] The owner can close the room to guests (Settings → Access)
+5. PDF and document annotation
+   - [*] Highlight, draw and underline, in 7 colours
+   - [*] Text comment boxes
+   - [*] Select text → Ask AI
+6. AI chat window
+   - [*] Detailed chat about the room's documents, shared by everyone in the room
+   - [*] Pick which document to ask about, or `@all` for every attachment; answers cite passages and clicking a citation jumps to it *(answered by `POST /api/rooms/:id/ask`, one call per document; falls back to a labelled Preview when the backend is down)*
+7. Highlighting
+   - [*] Text highlight when the text is selectable; drag over an area to highlight it when it isn't (scans, figures)
+   - [*] Pen and eraser (you erase your own marks; admins can erase anyone's)
+   - [*] Hovering a highlight or drawing shows who made it and when
+8. Text comment boxes
+   - [*] Click anywhere in a document to pin a comment; the author can edit or delete it
+   - [*] Each comment shows who wrote it and when
+9. Room settings for owner, admin, editor and viewer
+   - [*] Settings dialog: members (here now or active before) with a role menu and Remove; defaults for guests and signed-in members; "viewers can use AI"; a table of what each role can do
+   - [*] The UI follows the role: viewers can't annotate or add sources; admins can't change other admins
+   - [ ] Enforce roles and kicks on the server *(BE: `room_members`)*
+10. AI query box
+    - [*] Select text → Copy, Highlight, Underline, Comment, **Ask AI**
+    - [*] Ask AI opens a box beside that line with the AI's answer, quick prompts and follow-up questions in a scrolling thread; it shows who opened it
+11. AI lens
+    - [*] **AI lens** button in the tool dock (key L): drag a marquee over any part of the page; the snapshot (cropped from the PDF canvas, or drawn with html-to-image) opens an AI box next to it, showing who made it
+    - [ ] Answers for lens snapshots need image input on `/ask` *(BE; the box shows a Preview note until then)*
+12. Cursors and follow
+    - [*] Live cursors with name tags in each person's colour, on whichever document they're reading
+    - [*] Follow anyone from their avatar: you switch to their document and scroll with them, a banner says "Following …", and scrolling yourself stops it
+13. Discussion panel
+    - [*] Group chat for everyone in the room
+    - [*] "joined" and "left" lines when people come and go
+14. Studio
+    - [*] Create a summary, quiz, flashcards, mind map or infographic, choosing which sources to include or leave out
+    - [ ] Generate them with AI: `POST /api/rooms/:id/artifacts` *(BE; until then they're built in the browser from each source's AI summary or headings and marked Preview)*
+15. Library
+    - [*] Separate tabs for Attachments and Artifacts, still available when the room is archived
+    - [*] Downloads: PDFs as PDF, other sources as readable HTML, artifacts as Markdown, JSON or PNG
+    - [ ] Download the original DOCX / PPTX: `GET /api/rooms/:id/original` *(BE)*
+16. Version history
+    - [*] An uneditable log (like Google Docs) of who attached sources, annotated, made artifacts, asked the AI or changed roles, with the time; filters by type; click an entry to jump to that spot
+17. Inspiration from Google Docs and NotebookLM
+    - [*] NotebookLM-style layout: Sources on the left, the document in the middle, AI chat / Discussion / Studio / Library / History on the right
+    - [*] Google Docs-style tool dock, version history and presence avatars
+    - [*] Regal, glassy design: liquid-glass panels, Cormorant / Cinzel type, Lenis smooth scrolling in the document, gradient-bars background on the join screen
+    - [*] Phone layout: a bottom bar opens Sources or the room panel as a sheet you can drag down to close
+
+**BE: still needed** (the frontend already calls these, and shows a labelled **Preview** when they return 404)
+- [ ] Extend `POST /api/rooms/:id/ask` (now one document per call, `{ question, name? }`) with `sources: room_id[]` (one answer across several documents), `quote` (the line an AI box was opened on), `history` (follow-ups) and `image` (AI lens snapshot, JPEG data URL, needs a vision model)
 - [ ] `POST /api/rooms/:id/artifacts` `{ kind: summary|quiz|flashcards|mindmap|infographic, sources }` → the `ArtifactBody` shape in `components/room/types.ts`. The preview builds them from `room_ai.summary` (or headings) in the browser.
 - [ ] `POST /api/rooms/youtube` `{ url }` → `{ id }`: a `youtube` room with transcript segments as `t{n}` blocks
 - [ ] `room_sources` table (room_id, source_room_id, added_by, position) plus `GET/POST/DELETE /api/rooms/:id/sources`, so attachments don't depend on peers being online
