@@ -114,6 +114,18 @@ describe("POST /api/auth/signup", () => {
     expect((await login(email)).status).toBe(200);
   });
 
+  it("a password change voids the links already sent, so none can verify the new password", async () => {
+    // A signup that wrote its password after the owner's email went out must not let the
+    // owner's link verify the account with that password.
+    const email = newEmail();
+    await signup(email);
+    const link = new URL(await supabase.verificationLink(email));
+    expect(await supabase.setUnconfirmedPassword(await supabase.userId(email), `${PASSWORD}-attacker`)).toBe(true);
+
+    expect((await request(app).get(`${link.pathname}${link.search}`)).headers.location).toMatch(/verified=0/);
+    expect((await login(email, `${PASSWORD}-attacker`)).status).toBe(403);
+  });
+
   it.each([
     [{ email: "nope", password: PASSWORD, name: "A" }, /Invalid email/],
     [{ email: "a@b.co", password: "short", name: "A" }, /at least 8 characters/],
