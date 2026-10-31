@@ -6,7 +6,9 @@ YT_PROXY_URL to fetch through a proxy, and apps/backend offers "paste the transc
 """
 
 import asyncio
+import html
 import logging
+import re
 
 import requests
 import yt_dlp
@@ -60,6 +62,49 @@ def _client() -> YouTubeTranscriptApi:
     proxy = settings.yt_proxy_url
     config = GenericProxyConfig(http_url=proxy, https_url=proxy) if proxy else None
     return YouTubeTranscriptApi(proxy_config=config, http_client=session)
+
+
+_VTT_TIME = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{3})")
+_VTT_TAG = re.compile(r"<[^>]+>")
+
+
+def _vtt_seconds(stamp: str) -> float | None:
+    match = _VTT_TIME.fullmatch(stamp.strip())
+    if not match:
+        return None
+    hours, minutes, seconds, millis = match.groups()
+    return int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000
+
+
+def parse_vtt(text: str) -> list[TranscriptSegment]:
+    """WebVTT cues as timed segments. Inline tags (<c>, <00:00:01.000>) are dropped, and the
+    rolling lines YouTube's auto-captions repeat from one cue to the next are kept only once."""
+    segments: list[TranscriptSegment] = []
+    last_line = None
+    for block in re.split(r"\r?\n\s*\r?\n", text):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        timing = next((i for i, line in enumerate(lines) if "-->" in line), None)
+        if timing is None:
+            continue  # the WEBVTT header, NOTE, STYLE or REGION blocks
+        start_raw, _, rest = lines[timing].partition("-->")
+        start = _vtt_seconds(start_raw)
+        end = _vtt_seconds(rest.split()[0]) if rest.split() else None
+        if start is None:
+            continue
+        cue_lines = []
+        for line in lines[timing + 1 :]:
+            clean = html.unescape(_VTT_TAG.sub("", line)).strip()
+            if clean and clean != last_line:
+                cue_lines.append(clean)
+                last_line = clean
+        if cue_lines:
+            duration = max(0.0, (end or start) - start)
+            segments.append(
+                TranscriptSegment(
+                    start=round(start, 2), duration=round(duration, 2), text=" ".join(cue_lines)
+                )
+            )
+    return segments
 
 
 def _fetch_with_ytdlp(video_id: str, languages: list[str]) -> TranscriptResponse:
@@ -137,15 +182,7 @@ def _fetch_with_ytdlp(video_id: str, languages: list[str]) -> TranscriptResponse
                         )
                     )
         else:
-            for line in resp.text.splitlines():
-                line = line.strip()
-                if (
-                    line
-                    and not line.startswith("WEBVTT")
-                    and "-->" not in line
-                    and not line.isdigit()
-                ):
-                    segments.append(TranscriptSegment(start=None, duration=None, text=line))
+            segments = parse_vtt(resp.text)
 
         segments = segments[:MAX_TRANSCRIPT_SEGMENTS]
         if not segments:

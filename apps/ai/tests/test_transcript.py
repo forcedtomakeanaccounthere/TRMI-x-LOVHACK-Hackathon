@@ -19,6 +19,7 @@ from app.services.transcript import (
     _client,
     _TimeoutSession,
     fetch_transcript,
+    parse_vtt,
 )
 
 VIDEO = "dQw4w9WgXcQ"
@@ -94,9 +95,11 @@ def youtube(monkeypatch):
     FakeYouTube.listed = []
     FakeYouTube.delay = 0.0
     monkeypatch.setattr("app.services.transcript.YouTubeTranscriptApi", FakeYouTube)
+
     # Default yt-dlp fallback to also report no captions in unit tests unless explicitly mocked
     def _fail_ytdlp(*a, **k):
         raise NoTranscript("This video has no captions")
+
     monkeypatch.setattr("app.services.transcript._fetch_with_ytdlp", _fail_ytdlp)
     return FakeYouTube
 
@@ -204,6 +207,7 @@ def test_refuses_an_invalid_video_id(client, auth, youtube, video_id):
 def test_ytdlp_fallback_when_transcript_api_disabled(client, auth, youtube, monkeypatch):
     youtube.error = TranscriptsDisabled(VIDEO)
     from app.schemas import TranscriptResponse, TranscriptSegment
+
     monkeypatch.setattr(
         "app.services.transcript._fetch_with_ytdlp",
         lambda vid, langs: TranscriptResponse(
@@ -216,3 +220,34 @@ def test_ytdlp_fallback_when_transcript_api_disabled(client, auth, youtube, monk
     assert res.status_code == 200
     assert res.json()["segments"][0]["text"] == "Recovered by yt-dlp"
 
+
+VTT = """WEBVTT
+Kind: captions
+Language: en
+
+NOTE a comment block
+
+00:00:01.000 --> 00:00:03.500 align:start position:0%
+Hello <c>everyone</c>
+
+00:00:03.500 --> 00:00:06.000
+Hello everyone
+and welcome &amp; enjoy
+
+1:02:03.250 --> 1:02:04.000
+Late line
+"""
+
+
+def test_parse_vtt_gives_timed_segments():
+    segments = parse_vtt(VTT)
+    assert [(s.start, s.duration, s.text) for s in segments] == [
+        (1.0, 2.5, "Hello everyone"),
+        # The line rolled over from the previous cue is kept once.
+        (3.5, 2.5, "and welcome & enjoy"),
+        (3723.25, 0.75, "Late line"),
+    ]
+
+
+def test_parse_vtt_skips_cues_without_text_or_timing():
+    assert parse_vtt("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<c></c>\n\nnot a cue\n") == []
