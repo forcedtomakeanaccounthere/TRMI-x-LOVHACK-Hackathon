@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// An empty value in .env (`SMTP_HOST=`) means "not set".
+const optional = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+
 const Env = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -18,16 +22,26 @@ const Env = z
     // Questions per minute to POST /api/rooms/:id/ask: per IP, and per room across everyone.
     ASK_RATE_LIMIT: z.coerce.number().int().positive().default(10),
     ASK_ROOM_RATE_LIMIT: z.coerce.number().int().positive().default(30),
+    // SMTP server for the verification emails (sent with nodemailer). Required in production.
+    // In development it defaults to the local Supabase inbox, Mailpit (see supabase/config.toml).
+    SMTP_HOST: optional(z.string()),
+    SMTP_PORT: optional(z.coerce.number().int().positive()),
+    SMTP_USER: optional(z.string()),
+    SMTP_PASS: optional(z.string()),
+    // Sender, e.g. `LinkRoom <you@gmail.com>`. Defaults to SMTP_USER.
+    MAIL_FROM: optional(z.string()),
   })
   .superRefine((env, ctx) => {
     // In dev the server boots without Supabase so /health works; in production fail fast.
     if (env.NODE_ENV !== "production") return;
-    for (const key of ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "AI_INTERNAL_TOKEN"] as const) {
+    for (const key of ["SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "AI_INTERNAL_TOKEN", "SMTP_HOST"] as const) {
       if (!env[key]) ctx.addIssue({ code: "custom", path: [key], message: `${key} is required in production` });
     }
   });
 
 export const env = Env.parse(process.env);
 
+export const webOrigins = env.WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+
 // First entry of WEB_ORIGIN is the frontend we redirect users back to.
-export const webOrigin = (env.WEB_ORIGIN.split(",")[0] ?? env.WEB_ORIGIN).trim();
+export const webOrigin = webOrigins[0] ?? env.WEB_ORIGIN;

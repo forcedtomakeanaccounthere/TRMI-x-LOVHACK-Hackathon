@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(118);
+select plan(126);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -463,6 +463,28 @@ select throws_ok(
   '42501', null, 'anon cannot write answers (only the backend can)'
 );
 select is_empty($$update ai_messages set answer = 'Edited' where room_id = 'room0001' returning 1$$, 'anon cannot edit answers');
+
+-- 0016: erasing a text mark removes its highlights row, only with the key whose hash the row keeps,
+-- only by id and room, and only while the room is running.
+reset role;
+insert into rooms (id, kind, title, status) values ('rhopen01', 'link', 'Open', 'running'), ('rhclose1', 'link', 'Closed', 'closed');
+insert into highlights (id, room_id, author_name, author_color, block_id, start_offset, end_offset, quote, remove_key_hash) values
+  ('00000000-0000-4000-8000-0000000000e1', 'rhopen01', 'A', '#000000', 'b0', 0, 1, 'x', encode(sha256('key-e1-0123456789abcdef0123456789'::bytea), 'hex')),
+  ('00000000-0000-4000-8000-0000000000e2', 'rhclose1', 'A', '#000000', 'b0', 0, 1, 'x', encode(sha256('key-e2-0123456789abcdef0123456789'::bytea), 'hex')),
+  ('00000000-0000-4000-8000-0000000000e3', 'rhopen01', 'A', '#000000', 'b0', 0, 1, 'x', null);
+set local role anon;
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e1', 'rhopen01', 'wrong-key-0123456789abcdef01234567'), false, 'a highlight is not removed without its key');
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e1', 'rhopen01', null), false, 'a highlight is not removed with no key');
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e3', 'rhopen01', 'key-e1-0123456789abcdef0123456789'), false, 'a highlight saved without a key cannot be removed');
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e2', 'rhopen01', 'key-e2-0123456789abcdef0123456789'), false, 'a highlight is only removed from its own room');
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e2', 'rhclose1', 'key-e2-0123456789abcdef0123456789'), false, 'a closed room''s highlights stay');
+select is(public.remove_highlight('00000000-0000-4000-8000-0000000000e1', 'rhopen01', 'key-e1-0123456789abcdef0123456789'), true, 'the key holder removes a highlight in a running room');
+select is_empty($$select 1 from highlights where id = '00000000-0000-4000-8000-0000000000e1'$$, 'the removed highlight is gone');
+select throws_ok(
+  $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote, remove_key_hash)
+    values ('rhopen01', 'A', '#000000', 'b0', 0, 1, 'x', 'not-a-hash')$$,
+  '23514', null, 'remove_key_hash must be a SHA-256 hex digest'
+);
 
 select * from finish();
 rollback;

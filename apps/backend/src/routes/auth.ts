@@ -11,6 +11,7 @@ import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { env, webOrigin } from "../env";
+import { sendVerificationEmail } from "../lib/mailer";
 import { supabaseAdmin, supabaseAuth } from "../lib/supabase";
 import { requireAuth, toAuthUser } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -19,6 +20,20 @@ export const authRouter = Router();
 
 const VERIFY_URL = `${env.API_PUBLIC_URL}/api/auth/verify`;
 const CHECK_EMAIL = "Check your email to verify your account.";
+
+// Supabase only makes the token (admin generateLink sends nothing); we email the link ourselves
+// over our own SMTP. type=email accepts both signup and recovery tokens.
+const verifyLink = (tokenHash: string) =>
+  `${VERIFY_URL}?${new URLSearchParams({ token_hash: tokenHash, type: "email" })}`;
+
+async function emailVerification(email: string, tokenHash: string, name: unknown) {
+  try {
+    await sendVerificationEmail(email, verifyLink(tokenHash), typeof name === "string" ? name : undefined);
+  } catch (err) {
+    console.error("[auth] could not send verification email", err);
+    throw new HttpError(502, "Could not send the verification email. Please try again.");
+  }
+}
 
 // Brute-force guard on the endpoints that take a password or send email.
 const authLimiter = rateLimit({
@@ -45,11 +60,8 @@ function signupError(error: AuthError): HttpError {
       return new HttpError(400, error.message);
     case "email_address_invalid":
       return new HttpError(400, "Invalid email address");
-    case "over_email_send_rate_limit":
     case "over_request_rate_limit":
-      return new HttpError(429, "Too many emails sent. Try again later.");
-    case "signup_disabled":
-      return new HttpError(403, "Sign up is disabled");
+      return new HttpError(429, "Too many attempts. Try again later.");
     default:
       console.error("[auth] signup failed", error);
       return new HttpError(500, "Could not create account");
@@ -62,21 +74,42 @@ function signupError(error: AuthError): HttpError {
 authRouter.post("/signup", authLimiter, async (req, res) => {
   const { email, password, name } = SignupRequest.parse(req.body);
 
-  const { data, error } = await supabaseAuth().auth.signUp({
-    email,
-    password,
-    options: { data: { name }, emailRedirectTo: VERIFY_URL },
-  });
-  if (error && error.code !== "user_already_exists") throw signupError(error);
-  if (data?.session) {
-    console.warn("[auth] signup returned a session: enable 'Confirm email' in Supabase Auth settings");
-  }
+  // Creates the unconfirmed user, or for one that is still unconfirmed, replaces its token (so
+  // earlier links stop working) and name. A confirmed account is left alone and gets no email.
+  const generate = () =>
+    supabaseAdmin().auth.admin.generateLink({ type: "signup", email, password, options: { data: { name } } });
+  const alreadyVerified = () => res.status(201).json({ message: CHECK_EMAIL } satisfies MessageResponse);
+  const first = await generate();
+  if (first.error?.code === "email_exists") return alreadyVerified();
+  if (first.error) throw signupError(first.error);
 
+  // generateLink keeps an unconfirmed user's old password. Set this one, so the only working
+  // link always belongs to the latest signup and someone who registered the address first
+  // can't keep a password on the account its owner then verifies. The database only writes it
+  // while the email is still unconfirmed, in the same statement, so a signup racing the owner's
+  // verification can never change a verified account's password.
+  const { data: changed, error: pwError } = await supabaseAdmin().rpc("set_unconfirmed_password", {
+    p_user_id: first.data.user.id,
+    p_password: password,
+  });
+  if (pwError) {
+    console.error("[auth] could not set the signup password", pwError);
+    throw new HttpError(500, "Could not create account");
+  }
+  if (!changed) return alreadyVerified();
+
+  // A fresh link, so links from earlier signups for this address stop working.
+  const { data, error } = await generate();
+  if (error?.code === "email_exists") return alreadyVerified();
+  if (error) throw signupError(error);
+
+  await emailVerification(email, data.properties.hashed_token, name);
   res.status(201).json({ message: CHECK_EMAIL } satisfies MessageResponse);
 });
 
 // GET /api/auth/verify?token_hash=...&type=email
-// Target of the link in the "Confirm signup" email. Redirects back to the frontend.
+// Target of the link in the verification email. Redirects back to the frontend login page,
+// with the email filled in once it is verified.
 export const VerifyQuery = z.object({
   token_hash: z.string().min(1),
   type: z.enum(["email", "signup"]).default("email"),
@@ -89,26 +122,25 @@ authRouter.get("/verify", async (req, res) => {
 
   if (!parsed.success) return redirect({ verified: "0", error: "invalid_link" });
 
-  const { error } = await supabaseAuth().auth.verifyOtp(parsed.data);
+  const { data, error } = await supabaseAuth().auth.verifyOtp(parsed.data);
   if (error) {
     return redirect({ verified: "0", error: error.code === "otp_expired" ? "expired_link" : "invalid_link" });
   }
-  redirect({ verified: "1" });
+  redirect({ verified: "1", ...(data.user?.email && { email: data.user.email }) });
 });
 
 // POST /api/auth/resend-verification  { email }
 authRouter.post("/resend-verification", authLimiter, async (req, res) => {
   const { email } = ResendVerificationRequest.parse(req.body);
 
-  const { error } = await supabaseAuth().auth.resend({
-    type: "signup",
-    email,
-    options: { emailRedirectTo: VERIFY_URL },
-  });
-  if (error?.code === "over_email_send_rate_limit") {
-    throw new HttpError(429, "Too many emails sent. Try again later.");
+  // A recovery link is the one kind generateLink makes without creating a user for an unknown
+  // address, and opening it confirms an unconfirmed email. It is only sent to unconfirmed users;
+  // for anyone else nothing is emailed and the reply is the same.
+  const { data, error } = await supabaseAdmin().auth.admin.generateLink({ type: "recovery", email });
+  if (error && error.code !== "user_not_found") console.warn("[auth] resend failed", error.code ?? error.message);
+  if (!error && !data.user.email_confirmed_at) {
+    await emailVerification(email, data.properties.hashed_token, data.user.user_metadata?.name);
   }
-  if (error) console.warn("[auth] resend failed", error.code ?? error.message);
 
   res.json({ message: "If that account needs verifying, we sent a new email." } satisfies MessageResponse);
 });
@@ -119,6 +151,9 @@ authRouter.post("/login", authLimiter, async (req, res) => {
 
   const { data, error } = await supabaseAuth().auth.signInWithPassword({ email, password });
   if (error?.code === "email_not_confirmed") throw new HttpError(403, "Please verify your email first");
+  if (error && error.code !== "invalid_credentials") {
+    console.error("[auth] login failed", error.code ?? error.message);
+  }
   if (error || !data.session) throw new HttpError(401, "Invalid email or password");
 
   res.json(toSession(data.session));
