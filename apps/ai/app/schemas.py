@@ -188,3 +188,59 @@ class TranscriptResponse(BaseModel):
     language: str
     is_generated: bool  # YouTube's automatic captions, usually without punctuation
     segments: list[TranscriptSegment]
+
+
+# --- Step 9 extras: catch me up, explain a highlight, quiz ---
+
+MAX_CATCHUP_ITEMS = 200
+MAX_QUIZ_CHUNKS = 12
+
+
+class CatchupRequest(BaseModel):
+    title: str = Field(max_length=300)
+    highlights: list[HighlightIn] = Field(default=[], max_length=MAX_CATCHUP_ITEMS)
+    comments: list[CommentIn] = Field(default=[], max_length=MAX_CATCHUP_ITEMS)
+
+
+class CatchupData(BaseModel):
+    summary: str  # two or three sentences on what the group did
+    key_points: list[str]
+    active_people: list[str]  # who highlighted or commented, spelled as they wrote it
+
+
+class ExplainRequest(BaseModel):
+    quote: str = Field(min_length=1, max_length=1000)  # the highlighted text
+    context: list[Annotated[str, Field(max_length=4000)]] = Field(default=[], max_length=5)
+    level: Literal["simple", "hinglish"] = "simple"
+
+
+class ExplainData(BaseModel):
+    explanation: str
+
+
+class ExplainResult(ExplainData):
+    withheld: bool = False  # moderation flagged it; not in the model's schema
+
+
+class QuizChunk(BaseModel):
+    # A chunk of many short blocks (60 one-line paragraphs) lists every one, so this only bounds
+    # the request: chunks are at most 2,000 characters, so they can't cover more blocks than that.
+    block_ids: list[str] = Field(min_length=1, max_length=2000)
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class QuizRequest(BaseModel):
+    title: str = Field(max_length=300)
+    chunks: list[QuizChunk] = Field(min_length=1, max_length=MAX_QUIZ_CHUNKS)
+
+
+class QuizQuestion(BaseModel):
+    question: str
+    options: list[str]
+    answer_index: int
+    explanation: str
+    source_blocks: list[str]
+
+
+class QuizData(BaseModel):
+    questions: list[QuizQuestion]

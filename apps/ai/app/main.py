@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, Request
 
 from app.config import get_settings
 from app.context import RequestIdFilter, request_id
-from app.routers import answer, embed, moderate, recap, summary, transcript
+from app.routers import answer, embed, extras, moderate, recap, summary, transcript
 from app.schemas import HealthResponse
 from app.security import require_internal
 from app.services.providers import configured_providers
@@ -30,6 +30,7 @@ app.include_router(summary.router, dependencies=[Depends(require_internal)])
 app.include_router(answer.router, dependencies=[Depends(require_internal)])
 app.include_router(transcript.router, dependencies=[Depends(require_internal)])
 app.include_router(moderate.router, dependencies=[Depends(require_internal)])
+app.include_router(extras.router, dependencies=[Depends(require_internal)])
 
 REQUEST_ID = re.compile(r"^[\w-]{1,64}$")
 

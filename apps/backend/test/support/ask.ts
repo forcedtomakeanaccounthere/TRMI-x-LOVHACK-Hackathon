@@ -32,7 +32,7 @@ function table(name: string) {
       return resolve({ data: null, error: null, ...state.results[name]?.shift() });
     },
   };
-  for (const method of ["select", "eq", "maybeSingle", "single"]) builder[method] = () => builder;
+  for (const method of ["select", "eq", "gt", "order", "limit", "maybeSingle", "single"]) builder[method] = () => builder;
   builder.insert = (row: Record<string, unknown>) => {
     (state.inserts[name] ??= []).push(row);
     inserted = row;
