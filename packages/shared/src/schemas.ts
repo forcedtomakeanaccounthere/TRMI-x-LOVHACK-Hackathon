@@ -7,7 +7,7 @@ export const RoomKind = z.enum(["link", "pdf", "file", "youtube"]);
 export type RoomKind = z.infer<typeof RoomKind>;
 
 // Uploaded formats, as stored in rooms.source_meta.format.
-export const FileFormat = z.enum(["pdf", "docx", "pptx", "md", "txt"]);
+export const FileFormat = z.enum(["pdf", "docx", "pptx", "ppt", "md", "txt"]);
 export type FileFormat = z.infer<typeof FileFormat>;
 
 // rooms.source_meta (0010_ai_foundation.sql): an uploaded file, or a YouTube video.
@@ -533,3 +533,39 @@ export const QuizQuestion = z.object({
 });
 export const QuizResponse = z.object({ questions: z.array(QuizQuestion) });
 export type QuizResponse = z.infer<typeof QuizResponse>;
+
+// PDF freehand drawings and pen annotations
+export const DrawingPoint = z.object({ x: z.number(), y: z.number() });
+export type DrawingPoint = z.infer<typeof DrawingPoint>;
+
+export const DrawingPathData = z.object({
+  points: z.array(DrawingPoint),
+  width: z.number().positive().default(2),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+});
+export type DrawingPathData = z.infer<typeof DrawingPathData>;
+
+export const CreateDrawingRequest = z.object({
+  page_num: z.number().int().min(1),
+  author_name: z.string().min(1).max(40),
+  author_color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  path_data: DrawingPathData,
+});
+export type CreateDrawingRequest = z.infer<typeof CreateDrawingRequest>;
+
+export const Drawing = z.object({
+  id: z.string().uuid(),
+  room_id: z.string(),
+  page_num: z.number().int().min(1),
+  author_name: z.string(),
+  author_color: z.string(),
+  path_data: DrawingPathData,
+  created_at: z.string(),
+});
+export type Drawing = z.infer<typeof Drawing>;
+
+export const ExportSummaryQuery = z.object({
+  format: z.enum(["txt", "md"]).default("md"),
+});
+export type ExportSummaryQuery = z.infer<typeof ExportSummaryQuery>;
+

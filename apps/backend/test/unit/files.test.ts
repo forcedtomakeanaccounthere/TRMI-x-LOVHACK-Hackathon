@@ -40,8 +40,15 @@ describe("parseFile: format from the bytes", () => {
     });
   });
 
-  it.each(["report.doc", "deck.ppt", "DECK.PPT"])("asks for the new format for %s", async (name) => {
+  it.each(["report.doc", "template.dot"])("asks for the new format for %s", async (name) => {
     await expect(parseFile(Buffer.from("anything"), name)).rejects.toMatchObject({ status: 400, message: LEGACY_OFFICE });
+  });
+
+  it.each(["deck.ppt", "DECK.PPT"])("validates bytes for %s and rejects invalid bytes", async (name) => {
+    await expect(parseFile(Buffer.from("anything"), name)).rejects.toMatchObject({
+      status: 400,
+      message: "That file isn't a valid .ppt file.",
+    });
   });
 
   it("recognises an old Office file by its bytes, even when renamed", async () => {

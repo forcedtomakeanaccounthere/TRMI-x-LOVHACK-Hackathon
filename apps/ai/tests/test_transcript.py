@@ -13,7 +13,13 @@ from youtube_transcript_api._errors import (
 )
 
 from app.config import get_settings
-from app.services.transcript import TranscriptError, _client, _TimeoutSession, fetch_transcript
+from app.services.transcript import (
+    NoTranscript,
+    TranscriptError,
+    _client,
+    _TimeoutSession,
+    fetch_transcript,
+)
 
 VIDEO = "dQw4w9WgXcQ"
 
@@ -88,6 +94,10 @@ def youtube(monkeypatch):
     FakeYouTube.listed = []
     FakeYouTube.delay = 0.0
     monkeypatch.setattr("app.services.transcript.YouTubeTranscriptApi", FakeYouTube)
+    # Default yt-dlp fallback to also report no captions in unit tests unless explicitly mocked
+    def _fail_ytdlp(*a, **k):
+        raise NoTranscript("This video has no captions")
+    monkeypatch.setattr("app.services.transcript._fetch_with_ytdlp", _fail_ytdlp)
     return FakeYouTube
 
 
@@ -189,3 +199,20 @@ def test_uses_the_proxy_when_set(client, auth, youtube, monkeypatch):
 def test_refuses_an_invalid_video_id(client, auth, youtube, video_id):
     assert client.post("/transcript", json={"video_id": video_id}, headers=auth).status_code == 422
     assert youtube.instances == []
+
+
+def test_ytdlp_fallback_when_transcript_api_disabled(client, auth, youtube, monkeypatch):
+    youtube.error = TranscriptsDisabled(VIDEO)
+    from app.schemas import TranscriptResponse, TranscriptSegment
+    monkeypatch.setattr(
+        "app.services.transcript._fetch_with_ytdlp",
+        lambda vid, langs: TranscriptResponse(
+            language="en",
+            is_generated=True,
+            segments=[TranscriptSegment(start=1.2, duration=3.4, text="Recovered by yt-dlp")],
+        ),
+    )
+    res = post(client, auth)
+    assert res.status_code == 200
+    assert res.json()["segments"][0]["text"] == "Recovered by yt-dlp"
+

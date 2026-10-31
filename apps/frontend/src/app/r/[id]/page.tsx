@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { Logo } from "@/components/brand/logo";
 import { RoomActivityTracker } from "@/components/room/room-activity-tracker";
+import { PdfAnnotator } from "@/components/room/pdf/pdf-annotator";
 import { getSupabase } from "@/lib/supabase";
 
 // A shared room. Anyone with the link can open it without an account (rooms are public-read under RLS).
@@ -54,11 +55,9 @@ async function RoomContent({ id }: { id: string }) {
         </a>
       )}
       {pdfUrl ? (
-        <iframe
-          src={pdfUrl}
-          title={room.title || "PDF"}
-          className="mt-10 h-[80dvh] w-full rounded-2xl ring-1 ring-(--hairline)"
-        />
+        <div className="mt-8 w-full flex flex-col items-center">
+          <PdfAnnotator roomId={id} pdfUrl={pdfUrl} title={room.title || "PDF Document"} />
+        </div>
       ) : (
         // content_html is sanitized by the backend (DOMPurify) when the room is created, and only the
         // backend can write rooms.

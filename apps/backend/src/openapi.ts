@@ -10,6 +10,9 @@ import {
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
   CreateYoutubeRoomRequest,
+  CreateDrawingRequest,
+  Drawing as DrawingSchema,
+  ExportSummaryQuery,
   CatchupRequest,
   CatchupResponse,
   ExplainRequest,
@@ -61,6 +64,7 @@ const RoomDetail = RoomDetailSchema.meta({ id: "RoomDetail" });
 const RoomGroup = RoomGroupSchema.meta({ id: "RoomGroup" });
 const RoomInvite = RoomInviteSchema.meta({ id: "RoomInvite" });
 const TopMembersResponse = TopMembersResponseSchema.meta({ id: "TopMembersResponse" });
+const Drawing = DrawingSchema.meta({ id: "Drawing" });
 const RoomStatusResponse = RoomStatusResponseSchema.meta({ id: "RoomStatusResponse" });
 const UsersResponse = UsersResponseSchema.meta({ id: "UsersResponse" });
 const RecapData = RecapDataSchema.meta({ id: "RecapData" });
@@ -642,6 +646,53 @@ export const openApiDocument = createDocument({
           },
           "502": failure("The AI service failed, timed out or returned an unexpected shape"),
           "503": failure("No AI provider is configured"),
+        },
+      },
+    },
+    "/api/rooms/{id}/summary/export": {
+      get: {
+        tags: ["Rooms"],
+        summary: "Export room summary as Markdown or plain text",
+        requestParams: { path: roomId, query: ExportSummaryQuery },
+        responses: {
+          "200": {
+            description: "The summary file attachment",
+            content: {
+              "text/markdown": { schema: { type: "string" } },
+              "text/plain": { schema: { type: "string" } },
+            },
+          },
+          "404": failure("Summary not ready yet"),
+        },
+      },
+    },
+    "/api/rooms/{id}/drawings": {
+      get: {
+        tags: ["Rooms"],
+        summary: "Get all drawings for a room",
+        requestParams: { path: roomId, query: z.object({ page_num: z.coerce.number().optional() }) },
+        responses: {
+          "200": reply("The drawings", z.array(Drawing)),
+        },
+      },
+      post: {
+        tags: ["Rooms"],
+        summary: "Save a new drawing stroke",
+        requestParams: { path: roomId },
+        requestBody: body(CreateDrawingRequest),
+        responses: {
+          "201": reply("The saved drawing", Drawing),
+          ...invalidInput,
+        },
+      },
+    },
+    "/api/rooms/{id}/drawings/{drawingId}": {
+      delete: {
+        tags: ["Rooms"],
+        summary: "Delete a drawing stroke",
+        requestParams: { path: z.object({ id: z.string(), drawingId: z.string() }) },
+        responses: {
+          "200": reply("Success", z.object({ ok: z.boolean() })),
         },
       },
     },

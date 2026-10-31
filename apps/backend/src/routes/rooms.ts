@@ -17,10 +17,14 @@ import {
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
   CreateYoutubeRoomRequest,
+  CreateDrawingRequest,
+  ExportSummaryQuery,
+  type Drawing,
   DashboardQuery,
   RecapData,
   RecapRequest,
   RoomDetail,
+  RoomSummary,
   TranscriptResponse,
   UpdateRoomRequest,
   roomChannel,
@@ -42,6 +46,7 @@ import { htmlBlocks, pdfBlocks } from "../lib/chunk";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
+import { summaryToMarkdown, summaryToPlainText } from "../lib/summary-export";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
@@ -999,3 +1004,100 @@ roomsRouter.post("/:id/quiz", askPerIp, askPerRoom, async (req, res) => {
   const quiz = await callAi("/quiz", { title: (room.title ?? "").slice(0, 300), chunks: picked }, QuizResponse, EXTRAS_TIMEOUT_MS);
   res.json(quiz satisfies QuizResponse);
 });
+
+// GET /api/rooms/:id/summary/export?format=txt|md
+roomsRouter.get("/:id/summary/export", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { format } = ExportSummaryQuery.parse(req.query);
+  const room = await readableRoom(id);
+  const db = supabaseAdmin();
+
+  const { data: ai } = await db.from("room_ai").select("summary").eq("room_id", id).maybeSingle();
+  let summary = (ai?.summary ?? null) as RecapData | RoomSummary | null;
+
+  if (!summary) {
+    const { data: recap } = await db
+      .from("recaps")
+      .select("data")
+      .eq("room_id", id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (recap?.data) {
+      const rd = recap.data as RecapData;
+      summary = {
+        overview: rd.one_line_summary || "",
+        sections: (rd.key_points || []).map((kp) => ({ heading: "Key Point", points: [{ text: kp, source_blocks: [] }] })),
+        key_terms: [],
+      } as unknown as RoomSummary;
+    }
+  }
+
+  if (!summary) {
+    throw new HttpError(404, "Summary is not ready yet for this room.");
+  }
+
+  const title = (room.title as string) || "Room Summary";
+  const filename = `summary-${id}.${format}`;
+
+  if (format === "md") {
+    const md = summaryToMarkdown(title, summary as unknown as RoomSummary);
+    res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(md);
+  } else {
+    const txt = summaryToPlainText(title, summary as unknown as RoomSummary);
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(txt);
+  }
+});
+
+// GET /api/rooms/:id/drawings
+roomsRouter.get("/:id/drawings", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  await readableRoom(id);
+  const db = supabaseAdmin();
+  let query = db.from("drawings").select("*").eq("room_id", id).order("created_at", { ascending: true });
+  if (req.query.page_num) {
+    const pageNum = Number(req.query.page_num);
+    if (!isNaN(pageNum)) query = query.eq("page_num", pageNum);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  res.json(data as Drawing[]);
+});
+
+// POST /api/rooms/:id/drawings
+roomsRouter.post("/:id/drawings", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  await readableRoom(id);
+  const body = CreateDrawingRequest.parse(req.body);
+  const db = supabaseAdmin();
+  const { data, error } = await db
+    .from("drawings")
+    .insert({
+      room_id: id,
+      page_num: body.page_num,
+      author_name: body.author_name,
+      author_color: body.author_color,
+      path_data: body.path_data,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  res.status(201).json(data as Drawing);
+});
+
+// DELETE /api/rooms/:id/drawings/:drawingId
+roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const drawingId = req.params.drawingId as string;
+  await readableRoom(id);
+  const db = supabaseAdmin();
+  const { error } = await db.from("drawings").delete().eq("id", drawingId).eq("room_id", id);
+  if (error) throw error;
+  res.json({ ok: true });
+});
+
