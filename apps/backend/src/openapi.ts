@@ -459,7 +459,9 @@ export const openApiDocument = createDocument({
       post: {
         tags: ["Rooms"],
         summary: "Generate an AI recap of a room",
-        description: "The stored recap reaches every client through Supabase Realtime.",
+        description:
+          "The stored recap reaches every client through Supabase Realtime. Guests can ask for one; " +
+          "with a bearer token the caller is recorded in the recap history.",
         requestParams: { path: roomId },
         responses: {
           "200": reply("The recap", RecapData),

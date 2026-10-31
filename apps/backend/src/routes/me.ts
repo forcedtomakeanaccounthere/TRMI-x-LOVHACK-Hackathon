@@ -6,7 +6,7 @@ import {
   type MeParticipant,
 } from "@linkroom/shared";
 import { Router } from "express";
-import { inviteViews, isLive, profilesByIds, userSummaries } from "../lib/dashboard";
+import { fetchAll, inChunks, inviteViews, isLive, profilesByIds, userSummaries } from "../lib/dashboard";
 import { supabaseAdmin } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { listRooms, MAX_PARTICIPATION } from "./rooms";
@@ -94,35 +94,44 @@ meRouter.get("/participants", requireAuth, async (req, res) => {
   const db = supabaseAdmin();
 
   const [owned, joined] = await Promise.all([
-    db.from("rooms").select("id").eq("created_by", userId).limit(MAX_PARTICIPATION),
-    db.from("room_participants").select("room_id").eq("user_id", userId).limit(MAX_PARTICIPATION),
+    fetchAll<{ id: string }>((from, to) =>
+      db.from("rooms").select("id").eq("created_by", userId).order("id").range(from, to),
+    ),
+    fetchAll<{ room_id: string }>((from, to) =>
+      db.from("room_participants").select("room_id").eq("user_id", userId).order("room_id").range(from, to),
+    ),
   ]);
-  if (owned.error) throw owned.error;
-  if (joined.error) throw joined.error;
 
-  const roomIds = [...new Set([...owned.data, ...joined.data].map((row) => ("room_id" in row ? row.room_id : row.id)))];
+  const roomIds = [...new Set([...owned.map((row) => row.id), ...joined.map((row) => row.room_id)])];
   if (!roomIds.length) {
     res.json({ participants: [] } satisfies ParticipantsResponse);
     return;
   }
 
   // Deleted rooms are invisible, so they don't connect people on the dashboard either.
-  const { data: rooms, error: roomsError } = await db.from("rooms").select("id, status").in("id", roomIds);
-  if (roomsError) throw roomsError;
-  const visible = rooms.filter((room) => room.status !== "deleted").map((room) => room.id as string);
+  const rooms = await inChunks(roomIds, async (chunk) => {
+    const { data, error } = await db.from("rooms").select("id, status").in("id", chunk);
+    if (error) throw error;
+    return data as { id: string; status: string }[];
+  });
+  const visible = rooms.filter((room) => room.status !== "deleted").map((room) => room.id);
   if (!visible.length) {
     res.json({ participants: [] } satisfies ParticipantsResponse);
     return;
   }
 
-  const { data, error } = await db
-    .from("room_participants")
-    .select("room_id, user_id, last_seen_at")
-    .in("room_id", visible)
-    .neq("user_id", userId);
-  if (error) throw error;
-
-  const rows = data as { room_id: string; user_id: string; last_seen_at: string }[];
+  const rows = await inChunks(visible, (chunk) =>
+    fetchAll<{ room_id: string; user_id: string; last_seen_at: string }>((from, to) =>
+      db
+        .from("room_participants")
+        .select("room_id, user_id, last_seen_at")
+        .in("room_id", chunk)
+        .neq("user_id", userId)
+        .order("room_id")
+        .order("user_id")
+        .range(from, to),
+    ),
+  );
   const profiles = await profilesByIds(db, [...new Set(rows.map((row) => row.user_id))]);
   const people = new Map<string, { last_seen_at: string; live: boolean; rooms: Set<string> }>();
 

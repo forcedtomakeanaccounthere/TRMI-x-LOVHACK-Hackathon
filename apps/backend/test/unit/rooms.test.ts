@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const USER = "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f";
 const OTHER = "11111111-1111-4111-8111-111111111111";
@@ -95,7 +95,6 @@ const listRow = (over = {}) => ({
   source_url: null,
   title: "A room",
   status: "running",
-  group_id: null,
   created_at: "2026-10-30T00:00:00Z",
   last_activity_at: "2026-10-30T00:00:00Z",
   created_by: USER,
@@ -132,9 +131,7 @@ describe("titlePattern", () => {
 describe("GET /api/me/rooms", () => {
   it("hides deleted rooms unless asked, and pages by limit and offset", async () => {
     results.rooms = [
-      { data: [{ id: "room0001" }] },
       { data: [], count: 0 },
-      { data: [{ id: "room0001" }] },
       { data: [], count: 0 },
     ];
     expect((await mine()).status).toBe(200);
@@ -157,23 +154,30 @@ describe("GET /api/me/rooms", () => {
   });
 
   it("scopes by role", async () => {
-    results.rooms = [{ data: [{ id: "owned1" }] }, { data: [], count: 0 }];
+    results.rooms = [{ data: [], count: 0 }];
     await mine({ role: "owner" });
     expect(called("rooms", "eq")).toContainEqual(["created_by", USER]);
-    expect(called("rooms", "in")).toContainEqual(["id", ["owned1"]]);
+    expect(called("rooms", "in")).toEqual([]);
 
-    results.rooms = [{ data: [] }, { data: [], count: 0 }];
+    results.rooms = [{ data: [], count: 0 }];
     results.room_participants = [{ data: [{ room_id: "joined1", last_seen_at: "2026-10-31T00:00:00Z" }] }];
     await mine({ role: "member" });
     expect(called("room_participants", "eq")).toContainEqual(["user_id", USER]);
     expect(called("rooms", "in")).toContainEqual(["id", ["joined1"]]);
+    expect(called("rooms", "or")).toContainEqual([`created_by.neq.${USER},created_by.is.null`]);
+  });
+
+  it("matches owned rooms in the query, alongside the rooms the user joined", async () => {
+    results.rooms = [{ data: [], count: 0 }];
+    results.room_participants = [{ data: [{ room_id: "joined1", last_seen_at: "2026-10-31T00:00:00Z" }] }];
+
+    await mine();
+    expect(called("rooms", "or")).toEqual([[`created_by.eq.${USER},id.in.("joined1")`]]);
   });
 
   it("applies search, kind and group only when given", async () => {
     results.rooms = [
-      { data: [{ id: "room0001" }] },
       { data: [], count: 0 },
-      { data: [{ id: "room0001" }] },
       { data: [], count: 0 },
     ];
     await mine();
@@ -182,7 +186,7 @@ describe("GET /api/me/rooms", () => {
     await mine({ q: "  50%  ", kind: "pdf", group_id: GROUP });
     expect(called("rooms", "ilike")).toEqual([["title", "%50\\%%"]]);
     expect(called("rooms", "eq")).toContainEqual(["kind", "pdf"]);
-    expect(called("rooms", "eq")).toContainEqual(["group_id", GROUP]);
+    expect(called("rooms", "eq")).toContainEqual(["room_group_items.group_id", GROUP]);
   });
 
   it.each([
@@ -191,14 +195,13 @@ describe("GET /api/me/rooms", () => {
     ["title", ["title", { ascending: true, nullsFirst: false }]],
     ["active", ["last_activity_at", { ascending: false }]],
   ])("sorts by %s with the id as a tiebreak", async (sort, first) => {
-    results.rooms = [{ data: [{ id: "room0001" }] }, { data: [], count: 0 }];
+    results.rooms = [{ data: [], count: 0 }];
     await mine({ sort });
     expect(called("rooms", "order")).toEqual([first, ["id"]]);
   });
 
   it("shapes each row with the people and counts, and never leaks created_by", async () => {
     results.rooms = [
-      { data: [{ id: "room0001" }, { id: "joined01" }] },
       {
         data: [
           listRow(),
@@ -315,11 +318,45 @@ describe("PATCH /api/rooms/:id", () => {
   });
 
   it("moves a room into a group the caller owns", async () => {
-    results.rooms = [{ data: { status: "running" } }, { data: detail({ group_id: GROUP }) }];
+    results.rooms = [{ data: { status: "running" } }, { data: detail() }];
 
-    expect((await patch({ group_id: GROUP })).status).toBe(200);
+    const res = await patch({ group_id: GROUP });
+    expect(res.status).toBe(200);
+    expect(res.body.group_id).toBe(GROUP);
     expect(called("room_groups", "eq")).toContainEqual(["owner_id", USER]);
-    expect(called("rooms", "update")).toEqual([[{ group_id: GROUP }]]);
+    expect(called("room_group_items", "upsert")).toEqual([
+      [{ room_id: "room0001", group_id: GROUP }, { onConflict: "room_id" }],
+    ]);
+    expect(called("rooms", "update")).toEqual([]);
+  });
+
+  it("moves a room out of its group", async () => {
+    results.rooms = [
+      { data: { status: "running" } },
+      { data: { ...detail(), room_group_items: { group_id: GROUP } } },
+    ];
+
+    const res = await patch({ group_id: null });
+    expect(res.body.group_id).toBeNull();
+    expect(res.body).not.toHaveProperty("room_group_items");
+    expect(called("room_group_items", "delete")).toHaveLength(1);
+  });
+
+  it("reports the room's group when only the status changes", async () => {
+    results.rooms = [
+      { data: { status: "running" } },
+      { data: { ...detail({ status: "paused" }), room_group_items: { group_id: GROUP } } },
+    ];
+
+    expect((await patch({ status: "paused" })).body).toMatchObject({ status: "paused", group_id: GROUP });
+    expect(called("room_group_items", "upsert")).toEqual([]);
+  });
+
+  it("answers 404 when the group is deleted during the move", async () => {
+    results.rooms = [{ data: { status: "running" } }, { data: detail() }];
+    results.room_group_items = [{ error: { code: "23503" } }];
+
+    expect((await patch({ group_id: GROUP })).status).toBe(404);
   });
 
   it("answers 404 for a group owned by someone else, without updating", async () => {
@@ -364,24 +401,28 @@ describe("project privacy on GET /api/me/rooms", () => {
   const joined = { data: [{ room_id: "room0001", last_seen_at: "2026-10-30T00:00:00Z" }] };
 
   it("doesn't show a member which of the owner's projects a room is in", async () => {
-    results.rooms = [{ data: [] }, { data: [listRow({ created_by: OTHER, group_id: GROUP })], count: 1 }];
+    results.rooms = [
+      { data: [listRow({ created_by: OTHER, room_group_items: { group_id: GROUP } })], count: 1 },
+    ];
     results.room_participants = [joined, { data: [] }];
 
     expect((await mine()).body.rooms[0]).toMatchObject({ role: "member", group_id: null });
   });
 
   it("still shows the owner their project", async () => {
-    results.rooms = [{ data: [{ id: "room0001" }] }, { data: [listRow({ group_id: GROUP })], count: 1 }];
+    results.rooms = [{ data: [listRow({ room_group_items: { group_id: GROUP } })], count: 1 }];
     results.room_participants = [{ data: [] }, { data: [] }];
 
     expect((await mine()).body.rooms[0]).toMatchObject({ role: "owner", group_id: GROUP });
   });
 
   it("matches only owned rooms when filtering by project", async () => {
-    results.rooms = [{ data: [] }];
+    results.rooms = [{ data: [], count: 0 }];
     results.room_participants = [joined];
 
     expect((await mine({ group_id: GROUP })).body).toEqual({ rooms: [], total: 0 });
+    expect(called("rooms", "eq")).toContainEqual(["created_by", USER]);
+    expect(called("rooms", "or")).toEqual([]);
   });
 });
 
@@ -609,5 +650,36 @@ describe("POST /api/rooms/:id/recap", () => {
     const aiCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith("/recap"));
     expect(aiCalls).toEqual([]);
     fetchSpy.mockRestore();
+  });
+
+  describe("recap history", () => {
+    const answer = {
+      one_line_summary: "s",
+      key_points: [],
+      what_the_group_cared_about: [],
+      disagreements: [],
+      open_questions: [],
+      next_steps: [],
+    };
+
+    beforeEach(() => {
+      results.rooms = [{ data: { title: "x", content_html: "", content_text: null, status: "running" } }];
+      results.highlights = [{ data: [] }];
+      results.comments = [{ data: [] }];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(answer));
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("records a signed-in caller as the author", async () => {
+      expect((await recap().set("Authorization", "Bearer token")).status).toBe(200);
+      expect(called("ai_queries", "insert")[0]?.[0]).toMatchObject({ user_id: USER, kind: "recap" });
+    });
+
+    it("still serves guests, with no author", async () => {
+      expect((await recap()).status).toBe(200);
+      expect(called("ai_queries", "insert")[0]?.[0]).toMatchObject({ user_id: null, kind: "recap" });
+    });
   });
 });

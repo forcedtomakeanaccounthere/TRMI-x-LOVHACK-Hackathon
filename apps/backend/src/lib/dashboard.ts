@@ -10,19 +10,49 @@ export const isLive = (lastSeenAt: string) => Date.parse(lastSeenAt) >= Date.now
 // A % or _ in a search is the literal character, not a wildcard.
 export const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, "\\$&")}%`;
 
+// Supabase returns at most this many rows per request (max_rows in supabase/config.toml).
+const PAGE_SIZE = 1000;
+// Keeps a list of ids short enough to fit in a request URL.
+const CHUNK_SIZE = 200;
+
+// Reads every page of a query. `page` must sort on something unique, or rows can repeat or go missing.
+export async function fetchAll<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+) {
+  const rows: T[] = [];
+  for (;;) {
+    const { data, error } = await page(rows.length, rows.length + PAGE_SIZE - 1);
+    if (error) throw error;
+    const batch = (data ?? []) as T[];
+    rows.push(...batch);
+    if (batch.length < PAGE_SIZE) return rows;
+  }
+}
+
+// Runs a query over a long list of ids, a chunk at a time.
+export async function inChunks<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>) {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) chunks.push(ids.slice(i, i + CHUNK_SIZE));
+  return (await Promise.all(chunks.map(run))).flat();
+}
+
 type ProfileRow = { id: string; display_name: string; avatar_color: string | null };
 
 export async function profilesByIds(db: SupabaseClient, ids: string[]) {
   if (!ids.length) return new Map<string, ProfileRow>();
-  const { data, error } = await db.from("profiles").select("id, display_name, avatar_color").in("id", ids);
-  if (error) throw error;
-  return new Map((data as ProfileRow[]).map((profile) => [profile.id, profile]));
+  const rows = await inChunks(ids, async (chunk) => {
+    const { data, error } = await db.from("profiles").select("id, display_name, avatar_color").in("id", chunk);
+    if (error) throw error;
+    return data as ProfileRow[];
+  });
+  return new Map(rows.map((profile) => [profile.id, profile]));
 }
 
 export async function followedIds(db: SupabaseClient, userId: string) {
-  const { data, error } = await db.from("follows").select("followee_id").eq("follower_id", userId);
-  if (error) throw error;
-  return new Set((data as { followee_id: string }[]).map((row) => row.followee_id));
+  const rows = await fetchAll<{ followee_id: string }>((from, to) =>
+    db.from("follows").select("followee_id").eq("follower_id", userId).order("followee_id").range(from, to),
+  );
+  return new Set(rows.map((row) => row.followee_id));
 }
 
 // Shapes profiles into the user summaries the dashboard shows, from the viewer's side.
@@ -48,14 +78,17 @@ export async function participantBlocks(db: SupabaseClient, roomIds: string[]) {
   const blocks = new Map<string, ParticipantBlock>();
   if (!roomIds.length) return blocks;
 
-  const { data, error } = await db
-    .from("room_participants")
-    .select("room_id, user_id, joined_at, last_seen_at")
-    .in("room_id", roomIds)
-    .order("last_seen_at", { ascending: false });
-  if (error) throw error;
-
-  const rows = data as { room_id: string; user_id: string; joined_at: string; last_seen_at: string }[];
+  const rows = await fetchAll<{ room_id: string; user_id: string; joined_at: string; last_seen_at: string }>(
+    (from, to) =>
+      db
+        .from("room_participants")
+        .select("room_id, user_id, joined_at, last_seen_at")
+        .in("room_id", roomIds)
+        .order("last_seen_at", { ascending: false })
+        .order("room_id")
+        .order("user_id")
+        .range(from, to),
+  );
   const profiles = await profilesByIds(db, [...new Set(rows.map((row) => row.user_id))]);
 
   for (const row of rows) {

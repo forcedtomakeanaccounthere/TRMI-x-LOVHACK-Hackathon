@@ -17,15 +17,22 @@ create table room_groups (
 create index on room_groups (owner_id, position);
 alter table room_groups enable row level security;
 
+-- Which project a room is filed in. This lives apart from rooms because anyone can read rooms with
+-- the public key, and a project is private to its owner. A room is in at most one project.
+create table room_group_items (
+  room_id text primary key references rooms(id) on delete cascade,
+  group_id uuid not null references room_groups(id) on delete cascade
+);
+create index on room_group_items (group_id);
+alter table room_group_items enable row level security;
+
 -- Lifecycle timestamps sit next to the status they describe. last_activity_at drives the "active"
 -- sort and is kept current by the highlight/comment triggers below.
 alter table rooms
-  add column group_id uuid references room_groups(id) on delete set null,
   add column paused_at timestamptz,
   add column closed_at timestamptz,
   add column deleted_at timestamptz,
   add column last_activity_at timestamptz default now();
-create index on rooms (group_id);
 create index on rooms (last_activity_at desc);
 
 -- Paused rooms are readable but, like closed ones, take no new highlights or comments.

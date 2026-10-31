@@ -157,6 +157,49 @@ describe("projects (groups of rooms)", () => {
     expect((await get(cara, "/api/me/rooms").query({ group_id: id })).body).toEqual({ rooms: [], total: 0 });
   });
 
+  it("keeps a room's project out of reach of the public key", async () => {
+    const { id } = (await post(ana, "/api/groups", { name: "Hidden" })).body;
+    const room = await createRoom("Hidden room");
+    await patch(ana, `/api/rooms/${room}`, { group_id: id });
+
+    const browser = createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
+    expect((await browser.from("rooms").select("group_id").eq("id", room)).error?.code).toBe("42703");
+    expect((await browser.from("room_group_items").select("*")).data).toEqual([]);
+    expect(JSON.stringify((await browser.from("rooms").select("*").eq("id", room)).data)).not.toContain(id);
+  });
+
+  it("keeps every room of a big project past Supabase's row limit", async () => {
+    const big = await session("big");
+    const { id } = (await post(big, "/api/groups", { name: "Huge" })).body;
+    const tag = randomBytes(4).toString("hex");
+    const rooms = Array.from({ length: 1005 }, (_, i) => ({
+      id: `${tag}${i}`,
+      kind: "link",
+      title: `${tag} ${i}`,
+      created_by: big.user.id,
+    }));
+    expect((await admin().from("rooms").insert(rooms)).error).toBeNull();
+    const items = rooms.map((room) => ({ room_id: room.id, group_id: id }));
+    expect((await admin().from("room_group_items").insert(items)).error).toBeNull();
+
+    expect((await get(big, "/api/groups")).body.groups[0].room_count).toBe(1005);
+    expect((await get(big, "/api/me/rooms")).body.total).toBe(1005);
+    expect((await get(big, "/api/me/rooms").query({ group_id: id })).body.total).toBe(1005);
+    expect((await get(big, "/api/me/rooms").query({ q: `${tag} 1004` })).body.total).toBe(1);
+  });
+
+  it("lists a joined room whose owner's account is gone", async () => {
+    const owner = await session("gone-owner");
+    const member = await session("stays");
+    const res = await post(owner, "/api/rooms/text", { title: "Orphan room", text: "text" });
+    const room = (res.body as { id: string }).id;
+    await post(member, `/api/rooms/${room}/join`);
+    expect((await admin().auth.admin.deleteUser(owner.user.id)).error).toBeNull();
+
+    const listed = (await get(member, "/api/me/rooms").query({ role: "member" })).body.rooms;
+    expect(listed.map((r: { id: string }) => r.id)).toEqual([room]);
+  });
+
   it("moves a room out of its project", async () => {
     const { id } = (await post(ana, "/api/groups", { name: "Moved from" })).body;
     const room = await createRoom("Moved room");

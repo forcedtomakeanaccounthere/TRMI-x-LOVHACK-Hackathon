@@ -21,7 +21,7 @@ import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/da
 import { extractArticle, textToHtml } from "../lib/extract";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
-import { requireAuth } from "../middleware/auth";
+import { optionalAuth, requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
 
 export const roomsRouter = Router();
@@ -116,18 +116,33 @@ export const MAX_PARTICIPATION = 1000;
 const DELETED_PDFS = "pdfs-deleted";
 
 export const ROOM_DETAIL =
-  "id, kind, source_url, title, status, group_id, created_at, last_activity_at, paused_at, closed_at, deleted_at";
+  "id, kind, source_url, title, status, created_at, last_activity_at, paused_at, closed_at, deleted_at, room_group_items(group_id)";
+
+// The filing lives in its own private table; callers see it as the room's group_id.
+type Filed = { room_group_items?: { group_id: string } | null };
+const withGroup = (row: unknown) => {
+  const { room_group_items, ...room } = row as Filed;
+  return { ...room, group_id: room_group_items?.group_id ?? null } as RoomDetail;
+};
 
 // Kept for callers that only need the LIKE escaping.
 export const titlePattern = likePattern;
 type RoomRow = Omit<
   DashboardRoom,
-  "role" | "last_opened_at" | "highlight_count" | "comment_count" | "participant_count" | "live_count" | "people"
-> & {
-  created_by: string | null;
-  highlights: { count: number }[];
-  comments: { count: number }[];
-};
+  | "group_id"
+  | "role"
+  | "last_opened_at"
+  | "highlight_count"
+  | "comment_count"
+  | "participant_count"
+  | "live_count"
+  | "people"
+> &
+  Filed & {
+    created_by: string | null;
+    highlights: { count: number }[];
+    comments: { count: number }[];
+  };
 
 // GET /api/me/rooms: rooms the user created or joined. Deleted rooms show up for their owner only.
 export const listRooms: RequestHandler = async (req, res) => {
@@ -135,54 +150,44 @@ export const listRooms: RequestHandler = async (req, res) => {
   const userId = req.user!.id;
   const db = supabaseAdmin();
 
-  const [owned, joined] = await Promise.all([
-    db.from("rooms").select("id").eq("created_by", userId).limit(MAX_PARTICIPATION),
-    db
-      .from("room_participants")
-      .select("room_id, last_seen_at")
-      .eq("user_id", userId)
-      .order("last_seen_at", { ascending: false })
-      .limit(MAX_PARTICIPATION),
-  ]);
-  if (owned.error) throw owned.error;
+  // Memberships are capped at the most recent ones. Owned rooms are matched by created_by in the
+  // query itself, so none of them can fall outside a search, a filter or the total.
+  const joined = await db
+    .from("room_participants")
+    .select("room_id, last_seen_at")
+    .eq("user_id", userId)
+    .order("last_seen_at", { ascending: false })
+    .limit(MAX_PARTICIPATION);
   if (joined.error) throw joined.error;
 
   const lastOpened = new Map(joined.data.map((v) => [v.room_id as string, v.last_seen_at as string]));
-  const ownedIds = owned.data.map((room) => room.id as string);
-  const ownedSet = new Set(ownedIds);
-  // A room you own is yours even if you also opened it; it never counts as a membership.
-  const memberIds = [...lastOpened.keys()].filter((id) => !ownedSet.has(id));
+  const joinedIds = [...lastOpened.keys()];
 
-  // Deleted rooms are only ever part of the owner's half: a member who joined one loses sight of it.
-  // Groups are private to their owner, so a group filter can only ever match rooms you own.
-  const visibleIds =
-    status === "deleted" || group_id
-      ? role === "member"
-        ? []
-        : ownedIds
-      : role === "owner"
-        ? ownedIds
-        : role === "member"
-          ? memberIds
-          : [...ownedIds, ...memberIds];
-
-  if (!visibleIds.length) {
+  // Deleted rooms and projects belong to the owner alone: a member sees neither.
+  const ownerOnly = role === "owner" || status === "deleted" || Boolean(group_id);
+  if (role === "member" && (ownerOnly || !joinedIds.length)) {
     res.json({ rooms: [], total: 0 } satisfies DashboardResponse);
     return;
   }
 
+  const filing = group_id ? "room_group_items!inner(group_id)" : "room_group_items(group_id)";
   let query = db
     .from("rooms")
     .select(
-      "id, kind, source_url, title, status, group_id, created_at, last_activity_at, created_by, highlights(count), comments(count)",
+      `id, kind, source_url, title, status, created_at, last_activity_at, created_by, highlights(count), comments(count), ${filing}`,
       { count: "exact" },
-    )
-    .in("id", visibleIds);
+    );
+
+  const joinedList = joinedIds.map((id) => `"${id}"`).join(",");
+  if (ownerOnly || !joinedIds.length) query = query.eq("created_by", userId);
+  // A room you own never counts as a membership, and a room can outlive its owner's account.
+  else if (role === "member") query = query.in("id", joinedIds).or(`created_by.neq.${userId},created_by.is.null`);
+  else query = query.or(`created_by.eq.${userId},id.in.(${joinedList})`);
 
   if (status) query = query.eq("status", status);
   else query = query.neq("status", "deleted");
   if (kind) query = query.eq("kind", kind);
-  if (group_id) query = query.eq("group_id", group_id);
+  if (group_id) query = query.eq("room_group_items.group_id", group_id);
   if (q) query = query.ilike("title", titlePattern(q));
 
   query =
@@ -202,12 +207,12 @@ export const listRooms: RequestHandler = async (req, res) => {
     rows.map((room) => room.id),
   );
 
-  const rooms = rows.map(({ created_by, highlights, comments, ...room }): DashboardRoom => {
+  const rooms = rows.map(({ created_by, highlights, comments, room_group_items, ...room }): DashboardRoom => {
     const block = blockFor(blocks, room.id);
     const isOwner = created_by === userId;
     return {
       ...room,
-      group_id: isOwner ? room.group_id : null,
+      group_id: isOwner ? (room_group_items?.group_id ?? null) : null,
       role: isOwner ? "owner" : "member",
       last_opened_at: lastOpened.get(room.id) ?? null,
       highlight_count: highlights[0]?.count ?? 0,
@@ -268,23 +273,29 @@ roomsRouter.patch("/:id", requireAuth, async (req, res) => {
     if (!group) throw new HttpError(404, "Group not found");
   }
 
-  const patch: Record<string, unknown> = {};
-  if (body.status !== undefined) patch.status = body.status;
-  if (body.group_id !== undefined) patch.group_id = body.group_id;
-
   // Re-checked in the write: a delete that landed after the read must not be undone here, or the
   // room would run again with its PDF still in the hidden bucket.
-  const { data, error: updateError } = await db
-    .from("rooms")
-    .update(patch)
-    .eq("id", req.params.id)
-    .neq("status", "deleted")
-    .select(ROOM_DETAIL)
-    .maybeSingle();
+  const id = req.params.id as string;
+  const { data, error: updateError } = await (body.status !== undefined
+    ? db.from("rooms").update({ status: body.status }).eq("id", id).neq("status", "deleted").select(ROOM_DETAIL)
+    : db.from("rooms").select(ROOM_DETAIL).eq("id", id).neq("status", "deleted")
+  ).maybeSingle();
   if (updateError) throw updateError;
   if (!data) throw new HttpError(409, "The room just changed. Try again.");
 
-  res.json(data as RoomDetail);
+  if (body.group_id === undefined) return res.json(withGroup(data));
+
+  const items = db.from("room_group_items");
+  const { error: fileError } =
+    body.group_id === null
+      ? await items.delete().eq("room_id", id)
+      : await items.upsert({ room_id: id, group_id: body.group_id }, { onConflict: "room_id" });
+  if (fileError) {
+    if (fileError.code === "23503") throw new HttpError(404, "Group not found");
+    throw fileError;
+  }
+
+  res.json({ ...withGroup(data), group_id: body.group_id });
 });
 
 // DELETE /api/rooms/:id: soft delete. The room disappears for everyone but its owner, who can
@@ -311,7 +322,7 @@ roomsRouter.delete("/:id", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
-  res.json(data as RoomDetail);
+  res.json(withGroup(data));
 });
 
 // POST /api/rooms/:id/restore: brings a soft-deleted room back, readable and running again.
@@ -335,7 +346,7 @@ roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
-  res.json(data as RoomDetail);
+  res.json(withGroup(data));
 });
 
 // POST /api/rooms/:id/invites  { user_id }: owner only.
@@ -405,7 +416,7 @@ roomsRouter.get("/:id/top-members", requireAuth, async (req, res) => {
 async function roomDetail(db: ReturnType<typeof supabaseAdmin>, id: string) {
   const { data, error } = await db.from("rooms").select(ROOM_DETAIL).eq("id", id).single();
   if (error) throw error;
-  return data as RoomDetail;
+  return withGroup(data);
 }
 
 // Moves the PDF (if any) and saves the status only if it is still the one that was read.
@@ -441,9 +452,10 @@ async function movePdf(path: string, hide: boolean) {
   if (error) throw error;
 }
 
-// POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap.
+// POST /api/rooms/:id/recap: gathers room data, asks the AI service, stores the recap. Guests can
+// ask too; a signed-in caller is recorded as the author in the history.
 // The insert reaches every client through Supabase Realtime.
-roomsRouter.post("/:id/recap", async (req, res) => {
+roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
   const { id } = req.params;
   const db = supabaseAdmin();
 

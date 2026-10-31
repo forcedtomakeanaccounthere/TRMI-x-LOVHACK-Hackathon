@@ -305,7 +305,7 @@ describe("GET /api/groups", () => {
         ],
       },
     ];
-    results.rooms = [{ data: [{ group_id: GROUP }, { group_id: GROUP }, { group_id: THIRD }] }];
+    results.room_group_items = [{ data: [{ group_id: GROUP }, { group_id: GROUP }, { group_id: THIRD }] }];
 
     const res = await get("/api/groups");
     expect(res.status).toBe(200);
@@ -314,7 +314,7 @@ describe("GET /api/groups", () => {
       expect.objectContaining({ id: THIRD, name: "Later", room_count: 1 }),
     ]);
     expect(called("room_groups", "eq")).toContainEqual(["owner_id", USER]);
-    expect(called("rooms", "neq")).toContainEqual(["status", "deleted"]);
+    expect(called("room_group_items", "neq")).toContainEqual(["rooms.status", "deleted"]);
   });
 
   it("answers 401 without a session", async () => {

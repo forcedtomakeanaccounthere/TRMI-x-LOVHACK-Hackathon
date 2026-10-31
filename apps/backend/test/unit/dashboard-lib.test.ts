@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   blockFor,
+  fetchAll,
+  inChunks,
   inviteViews,
   isLive,
   likePattern,
@@ -22,7 +24,7 @@ function fakeDb(tables: Record<string, unknown[]>) {
       const builder: Record<string, unknown> = {
         then: (resolve: (r: unknown) => unknown) => resolve({ data: tables[name] ?? [], error: null }),
       };
-      for (const method of ["select", "in", "eq", "order"]) builder[method] = () => builder;
+      for (const method of ["select", "in", "eq", "order", "range"]) builder[method] = () => builder;
       return builder;
     },
   };
@@ -48,6 +50,50 @@ describe("isLive", () => {
 describe("likePattern", () => {
   it("escapes the LIKE wildcards and the escape character", () => {
     expect(likePattern("50%_off\\")).toBe("%50\\%\\_off\\\\%");
+  });
+});
+
+describe("fetchAll", () => {
+  it("keeps reading until a page comes back short", async () => {
+    const pages = [new Array(1000).fill("a"), new Array(1000).fill("b"), ["c"]];
+    const page = vi.fn(async () => ({ data: pages.shift(), error: null }));
+
+    expect(await fetchAll<string>(page)).toHaveLength(2001);
+    expect(page.mock.calls).toEqual([
+      [0, 999],
+      [1000, 1999],
+      [2000, 2999],
+    ]);
+  });
+
+  it("stops after an exactly full last page", async () => {
+    const pages = [new Array(1000).fill("a"), []];
+    expect(await fetchAll(async () => ({ data: pages.shift(), error: null }))).toHaveLength(1000);
+  });
+
+  it("passes on a database error", async () => {
+    const boom = new Error("boom");
+    await expect(fetchAll(async () => ({ data: null, error: boom }))).rejects.toBe(boom);
+  });
+});
+
+describe("inChunks", () => {
+  it("splits a long list and joins the results", async () => {
+    const ids = Array.from({ length: 450 }, (_, i) => String(i));
+    const sizes: number[] = [];
+
+    const out = await inChunks(ids, async (chunk) => {
+      sizes.push(chunk.length);
+      return chunk;
+    });
+    expect(sizes).toEqual([200, 200, 50]);
+    expect(out).toEqual(ids);
+  });
+
+  it("runs nothing for an empty list", async () => {
+    const run = vi.fn(async () => []);
+    expect(await inChunks([], run)).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
   });
 });
 

@@ -5,6 +5,7 @@ import {
   type RoomGroup,
 } from "@linkroom/shared";
 import { Router } from "express";
+import { fetchAll } from "../lib/dashboard";
 import { supabaseAdmin } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -24,17 +25,17 @@ async function roomCounts(groupIds: string[]) {
   const counts = new Map<string, number>();
   if (!groupIds.length) return counts;
 
-  const { data, error } = await supabaseAdmin()
-    .from("rooms")
-    .select("group_id")
-    .in("group_id", groupIds)
-    .neq("status", "deleted");
-  if (error) throw error;
+  const rows = await fetchAll<{ group_id: string }>((from, to) =>
+    supabaseAdmin()
+      .from("room_group_items")
+      .select("group_id, rooms!inner(status)")
+      .in("group_id", groupIds)
+      .neq("rooms.status", "deleted")
+      .order("room_id")
+      .range(from, to),
+  );
 
-  for (const room of data) {
-    const id = room.group_id as string;
-    counts.set(id, (counts.get(id) ?? 0) + 1);
-  }
+  for (const { group_id } of rows) counts.set(group_id, (counts.get(group_id) ?? 0) + 1);
   return counts;
 }
 
@@ -115,7 +116,7 @@ groupsRouter.patch("/:id", requireAuth, async (req, res) => {
   res.json(shape(data as GroupRow, counts.get(data.id as string) ?? 0));
 });
 
-// DELETE /api/groups/:id: the rooms in it survive, unfiled (the foreign key sets group_id to null).
+// DELETE /api/groups/:id: the rooms in it survive, unfiled (only their room_group_items rows go).
 groupsRouter.delete("/:id", requireAuth, async (req, res) => {
   const { data, error } = await supabaseAdmin()
     .from("room_groups")

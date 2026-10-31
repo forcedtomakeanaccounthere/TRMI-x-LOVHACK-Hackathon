@@ -263,7 +263,15 @@ describe("what a browser with the anon key sees", () => {
     await join(guest, id);
     const browserClient = browser();
 
-    for (const table of ["room_participants", "follows", "profiles", "room_groups", "room_invites", "ai_queries"]) {
+    for (const table of [
+      "room_participants",
+      "follows",
+      "profiles",
+      "room_groups",
+      "room_group_items",
+      "room_invites",
+      "ai_queries",
+    ]) {
       const { data } = await browserClient.from(table).select("*");
       expect(data, `${table} should be private`).toEqual([]);
     }
