@@ -6,7 +6,7 @@ import {
   type AuthSession,
   type MessageResponse,
 } from "@linkroom/shared";
-import { isAuthSessionMissingError, type AuthError, type Session } from "@supabase/supabase-js";
+import { isAuthApiError, isAuthSessionMissingError, type AuthError, type Session } from "@supabase/supabase-js";
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
@@ -129,10 +129,23 @@ authRouter.post("/refresh", async (req, res) => {
   const { refresh_token } = RefreshRequest.parse(req.body);
 
   const { data, error } = await supabaseAuth().auth.refreshSession({ refresh_token });
+  // 401 tells the client to forget the session, so it is only for tokens Auth actually refused.
+  // An outage or rate limit is temporary: 503 lets the client keep the token and retry.
+  if (error && !isRejectedRefreshToken(error)) {
+    console.warn("[auth] refresh failed", error.code ?? error.message);
+    throw new HttpError(503, "Could not refresh your session. Please try again.");
+  }
   if (error || !data.session) throw new HttpError(401, "Session expired. Please log in again.");
 
   res.json(toSession(data.session));
 });
+
+// Auth answers an unknown, reused-too-late or revoked refresh token with a 4xx (or a missing
+// session). Network failures, 5xx and 429 say nothing about the token itself.
+export function isRejectedRefreshToken(error: AuthError) {
+  if (isAuthSessionMissingError(error)) return true;
+  return isAuthApiError(error) && error.status >= 400 && error.status < 500 && error.status !== 429;
+}
 
 // POST /api/auth/logout  (Bearer token): revokes the session's refresh tokens.
 authRouter.post("/logout", requireAuth, async (req, res) => {
