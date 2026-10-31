@@ -31,13 +31,28 @@ export async function resolvePublicAddress(host: string): Promise<string> {
   return addresses[0]!.address;
 }
 
-export async function startPinnedProxy(): Promise<PinnedProxy> {
+// An upstream connection idle this long is dropped, so a server that never replies can't hold it.
+export const UPSTREAM_IDLE_MS = 20_000;
+
+export async function startPinnedProxy({ idleMs = UPSTREAM_IDLE_MS } = {}): Promise<PinnedProxy> {
   const username = "u" + randomBytes(8).toString("hex");
   const password = randomBytes(16).toString("hex");
   const expected = "Basic " + Buffer.from(`${username}:${password}`).toString("base64");
   const authorized = (req: IncomingMessage) => req.headers["proxy-authorization"] === expected;
 
+  // Every socket, browser-facing or upstream, is tracked so close() can destroy it; one opened
+  // after close() (a DNS lookup that finished late) is destroyed at once.
   const sockets = new Set<Socket>();
+  let closed = false;
+  const track = (socket: Socket) => {
+    if (closed) {
+      socket.destroy();
+      return;
+    }
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  };
+
   const server = createServer(async (req, res) => {
     // Plain http: the request line carries the absolute URL.
     if (!authorized(req)) {
@@ -59,6 +74,7 @@ export async function startPinnedProxy(): Promise<PinnedProxy> {
       res.writeHead(403).end();
       return;
     }
+    if (closed || res.destroyed) return; // the lookup finished after shutdown or a disconnect
     const headers = { ...req.headers };
     delete headers["proxy-authorization"];
     delete headers["proxy-connection"];
@@ -76,14 +92,17 @@ export async function startPinnedProxy(): Promise<PinnedProxy> {
         up.pipe(res);
       },
     );
-    upstream.on("error", () => res.headersSent || res.writeHead(502).end());
+    upstream.on("socket", track);
+    upstream.setTimeout(idleMs, () => upstream.destroy(new Error("upstream idle")));
+    upstream.on("error", () => (res.headersSent ? res.destroy() : res.writeHead(502).end()));
+    // The browser went away (page closed, Chromium shut down): drop the upstream request too.
+    res.on("close", () => upstream.destroy());
     req.pipe(upstream);
   });
 
   // https and wss: CONNECT host:port, then a raw tunnel to the checked address.
   server.on("connect", async (req: IncomingMessage, client: Socket, head: Buffer) => {
-    sockets.add(client);
-    client.on("close", () => sockets.delete(client));
+    track(client);
     client.on("error", () => client.destroy());
     if (!authorized(req)) {
       client.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="scraper"\r\n\r\n');
@@ -101,21 +120,21 @@ export async function startPinnedProxy(): Promise<PinnedProxy> {
       client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
+    if (closed || client.destroyed) return; // the lookup finished after shutdown or a disconnect
     const upstream = connect(Number(match[2]), address, () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length) upstream.write(head);
       upstream.pipe(client);
       client.pipe(upstream);
     });
-    sockets.add(upstream);
-    upstream.on("close", () => sockets.delete(upstream));
+    track(upstream);
+    upstream.setTimeout(idleMs, () => upstream.destroy());
     upstream.on("error", () => client.destroy());
+    upstream.on("close", () => client.destroy());
+    client.on("close", () => upstream.destroy());
   });
 
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
+  server.on("connection", track);
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -126,6 +145,7 @@ export async function startPinnedProxy(): Promise<PinnedProxy> {
     password,
     close: () =>
       new Promise<void>((resolve) => {
+        closed = true;
         for (const socket of sockets) socket.destroy();
         server.close(() => resolve());
       }),

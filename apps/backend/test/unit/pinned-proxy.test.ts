@@ -124,3 +124,81 @@ describe("the pinned proxy", () => {
     expect(status(await get("http://nowhere.test/", "nowhere.test"))).toBe("HTTP/1.1 403 Forbidden");
   });
 });
+
+describe("connections to a server that never replies", () => {
+  // Counts the connections the proxy opens to it and notices when each one closes.
+  async function hangingServer() {
+    let open = 0;
+    let opened = 0;
+    const server = createServer(() => {}); // never responds
+    server.on("connection", (socket) => {
+      open++;
+      opened++;
+      socket.on("close", () => open--);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return {
+      port: (server.address() as AddressInfo).port,
+      open: () => open,
+      opened: () => opened,
+      close: () => server.close(),
+    };
+  }
+
+  const waitFor = async (check: () => boolean) => {
+    for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(check()).toBe(true);
+  };
+
+  async function startRequest(p: Awaited<ReturnType<typeof startPinnedProxy>>, port: number) {
+    const creds = "Basic " + Buffer.from(`${p.username}:${p.password}`).toString("base64");
+    const socket = connect(Number(new URL(p.server).port), "127.0.0.1", () =>
+      socket.write(`GET http://public.test:${port}/ HTTP/1.1\r\nHost: public.test\r\nProxy-Authorization: ${creds}\r\n\r\n`),
+    );
+    socket.on("error", () => {});
+    return socket;
+  }
+
+  beforeEach(() => {
+    allowLoopback.on = true;
+    dns.answers.set("public.test", "127.0.0.1");
+  });
+
+  it("drops the upstream request when the browser disconnects", async () => {
+    const hang = await hangingServer();
+    const p = await startPinnedProxy();
+    const browser = await startRequest(p, hang.port);
+    await waitFor(() => hang.open() === 1);
+
+    browser.destroy();
+    await waitFor(() => hang.open() === 0);
+    await p.close();
+    hang.close();
+  });
+
+  it("drops an idle upstream request", async () => {
+    const hang = await hangingServer();
+    const p = await startPinnedProxy({ idleMs: 50 });
+    await startRequest(p, hang.port);
+    await waitFor(() => hang.opened() === 1);
+    await waitFor(() => hang.open() === 0);
+    await p.close();
+    hang.close();
+  });
+
+  it("closes upstream connections on shutdown, including tunnels", async () => {
+    const hang = await hangingServer();
+    const p = await startPinnedProxy();
+    await startRequest(p, hang.port);
+    const creds = "Basic " + Buffer.from(`${p.username}:${p.password}`).toString("base64");
+    const tunnelSocket = connect(Number(new URL(p.server).port), "127.0.0.1", () =>
+      tunnelSocket.write(`CONNECT public.test:${hang.port} HTTP/1.1\r\nProxy-Authorization: ${creds}\r\n\r\n`),
+    );
+    tunnelSocket.on("error", () => {});
+    await waitFor(() => hang.open() === 2);
+
+    await p.close();
+    await waitFor(() => hang.open() === 0);
+    hang.close();
+  });
+});
