@@ -125,9 +125,18 @@ export async function hashRemoveKey(key: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Inserts still in flight, so an erase made right after the mark waits for its row.
+const saving = new Map<string, Promise<void>>();
+
 // Text highlights also go to the highlights table so the backend recap sees them. Best effort: the
 // ledger already has the mark, and the insert is refused for rooms that aren't running.
-export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
+export function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>): Promise<void> {
+  const done = insertHighlight(a).finally(() => saving.delete(a.id));
+  saving.set(a.id, done);
+  return done;
+}
+
+async function insertHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
   const key = newRemoveKey();
   rememberRemoveKey(a.id, key);
   const { error } = await getSupabase()
@@ -150,11 +159,13 @@ export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" |
 // bring it back. Only the browser that saved it holds the key; anywhere else the mark is hidden in
 // the room through the ledger and the row stays. Best effort, like saving.
 export async function removeSavedHighlight(id: string, docId: string) {
+  await saving.get(id);
   const key = removeKeyFor(id);
   if (!key) return;
-  const { error } = await getSupabase().rpc("remove_highlight", { p_id: id, p_room: docId, p_key: key });
+  const { data, error } = await getSupabase().rpc("remove_highlight", { p_id: id, p_room: docId, p_key: key });
   if (error) console.warn("[room] highlight not removed from the database", error.message);
-  else forgetRemoveKey(id);
+  // Keep the key unless the row is confirmed gone, so a later erase can still remove it.
+  else if (data === true) forgetRemoveKey(id);
 }
 
 export function youtubeId(url: string): string | null {
