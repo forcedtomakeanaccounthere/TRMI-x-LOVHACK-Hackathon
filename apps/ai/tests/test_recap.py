@@ -1,7 +1,11 @@
+import asyncio
+import time
+
 import pytest
 
-from app.services import providers
+from app.services import providers, recap
 from app.services.providers import BREAKER_FAILURES
+from tests.conftest import RECAP
 
 RECAP_REQUEST = {"title": "Paper", "text": "doc", "highlights": [], "comments": []}
 
@@ -107,6 +111,50 @@ def test_breaker_window_expires(client, auth, fake_ai):
 
     post(client, auth)
     assert fake_ai.models == ["nv-a"]
+
+
+def stalls(models):
+    """A complete_json whose calls to `models` stall for 5 s, far past the timeouts these tests
+    set, as a stuck provider would (SDK retries included). Long enough that a missing deadline
+    fails the timing assertions; short enough that it fails instead of hanging CI. Uses the real
+    clock, since asyncio's timers need it."""
+    calls = []
+
+    async def fake(provider, system, user, schema, timeout):
+        calls.append(provider.model)
+        if provider.model in models:
+            await asyncio.sleep(5)
+        return RECAP
+
+    return fake, calls
+
+
+def test_a_stalled_call_is_cancelled_at_its_share_of_the_deadline(client, auth, monkeypatch):
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", "0.3")
+    providers.get_settings.cache_clear()
+    fake, calls = stalls({"nv-a"})
+    monkeypatch.setattr("app.services.recap.complete_json", fake)
+
+    started = time.perf_counter()
+    assert post(client, auth).status_code == 200
+    assert calls == ["nv-a", "nv-b"]
+    assert time.perf_counter() - started < 2
+
+
+def test_stalled_calls_never_outlive_the_whole_deadline(client, auth, monkeypatch):
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", "0.3")
+    monkeypatch.setenv("RECAP_DEADLINE_SECONDS", "0.5")
+    monkeypatch.setattr(recap, "MIN_ATTEMPT_SECONDS", 0.05)
+    providers.get_settings.cache_clear()
+    fake, calls = stalls({"nv-a", "nv-b", "gm-a"})
+    monkeypatch.setattr("app.services.recap.complete_json", fake)
+
+    started = time.perf_counter()
+    res = post(client, auth)
+    assert res.status_code == 502
+    assert "TimeoutError" in res.json()["detail"]
+    assert time.perf_counter() - started < 2
+    assert calls[:2] == ["nv-a", "nv-b"]  # the second gets only what is left, then the chain stops
 
 
 @pytest.mark.parametrize("rid, logged", [("abc-123", "[abc-123]"), ("bad id\n", "[-]")])

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -56,13 +57,16 @@ async def generate_recap(req: RecapRequest) -> RecapData:
             failures.append("deadline reached")
             break
         started = time.monotonic()
+        attempt_seconds = min(settings.ai_timeout_seconds, remaining)
         try:
-            recap = await complete_json(
-                provider,
-                SYSTEM_PROMPT,
-                user,
-                RecapData,
-                timeout=min(settings.ai_timeout_seconds, remaining),
+            # The SDK timeout is per HTTP request, and the client retries once, so on its own a
+            # call could run for twice as long. wait_for cancels the whole attempt, retries and
+            # all, when its share of the deadline runs out.
+            recap = await asyncio.wait_for(
+                complete_json(
+                    provider, SYSTEM_PROMPT, user, RecapData, timeout=attempt_seconds
+                ),
+                timeout=attempt_seconds,
             )
         except Exception as e:
             record_failure(provider)
