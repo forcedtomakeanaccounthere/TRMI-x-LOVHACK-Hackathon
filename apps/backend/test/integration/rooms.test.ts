@@ -26,10 +26,12 @@ async function session(label: string) {
 
 const auth = (s: Session) => ({ Authorization: `Bearer ${s.access_token}` });
 const mine = (s: Session, query: Record<string, string> = {}) =>
-  request(app).get("/api/rooms/mine").query(query).set(auth(s));
+  request(app).get("/api/me/rooms").query(query).set(auth(s));
 const join = (s: Session, id: string) => request(app).post(`/api/rooms/${id}/join`).set(auth(s));
-const setStatus = (s: Session, id: string, status: string) =>
-  request(app).patch(`/api/rooms/${id}/status`).set(auth(s)).send({ status });
+const update = (s: Session, id: string, body: object) => request(app).patch(`/api/rooms/${id}`).set(auth(s)).send(body);
+const setStatus = (s: Session, id: string, status: string) => update(s, id, { status });
+const remove = (s: Session, id: string) => request(app).delete(`/api/rooms/${id}`).set(auth(s));
+const restore = (s: Session, id: string) => request(app).post(`/api/rooms/${id}/restore`).set(auth(s));
 
 async function createRoom(title: string) {
   const res = await request(app).post("/api/rooms/text").set(auth(owner)).send({ title, text: "Some text" });
@@ -57,38 +59,55 @@ beforeAll(async () => {
 
 afterAll(() => supabase?.close());
 
-describe("GET /api/rooms/mine", () => {
+describe("GET /api/me/rooms", () => {
   it("needs a logged-in user", async () => {
-    expect((await request(app).get("/api/rooms/mine")).status).toBe(401);
+    expect((await request(app).get("/api/me/rooms")).status).toBe(401);
   });
 
   it("rejects an unknown filter value", async () => {
-    expect((await mine(owner, { status: "paused" })).status).toBe(400);
+    expect((await mine(owner, { status: "ended" })).status).toBe(400);
   });
 
-  it("lists created and joined rooms with the user's role in each", async () => {
+  it("lists created and joined rooms with the user's role, people and counts", async () => {
     const id = await createRoom("Roles");
 
     expect(ids(await mine(guest, { q: "Roles" }))).toEqual([]);
     expect((await join(guest, id)).status).toBe(200);
 
     const [asGuest] = (await mine(guest, { q: "Roles" })).body.rooms;
-    expect(asGuest).toMatchObject({ id, role: "member", status: "running", kind: "link", highlight_count: 0 });
+    expect(asGuest).toMatchObject({
+      id,
+      role: "member",
+      status: "running",
+      kind: "link",
+      highlight_count: 0,
+      participant_count: 1,
+      live_count: 1,
+      group_id: null,
+    });
     expect(asGuest.last_opened_at).toEqual(expect.any(String));
+    expect(asGuest.people.map((person: { display_name: string }) => person.display_name)).toContain("guest");
 
     const [asOwner] = (await mine(owner, { q: "Roles" })).body.rooms;
-    expect(asOwner).toMatchObject({ id, role: "owner", last_opened_at: null });
+    expect(asOwner).toMatchObject({ id, role: "owner", last_opened_at: null, participant_count: 1, live_count: 1 });
+    expect(asOwner.people.map((person: { display_name: string }) => person.display_name)).toContain("guest");
   });
 
-  it("filters by status, role and kind, and searches titles", async () => {
-    const closed = await createRoom("Filter closed");
+  it("filters by status, role, kind and group, and searches titles", async () => {
+    const paused = await createRoom("Filter paused");
     const running = await createRoom("Filter running");
-    await setStatus(owner, closed, "closed");
+    expect((await setStatus(owner, paused, "paused")).status).toBe(200);
 
-    expect(ids(await mine(owner, { q: "Filter", status: "closed" }))).toEqual([closed]);
+    expect(ids(await mine(owner, { q: "Filter", status: "paused" }))).toEqual([paused]);
     expect(ids(await mine(owner, { q: "filter", status: "running" }))).toEqual([running]);
     expect(ids(await mine(owner, { q: "Filter", role: "member" }))).toEqual([]);
     expect(ids(await mine(owner, { q: "Filter", kind: "pdf" }))).toEqual([]);
+
+    const created = await request(app).post("/api/groups").set(auth(owner)).send({ name: "Filter group" });
+    expect(created.status).toBe(201);
+    const group_id = (created.body as { id: string }).id;
+    expect((await update(owner, running, { group_id })).status).toBe(200);
+    expect(ids(await mine(owner, { q: "Filter", group_id }))).toEqual([running]);
   });
 
   it("treats % and _ in a search as plain text", async () => {
@@ -106,6 +125,7 @@ describe("GET /api/rooms/mine", () => {
     expect(ids(await mine(owner, { q: "Page", sort: "title" }))).toEqual([second, first]);
     expect(ids(await mine(owner, { q: "Page", sort: "oldest" }))).toEqual([first, second]);
     expect(ids(await mine(owner, { q: "Page" }))).toEqual([second, first]);
+    expect(ids(await mine(owner, { q: "Page", sort: "active" }))).toHaveLength(2);
 
     const page = await mine(owner, { q: "Page", sort: "title", limit: "1", offset: "1" });
     expect(ids(page)).toEqual([first]);
@@ -125,7 +145,7 @@ describe("what a browser with the anon key sees", () => {
     quote: "Some",
   });
 
-  it("counts highlights and comments on the dashboard", async () => {
+  it("counts highlights and comments on the dashboard, and records activity", async () => {
     const id = await createRoom("Counted");
     const { data, error } = await browser().from("highlights").insert(highlight(id)).select("id").single();
     expect(error).toBeNull();
@@ -135,36 +155,119 @@ describe("what a browser with the anon key sees", () => {
 
     const [room] = (await mine(owner, { q: "Counted" })).body.rooms;
     expect(room).toMatchObject({ highlight_count: 1, comment_count: 1 });
+    expect(room.last_activity_at >= room.created_at).toBe(true);
   });
 
-  it("stops new highlights once a room closes, and allows them again when it reopens", async () => {
+  it("stops new highlights once a room closes or pauses, and allows them again when it resumes", async () => {
     const id = await createRoom("Reopen");
-    await setStatus(owner, id, "closed");
-    expect((await browser().from("highlights").insert(highlight(id))).error?.code).toBe("42501");
 
-    await setStatus(owner, id, "running");
+    for (const status of ["closed", "paused"]) {
+      expect((await setStatus(owner, id, status)).status).toBe(200);
+      expect((await browser().from("highlights").insert(highlight(id))).error?.code).toBe("42501");
+    }
+
+    expect((await setStatus(owner, id, "running")).status).toBe(200);
     expect((await browser().from("highlights").insert(highlight(id))).error).toBeNull();
+  });
+
+  it("stops new comments the same way, and keeps the existing ones readable", async () => {
+    const id = await createRoom("Quiet");
+    const { data } = await browser().from("highlights").insert(highlight(id)).select("id").single();
+    const comment = { room_id: id, highlight_id: data!.id, author_name: "Guest", author_color: "#00ff00", body: "Hi" };
+    expect((await browser().from("comments").insert(comment)).error).toBeNull();
+
+    for (const status of ["paused", "closed", "archived"]) {
+      expect((await setStatus(owner, id, status)).status).toBe(200);
+      expect((await browser().from("comments").insert(comment)).error?.code).toBe("42501");
+    }
+
+    expect((await browser().from("comments").select("id").eq("room_id", id)).data).toHaveLength(1);
+  });
+
+  it("moves a room up the active sort when someone highlights in it", async () => {
+    const tag = randomBytes(4).toString("hex");
+    const quiet = await createRoom(`${tag} quiet`);
+    const busy = await createRoom(`${tag} busy`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(ids(await mine(owner, { q: tag, sort: "newest" }))).toEqual([busy, quiet]);
+
+    expect((await browser().from("highlights").insert(highlight(quiet))).error).toBeNull();
+    expect(ids(await mine(owner, { q: tag, sort: "active" }))).toEqual([quiet, busy]);
+  });
+
+  describe("GET /api/rooms/:id/top-members", () => {
+    const top = (s: Session, id: string) => request(app).get(`/api/rooms/${id}/top-members`).set(auth(s));
+    const by = (id: string, author_name: string, author_color = "#00ff00") => ({
+      ...highlight(id),
+      author_name,
+      author_color,
+    });
+
+    it("ranks the three most active people, counting highlights and comments together", async () => {
+      const id = await createRoom("Leaderboard");
+      const client = browser();
+      const inserted = await client
+        .from("highlights")
+        .insert([by(id, "Ana"), by(id, "Ben"), by(id, "Ben"), by(id, "Cal"), by(id, "Dee"), by(id, "ana ", "#0000ff")])
+        .select("id");
+      const highlight_id = inserted.data![0]!.id;
+      await client.from("comments").insert(
+        ["Cal", "Cal", "Cal"].map((author_name) => ({
+          room_id: id,
+          highlight_id,
+          author_name,
+          author_color: "#00ff00",
+          body: "Hm",
+        })),
+      );
+
+      const res = await top(guest, id);
+      expect(res.status).toBe(200);
+      expect(res.body.members.map((m: { activity: number }) => m.activity)).toEqual([4, 2, 2]);
+      expect(res.body.members[0]).toMatchObject({ name: "Cal", highlight_count: 1, comment_count: 3 });
+      // "Ana" and "ana " are one person, tied with Ben.
+      expect(res.body.members.slice(1).map((m: { name: string }) => m.name.toLowerCase()).sort()).toEqual(["ana", "ben"]);
+    });
+
+    it("is empty for a quiet room, and 404 for an unknown or deleted one", async () => {
+      const id = await createRoom("Silent");
+      expect((await top(owner, id)).body).toEqual({ members: [] });
+      expect((await top(owner, "nothing1")).status).toBe(404);
+
+      await remove(owner, id);
+      expect((await top(owner, id)).status).toBe(404);
+    });
+
+    it("can't be called directly from a browser", async () => {
+      const { error } = await browser().rpc("room_top_members", { target_room: "nothing1" });
+      expect(error?.code).toBe("42501");
+    });
   });
 
   it("hides a deleted room's content, and brings it back on restore", async () => {
     const id = await createRoom("Vanish");
     await browser().from("highlights").insert(highlight(id));
-    await setStatus(owner, id, "deleted");
+    expect((await remove(owner, id)).status).toBe(200);
 
     expect((await browser().from("rooms").select("id").eq("id", id)).data).toEqual([]);
     expect((await browser().from("highlights").select("id").eq("room_id", id)).data).toEqual([]);
 
-    await setStatus(owner, id, "closed");
+    expect((await restore(owner, id)).status).toBe(200);
     expect((await browser().from("rooms").select("id").eq("id", id)).data).toHaveLength(1);
     expect((await browser().from("highlights").select("id").eq("room_id", id)).data).toHaveLength(1);
   });
 
-  it("can't read visit history or change a status", async () => {
+  it("can't read participation, follows, profiles, groups or invites, and can't change a status", async () => {
     const id = await createRoom("Private");
     await join(guest, id);
+    const browserClient = browser();
 
-    expect((await browser().from("room_visits").select("room_id").eq("room_id", id)).data).toEqual([]);
-    await browser().from("rooms").update({ status: "deleted" }).eq("id", id);
+    for (const table of ["room_participants", "follows", "profiles", "room_groups", "room_invites", "ai_queries"]) {
+      const { data } = await browserClient.from(table).select("*");
+      expect(data, `${table} should be private`).toEqual([]);
+    }
+
+    await browserClient.from("rooms").update({ status: "deleted" }).eq("id", id);
     expect((await supabase.room(id))?.status).toBe("running");
   });
 });
@@ -178,42 +281,99 @@ describe("POST /api/rooms/:id/join", () => {
     expect((await join(guest, "nothing1")).status).toBe(404);
   });
 
-  it("lets people into a closed room to read it", async () => {
+  it("lets people into a closed or paused room to read it", async () => {
     const id = await createRoom("Closed join");
     await setStatus(owner, id, "closed");
+    expect((await join(guest, id)).body).toEqual({ id, status: "closed" });
 
-    const res = await join(guest, id);
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ id, status: "closed" });
+    await setStatus(owner, id, "paused");
+    expect((await join(guest, id)).body).toEqual({ id, status: "paused" });
   });
 
-  it("can be repeated", async () => {
+  it("can be repeated, acting as the heartbeat", async () => {
     const id = await createRoom("Twice");
     await join(guest, id);
     expect((await join(guest, id)).status).toBe(200);
     expect((await mine(guest, { q: "Twice" })).body.total).toBe(1);
+    expect((await mine(guest, { q: "Twice" })).body.rooms[0]).toMatchObject({ participant_count: 1, live_count: 1 });
+  });
+
+  it("drops out of live_count when the heartbeat stops, and a new one brings it back", async () => {
+    const admin = createClient(supabase.url, supabase.serviceRoleKey, { auth: { persistSession: false } });
+    const id = await createRoom("Heartbeat");
+    await join(guest, id);
+    const row = async () =>
+      (await admin.from("room_participants").select("joined_at, last_seen_at").eq("room_id", id).single()).data!;
+    const firstJoin = (await row()).joined_at;
+
+    const stale = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    await admin.from("room_participants").update({ last_seen_at: stale }).eq("room_id", id);
+    expect((await mine(guest, { q: "Heartbeat" })).body.rooms[0]).toMatchObject({ participant_count: 1, live_count: 0 });
+
+    await join(guest, id);
+    expect((await mine(guest, { q: "Heartbeat" })).body.rooms[0]).toMatchObject({ participant_count: 1, live_count: 1 });
+    expect((await row()).joined_at).toBe(firstJoin);
   });
 });
 
-describe("PATCH /api/rooms/:id/status", () => {
+describe("PATCH /api/rooms/:id", () => {
   it("is refused for rooms the user doesn't own, even after joining", async () => {
     const id = await createRoom("Not yours");
     await join(guest, id);
 
-    expect((await setStatus(guest, id, "deleted")).status).toBe(404);
+    expect((await setStatus(guest, id, "archived")).status).toBe(404);
     expect((await supabase.room(id))?.status).toBe("running");
   });
 
-  it("rejects an unknown status", async () => {
+  it("rejects an unknown status and deleting through PATCH", async () => {
     const id = await createRoom("Bad status");
-    expect((await setStatus(owner, id, "paused")).status).toBe(400);
+    expect((await setStatus(owner, id, "ended")).status).toBe(400);
+    expect((await setStatus(owner, id, "deleted")).status).toBe(400);
   });
 
+  it("stamps pause, resume, close and archive", async () => {
+    const id = await createRoom("Lifecycle");
+
+    const paused = await setStatus(owner, id, "paused");
+    expect(paused.body).toMatchObject({ status: "paused" });
+    expect(paused.body.paused_at).toEqual(expect.any(String));
+
+    const resumed = await setStatus(owner, id, "running");
+    expect(resumed.body).toMatchObject({ status: "running", paused_at: null, closed_at: null, deleted_at: null });
+
+    const closed = await setStatus(owner, id, "closed");
+    expect(closed.body).toMatchObject({ status: "closed" });
+    expect(closed.body.closed_at).toEqual(expect.any(String));
+
+    expect((await setStatus(owner, id, "archived")).body).toMatchObject({ status: "archived", paused_at: null });
+  });
+
+  it("moves a room into a group the owner created, and refuses someone else's group", async () => {
+    const id = await createRoom("Grouped");
+    const group = await request(app).post("/api/groups").set(auth(owner)).send({ name: "Grouped group" });
+    const group_id = (group.body as { id: string }).id;
+
+    expect((await update(owner, id, { group_id })).body).toMatchObject({ group_id });
+    expect((await update(owner, id, { group_id: null })).body).toMatchObject({ group_id: null });
+
+    const other = await request(app).post("/api/groups").set(auth(guest)).send({ name: "Guest group" });
+    expect((await update(owner, id, { group_id: (other.body as { id: string }).id })).status).toBe(404);
+  });
+
+  it("refuses changes to a deleted room", async () => {
+    const id = await createRoom("Deleted change");
+    await remove(owner, id);
+    expect((await setStatus(owner, id, "running")).status).toBe(409);
+  });
+});
+
+describe("DELETE /api/rooms/:id and POST /api/rooms/:id/restore", () => {
   it("hides a deleted room from everyone but its owner, until it is restored", async () => {
     const id = await createRoom("Trash");
     await join(guest, id);
 
-    expect((await setStatus(owner, id, "deleted")).body).toEqual({ id, status: "deleted" });
+    expect((await remove(owner, id)).body).toMatchObject({ id, status: "deleted" });
+    expect((await remove(owner, id)).status).toBe(200); // idempotent
 
     expect(ids(await mine(owner, { q: "Trash" }))).toEqual([]);
     expect(ids(await mine(owner, { q: "Trash", status: "deleted" }))).toEqual([id]);
@@ -222,8 +382,9 @@ describe("PATCH /api/rooms/:id/status", () => {
     expect((await join(guest, id)).status).toBe(404);
     expect((await request(app).post(`/api/rooms/${id}/recap`)).status).toBe(404);
 
-    await setStatus(owner, id, "closed");
+    expect((await restore(owner, id)).body).toMatchObject({ id, status: "running", deleted_at: null });
     expect(ids(await mine(guest, { q: "Trash" }))).toEqual([id]);
+    expect((await restore(owner, id)).status).toBe(409);
   });
 
   it("takes a deleted room's PDF offline, and restores it", async () => {
@@ -237,11 +398,11 @@ describe("PATCH /api/rooms/:id/status", () => {
 
     expect((await download("pdfs")).ok).toBe(true);
 
-    expect((await setStatus(owner, id, "deleted")).status).toBe(200);
+    expect((await remove(owner, id)).status).toBe(200);
     expect((await download("pdfs")).ok).toBe(false);
     expect((await download("pdfs-deleted")).ok).toBe(false);
 
-    expect((await setStatus(owner, id, "closed")).status).toBe(200);
+    expect((await restore(owner, id)).status).toBe(200);
     expect((await download("pdfs")).ok).toBe(true);
   });
 
