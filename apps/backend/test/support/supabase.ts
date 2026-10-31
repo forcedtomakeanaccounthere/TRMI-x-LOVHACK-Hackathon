@@ -71,6 +71,22 @@ export async function connectSupabase() {
       if (error) throw error;
       return data as Record<string, unknown> | null;
     },
+    // AI state and chunks of a room (lib/ai-jobs.ts), read past RLS.
+    async aiState(roomId: string) {
+      const { data, error } = await admin.from("room_ai").select("status, error").eq("room_id", roomId).maybeSingle();
+      if (error) throw error;
+      return data as { status: string; error: string | null } | null;
+    },
+    async chunks(roomId: string) {
+      const { data, error } = await admin.from("chunks").select().eq("room_id", roomId).order("idx");
+      if (error) throw error;
+      return data as Record<string, unknown>[];
+    },
+    async matchChunks(roomId: string, query: string) {
+      const { data, error } = await admin.rpc("match_chunks", { p_room: roomId, p_embedding: null, p_query: query, p_k: 8 });
+      if (error) throw error;
+      return data as { idx: number; content: string; block_ids: string[] }[];
+    },
     async pdf(path: string) {
       const { data, error } = await admin.storage.from("pdfs").download(path);
       return error ? null : data;

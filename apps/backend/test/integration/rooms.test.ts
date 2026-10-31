@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Express } from "express";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeDocx, makePptx } from "../support/files";
 import { makePdf } from "../support/pdf";
 import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
@@ -477,5 +477,61 @@ describe("POST /api/rooms/file", () => {
   it("refuses an old .doc", async () => {
     const res = await uploadFile(Buffer.from("old"), "report.doc");
     expect(res.status).toBe(400);
+  });
+});
+
+describe("indexing a new room (chunks for search)", () => {
+  // No AI service runs in these tests, so embeddings fail and the chunks are saved for keyword search.
+  const ready = async (id: string) => {
+    await vi.waitFor(
+      async () => {
+        expect(await supabase.aiState(id)).toMatchObject({ status: "ready" });
+      },
+      { timeout: 10_000, interval: 100 },
+    );
+  };
+
+  it("saves a room's chunks in the background, and match_chunks finds them by keyword", async () => {
+    const text = [
+      "Photosynthesis turns sunlight into chemical energy in plants.",
+      "Mitochondria are the powerhouse of the cell.",
+      "Volcanoes form where tectonic plates meet.",
+    ].join("\n\n");
+    const res = await request(app).post("/api/rooms/text").set(auth(owner)).send({ title: "Science", text });
+    expect(res.status).toBe(201);
+    const { id } = res.body as { id: string };
+
+    await ready(id);
+    const chunks = await supabase.chunks(id);
+    expect(chunks).toEqual([
+      expect.objectContaining({ idx: 0, block_ids: ["b0", "b1", "b2"], embedding: null, embedding_model: null }),
+    ]);
+
+    expect((await supabase.matchChunks(id, "How do volcanoes form?")).map((c) => c.idx)).toEqual([0]);
+    expect(await supabase.matchChunks(id, "quantum chromodynamics")).toEqual([]);
+  });
+
+  it("indexes a PDF room by page", async () => {
+    const res = await request(app)
+      .post("/api/rooms/pdf")
+      .set(auth(owner))
+      .attach("file", makePdf(["First page", "Second page"]), { filename: "paper.pdf", contentType: "application/pdf" });
+    expect(res.status).toBe(201);
+    const { id } = res.body as { id: string };
+
+    await ready(id);
+    expect(await supabase.chunks(id)).toEqual([expect.objectContaining({ block_ids: ["p1", "p2"], page: 1 })]);
+  });
+
+  it("keeps chunks and AI state away from the browser", async () => {
+    const id = await createRoom("Private chunks");
+    await ready(id);
+    const browser = createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
+
+    expect((await browser.from("chunks").select().eq("room_id", id)).data).toEqual([]);
+    const { error } = await browser.rpc("match_chunks", { p_room: id, p_query: "text" });
+    expect(error).not.toBeNull();
+    // The AI state itself is public, like the room.
+    expect((await browser.from("room_ai").select("status").eq("room_id", id)).data).toEqual([{ status: "ready" }]);
   });
 });

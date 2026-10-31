@@ -70,6 +70,13 @@ vi.mock("../../src/lib/supabase", () => ({
   }),
 }));
 
+// Background indexing is tested in ai-jobs.test.ts; here we only check when it starts.
+const startIndexingIfWaiting = vi.fn();
+vi.mock("../../src/lib/ai-jobs", () => ({
+  startIndexing: vi.fn(),
+  startIndexingIfWaiting: (id: string) => startIndexingIfWaiting(id),
+}));
+
 const { createApp } = await import("../../src/app");
 const { titlePattern } = await import("../../src/routes/rooms");
 const app = createApp();
@@ -588,6 +595,20 @@ describe("DELETE /api/rooms/:id and POST /api/rooms/:id/restore", () => {
     results.rooms = owned({ status: "deleted", pdf_path: "room0001.pdf" }, detail({ status: "running" }));
     expect((await restore()).body).toMatchObject({ status: "running" });
     expect(moves).toEqual([["pdfs-deleted", "pdfs"]]);
+  });
+
+  it("starts a restored room's indexing if it was still waiting, and not when the restore fails", async () => {
+    startIndexingIfWaiting.mockReset();
+    results.rooms = owned({ status: "deleted", pdf_path: null }, detail({ status: "running" }));
+    expect((await restore()).status).toBe(200);
+    expect(startIndexingIfWaiting).toHaveBeenCalledWith("room0001");
+
+    startIndexingIfWaiting.mockReset();
+    results.rooms = [{ data: { status: "deleted", pdf_path: null } }, { data: null }]; // lost a race
+    expect((await restore()).status).toBe(409);
+    results.rooms = [{ data: { status: "running", pdf_path: null } }];
+    expect((await restore()).status).toBe(409);
+    expect(startIndexingIfWaiting).not.toHaveBeenCalled();
   });
 
   it("leaves the PDF alone when deleting an already deleted room or restoring a live one", async () => {

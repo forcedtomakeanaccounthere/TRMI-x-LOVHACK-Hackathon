@@ -240,6 +240,11 @@ The repo is a monorepo (see README): `apps/frontend` (Next.js), `apps/backend` (
 - [ ] `POST /api/rooms/file`: PDF, DOCX (mammoth, images dropped), PPTX (one `p{n}` block per slide), Markdown (marked + DOMPurify) and text, detected from the bytes; zip bomb guard (50 MB unpacked, 2,000 entries); strict UTF-8; `.doc`/`.ppt` get "Save as .docx/.pptx" *(in repo)*
 - [ ] Link 422s carry site advice: Notion → Export, Google Docs/Slides → download .docx/.pptx, social sites → paste the text *(in repo)*
 
+**AI: Chunks and embeddings** (migration `0011_chunks.sql`)
+- [ ] `chunks` table (pgvector, 1024 dims, backend-only) and `match_chunks(p_room, p_embedding, p_query, p_k)`: vector, keyword or both merged by rank *(in repo)*
+- [ ] AI service `POST /embed` (`passage` / `query`): one provider and model, no fallback, every vector checked against `EMBEDDING_DIM` *(in repo)*
+- [ ] Backend `lib/chunk.ts` (~1,500–2,000 chars per chunk, ends on a block, with `block_ids`, page and headings) and `lib/ai-jobs.ts` `indexRoom` (embeds 64 at a time, keyword-only if embeddings fail), started after every room is created *(in repo)*
+
 **RT: Recap delivery**
 - [ ] Subscribe to `postgres_changes` on `recaps` for the room so every screen gets it at once
 

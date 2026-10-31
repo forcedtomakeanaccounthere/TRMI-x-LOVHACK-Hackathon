@@ -41,6 +41,10 @@ vi.mock("../../src/lib/supabase", () => ({
   }),
 }));
 
+// Indexing runs in the background after a room is created; here we only check that it starts.
+const startIndexing = vi.fn();
+vi.mock("../../src/lib/ai-jobs", () => ({ startIndexing: (id: string) => startIndexing(id) }));
+
 const { createApp } = await import("../../src/app");
 const app = createApp();
 
@@ -55,6 +59,7 @@ beforeEach(() => {
   uploads.length = 0;
   removals.length = 0;
   insertError = null;
+  startIndexing.mockReset();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -81,6 +86,7 @@ describe("POST /api/rooms/file", () => {
         created_by: USER,
       },
     ]);
+    expect(startIndexing).toHaveBeenCalledWith(id);
   });
 
   it("makes a room from each slide of a PPTX", async () => {
@@ -106,6 +112,7 @@ describe("POST /api/rooms/file", () => {
     expect(res.status).toBe(201);
     const { id } = res.body as { id: string };
     expect(uploads).toEqual([{ bucket: "pdfs", path: `${id}.pdf`, contentType: "application/pdf" }]);
+    expect(startIndexing).toHaveBeenCalledWith(id);
     expect(inserts[0]).toMatchObject({
       kind: "pdf",
       pdf_path: `${id}.pdf`,
@@ -120,6 +127,7 @@ describe("POST /api/rooms/file", () => {
     expect(res.body).toEqual({ error: LEGACY_OFFICE });
     expect(uploads).toEqual([]);
     expect(inserts).toEqual([]);
+    expect(startIndexing).not.toHaveBeenCalled();
   });
 
   it("refuses text that isn't UTF-8", async () => {
@@ -133,6 +141,7 @@ describe("POST /api/rooms/file", () => {
     const res = await upload(Buffer.from("Some text"), "notes.txt");
     expect(res.status).toBe(500);
     expect(removals).toEqual([{ bucket: "files", paths: [uploads[0]!.path] }]);
+    expect(startIndexing).not.toHaveBeenCalled();
   });
 
   it("answers 400 without a file", async () => {
@@ -145,5 +154,31 @@ describe("POST /api/rooms/file", () => {
     const res = await request(app).post("/api/rooms/file").attach("file", Buffer.from("x"), "a.txt");
     expect(res.status).toBe(401);
     expect(uploads).toEqual([]);
+  });
+});
+
+describe("room creation starts indexing", () => {
+  it.each([
+    ["/api/rooms/text", { title: "Notes", text: "Some text" }],
+    ["/api/rooms/link", { url: "https://example.com/post" }],
+  ])("for %s", async (path, body) => {
+    if (path.endsWith("/link")) {
+      const extract = await import("../../src/lib/extract");
+      vi.spyOn(extract, "extractArticle").mockResolvedValueOnce({
+        url: "https://example.com/post",
+        title: "Post",
+        html: '<p data-block="b0">Hi</p>',
+      });
+    }
+    const res = await request(app).post(path).set("Authorization", "Bearer token").send(body);
+    expect(res.status).toBe(201);
+    expect(startIndexing).toHaveBeenCalledWith((res.body as { id: string }).id);
+  });
+
+  it("not when the room can't be saved", async () => {
+    insertError = new Error("database down");
+    const res = await request(app).post("/api/rooms/text").set("Authorization", "Bearer token").send({ text: "x" });
+    expect(res.status).toBe(500);
+    expect(startIndexing).not.toHaveBeenCalled();
   });
 });

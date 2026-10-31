@@ -19,6 +19,7 @@ import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { nanoid } from "nanoid";
 import { callAi } from "../lib/ai";
+import { startIndexing, startIndexingIfWaiting } from "../lib/ai-jobs";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
@@ -55,6 +56,7 @@ roomsRouter.post("/link", requireAuth, async (req, res) => {
   });
   if (error) throw error;
 
+  startIndexing(id); // chunks and embeddings, in the background
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
@@ -75,6 +77,7 @@ roomsRouter.post("/text", requireAuth, async (req, res) => {
     });
   if (error) throw error;
 
+  startIndexing(id); // chunks and embeddings, in the background
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
@@ -123,6 +126,7 @@ roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) =
     throw error;
   }
 
+  startIndexing(id); // chunks and embeddings, in the background
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
@@ -158,6 +162,7 @@ async function createPdfRoom(file: Express.Multer.File, userId: string) {
     if (cleanupError) console.error(`Could not remove orphaned PDF ${pdfPath}:`, cleanupError);
     throw error;
   }
+  startIndexing(id); // chunks and embeddings, in the background
   return id;
 }
 
@@ -390,6 +395,8 @@ roomsRouter.post("/:id/restore", requireAuth, async (req, res) => {
     throw new HttpError(409, "The room just changed. Try again.");
   }
 
+  // Indexing skips deleted rooms, so a room deleted before its chunks were made gets them now.
+  startIndexingIfWaiting(id);
   res.json(withGroup(data));
 });
 

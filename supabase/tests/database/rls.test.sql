@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(95);
+select plan(108);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -36,7 +36,8 @@ where oid in (
   'public.follows'::regclass,
   'public.room_invites'::regclass,
   'public.ai_queries'::regclass,
-  'public.room_ai'::regclass
+  'public.room_ai'::regclass,
+  'public.chunks'::regclass
 )
 order by relname;
 
@@ -321,7 +322,12 @@ select is_empty($$update rooms set status = 'deleted' where id = 'room0001' retu
 reset role;
 insert into rooms (id, kind, title, source_meta)
 values ('file0001', 'file', 'notes.docx', '{"format": "docx", "file_name": "notes.docx"}');
-insert into room_ai (room_id, status) values ('room0001', 'ready'), ('deleted1', 'pending');
+-- Every room got a 'pending' room_ai row when it was created (0011's trigger).
+select is(
+  (select status from room_ai where room_id = 'file0001'), 'pending',
+  'a new room is queued for indexing'
+);
+update room_ai set status = 'ready' where room_id = 'room0001';
 insert into storage.objects (bucket_id, name) values ('files', 'file0001.docx');
 
 select lives_ok($$insert into rooms (id, kind, title) values ('video001', 'youtube', 'A video')$$, 'a youtube room is accepted');
@@ -334,8 +340,16 @@ select throws_ok(
   '23514', null, 'source_meta must be an object'
 );
 select throws_ok(
-  $$insert into room_ai (room_id, status) values ('file0001', 'done')$$,
+  $$update room_ai set status = 'done' where room_id = 'file0001'$$,
   '23514', null, 'an unknown AI status is rejected'
+);
+select throws_ok(
+  $$insert into room_ai (room_id) values ('file0001')$$,
+  '23505', null, 'a room has one AI state'
+);
+select lives_ok(
+  $$insert into rooms (id, kind, title) values ('queued01', 'link', 'Queued'), ('queued02', 'link', 'Queued')$$,
+  'creating several rooms at once queues each of them'
 );
 select is((select public from storage.buckets where id = 'files'), false, 'the files bucket is private');
 select isnt_empty(
@@ -363,6 +377,54 @@ select lives_ok(
   $$insert into highlights (room_id, author_name, author_color, block_id, start_offset, end_offset, quote)
     values ('file0001', 'Guest', '#00ff00', 't3', 0, 4, 'clip')$$,
   'a highlight on a transcript block t{n} is accepted'
+);
+
+-- Chunks and search (0011) -------------------------------------------------------------------------
+reset role;
+-- A 1024-number vector with a single 1 at position k: vectors with the same k are nearest.
+create function pg_temp.onehot(k int) returns extensions.vector language sql as $fn$
+  select ('[' || array_to_string(array(select (i = k)::int from generate_series(1, 1024) i), ',') || ']')::extensions.vector
+$fn$;
+insert into chunks (room_id, idx, content, block_ids, embedding, embedding_model) values
+  ('room0001', 0, 'Transformers use attention to weigh words.', '{b0}', pg_temp.onehot(1), 'm'),
+  ('room0001', 1, 'Cats sleep most of the day in warm places.', '{b1,b2}', pg_temp.onehot(2), 'm'),
+  ('room0001', 2, 'Recurrent networks read one word at a time.', '{b3}', null, null),
+  ('room0009', 0, 'Cats from another room.', '{p1}', pg_temp.onehot(2), 'm');
+
+select is(
+  array(select idx from match_chunks('room0001', pg_temp.onehot(2), null, 1)), array[1],
+  'match_chunks finds the nearest chunk by embedding'
+);
+select is(
+  array(select idx from match_chunks('room0001', null, 'How do cats sleep?', 8)), array[1],
+  'match_chunks finds chunks by keyword, only in the room asked for'
+);
+select is(
+  array(select idx from match_chunks('room0001', pg_temp.onehot(1), 'recurrent', 8)), array[0, 2, 1],
+  'with both, a chunk found either way comes back, chunks without a vector included'
+);
+select is(
+  array(select idx from match_chunks('room0001', null, 'what is the', 8)), '{}'::int[],
+  'a question of only stop words matches nothing, without an error'
+);
+select throws_ok(
+  $$insert into chunks (room_id, idx, content, block_ids) values ('room0001', 9, '', '{b9}')$$,
+  '23514', null, 'an empty chunk is rejected'
+);
+select throws_ok(
+  $$insert into chunks (room_id, idx, content, block_ids, embedding) values ('room0001', 9, 'x', '{b9}', '[1,2,3]')$$,
+  '22000', null, 'an embedding of the wrong size is rejected'
+);
+
+set local role anon;
+select is_empty($$select 1 from chunks$$, 'anon cannot read chunks');
+select throws_ok(
+  $$select * from match_chunks('room0001', null, 'cats', 8)$$,
+  '42501', null, 'anon cannot search chunks (only the backend can)'
+);
+select throws_ok(
+  $$insert into chunks (room_id, idx, content, block_ids) values ('room0001', 9, 'x', '{b9}')$$,
+  '42501', null, 'anon cannot write chunks'
 );
 
 select * from finish();

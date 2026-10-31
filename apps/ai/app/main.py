@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, Request
 
 from app.config import get_settings
 from app.context import RequestIdFilter, request_id
-from app.routers import recap
+from app.routers import embed, recap
 from app.schemas import HealthResponse
 from app.security import require_internal
 from app.services.providers import configured_providers
@@ -25,6 +25,7 @@ get_settings()
 app = FastAPI(title="LinkRoom AI")
 
 app.include_router(recap.router, dependencies=[Depends(require_internal)])
+app.include_router(embed.router, dependencies=[Depends(require_internal)])
 
 REQUEST_ID = re.compile(r"^[\w-]{1,64}$")
 
