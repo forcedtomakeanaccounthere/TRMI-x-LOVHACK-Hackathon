@@ -1,10 +1,33 @@
+import { FeatureBento } from "@/components/landing/feature-bento";
+import { FinalCta } from "@/components/landing/final-cta";
+import { Hero } from "@/components/landing/hero";
+import { HowItWorks } from "@/components/landing/how-it-works";
+import { InsideRoom } from "@/components/landing/inside-room";
+import { Manifesto } from "@/components/landing/manifesto";
+import { ParallaxQuote } from "@/components/landing/parallax-quote";
+import { ScrollToTop } from "@/components/landing/scroll-to-top";
+import { SiteFooter } from "@/components/landing/site-footer";
+import { SiteNav } from "@/components/landing/site-nav";
+import { SourcesMarquee } from "@/components/landing/sources-marquee";
+import { UseCases } from "@/components/landing/use-cases";
+
 export default function Home() {
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-24 text-center">
-      <h1 className="text-4xl font-semibold tracking-tight">LinkRoom</h1>
-      <p className="max-w-md text-lg text-zinc-600 dark:text-zinc-400">
-        The internet is single-player. LinkRoom makes every link multiplayer.
-      </p>
-    </main>
+    <>
+      <SiteNav />
+      <main>
+        <Hero />
+        <SourcesMarquee />
+        <Manifesto />
+        <HowItWorks />
+        <FeatureBento />
+        <UseCases />
+        <InsideRoom />
+        <ParallaxQuote />
+        <FinalCta />
+      </main>
+      <SiteFooter />
+      <ScrollToTop />
+    </>
   );
 }

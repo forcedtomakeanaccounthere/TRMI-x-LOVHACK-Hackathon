@@ -33,7 +33,7 @@ afterAll(() => supabase?.close());
 let n = 0;
 const newEmail = () => uniqueEmail(`user${++n}`);
 
-const signup = (email: string, password = PASSWORD, name = "Priya") =>
+const signup = (email: string, password = PASSWORD, name = "abhishek") =>
   request(app).post("/api/auth/signup").send({ email, password, name });
 
 const login = (email: string, password = PASSWORD) =>

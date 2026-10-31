@@ -14,9 +14,9 @@ const { optionalAuth, requireAuth, toAuthUser } = await import("../../src/middle
 
 const baseUser = {
   id: "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f",
-  email: "priya@example.com",
+  email: "abhishek@example.com",
   email_confirmed_at: "2026-10-30T00:00:00Z",
-  user_metadata: { name: "Priya" },
+  user_metadata: { name: "abhishek" },
 } as unknown as User;
 
 const reqWith = (authorization?: string) => ({ headers: { authorization } }) as unknown as Request;
@@ -36,12 +36,12 @@ beforeEach(() => {
 
 describe("toAuthUser", () => {
   it("uses the name from user metadata", () => {
-    expect(toAuthUser(baseUser)).toEqual({ id: baseUser.id, email: "priya@example.com", name: "Priya" });
+    expect(toAuthUser(baseUser)).toEqual({ id: baseUser.id, email: "abhishek@example.com", name: "abhishek" });
   });
 
   it("falls back to the email local part when there is no name", () => {
-    expect(toAuthUser({ ...baseUser, user_metadata: {} }).name).toBe("priya");
-    expect(toAuthUser({ ...baseUser, user_metadata: { name: 42 } }).name).toBe("priya");
+    expect(toAuthUser({ ...baseUser, user_metadata: {} }).name).toBe("abhishek");
+    expect(toAuthUser({ ...baseUser, user_metadata: { name: 42 } }).name).toBe("abhishek");
   });
 });
 
@@ -70,7 +70,7 @@ describe("requireAuth", () => {
     const req = reqWith("Bearer tok");
     const next = await run(requireAuth, req);
     expect(next).toHaveBeenCalledOnce();
-    expect(req.user).toEqual({ id: baseUser.id, email: "priya@example.com", name: "Priya" });
+    expect(req.user).toEqual({ id: baseUser.id, email: "abhishek@example.com", name: "abhishek" });
     expect(req.accessToken).toBe("tok");
   });
 });
