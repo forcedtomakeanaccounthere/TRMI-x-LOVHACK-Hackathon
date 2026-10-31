@@ -58,5 +58,10 @@ create policy "public insert" on highlights for insert with check (true);
 create policy "public insert" on comments for insert with check (true);
 
 -- PDF storage bucket (public read so react-pdf can load files by URL).
-insert into storage.buckets (id, name, public) values ('pdfs', 'pdfs', true)
-on conflict (id) do nothing;
+-- 20 MB and PDF-only, matching the upload limit in apps/backend/src/routes/rooms.ts.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('pdfs', 'pdfs', true, 20971520, array['application/pdf'])
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
