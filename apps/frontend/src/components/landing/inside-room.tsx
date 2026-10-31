@@ -99,7 +99,7 @@ export function InsideRoom() {
                   )}
                   <span className="relative flex items-center gap-1.5">
                     <t.icon weight="light" className="size-4" />
-                    <span className="hidden sm:inline">{t.label}</span>
+                    <span className="sr-only sm:not-sr-only">{t.label}</span>
                   </span>
                 </TabsTrigger>
               ))}
@@ -126,7 +126,7 @@ export function InsideRoom() {
                         </h3>
                         <p className="mt-5 max-w-md text-[1rem] leading-[1.75] text-muted-foreground">{t.body}</p>
                       </div>
-                      <Stage id={t.id} />
+                      <Stage id={t.id} reduceMotion={!!reduce} />
                     </div>
                   </motion.div>
                 )}
@@ -146,7 +146,7 @@ const [abhishek, arun, mei, leo] = PEOPLE as unknown as [
   (typeof PEOPLE)[number],
 ];
 
-function Stage({ id }: { id: TabId }) {
+function Stage({ id, reduceMotion }: { id: TabId; reduceMotion: boolean }) {
   return (
     <div className="relative min-h-[20rem] overflow-hidden rounded-[1.25rem] bg-[radial-gradient(90%_80%_at_80%_0%,color-mix(in_oklab,var(--azure)_12%,transparent),transparent)] p-7 ring-1 ring-(--hairline)">
       {id === "highlight" && (
@@ -201,9 +201,10 @@ function Stage({ id }: { id: TabId }) {
             </span>
             <span className="rounded-full bg-foreground/6 px-3 py-1 text-[0.75rem]">Stop</span>
           </div>
+          {/* The looping scroll is decoration only, so it stays still for reduced motion. */}
           <motion.div
             className="space-y-3"
-            animate={{ y: [0, -60, -60, 0] }}
+            animate={reduceMotion ? undefined : { y: [0, -60, -60, 0] }}
             transition={{ duration: 6, repeat: Infinity, ease: [0.45, 0, 0.2, 1], times: [0, 0.4, 0.7, 1] }}
           >
             {[96, 88, 100, 70, 92, 84, 98, 64].map((w, i) => (

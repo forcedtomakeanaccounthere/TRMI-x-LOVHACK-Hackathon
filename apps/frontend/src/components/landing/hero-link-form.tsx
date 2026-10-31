@@ -4,8 +4,8 @@ import { ArrowRightIcon, FilePdfIcon, LinkSimpleIcon } from "@phosphor-icons/rea
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
-import { getSession } from "@/lib/session";
+import { api, ApiError } from "@/lib/api";
+import { getFreshSession, getSession, setSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 export const PENDING_LINK_KEY = "linkroom-pending-link";
@@ -30,32 +30,49 @@ export function HeroLinkForm({ className }: { className?: string }) {
     } catch {}
   }, []);
 
-  function requireSession(url = "") {
-    const session = getSession();
-    if (session) return session;
+  function askToSignIn(url: string, expired: boolean) {
     try {
       if (url) sessionStorage.setItem(PENDING_LINK_KEY, url);
     } catch {}
-    toast("Create a free account to open your room.");
-    router.push("/signup?next=/");
-    return null;
+    if (expired) {
+      toast("Your session expired. Sign in again to open your room.");
+      router.push("/login?next=/");
+    } else {
+      toast("Create a free account to open your room.");
+      router.push("/signup?next=/");
+    }
+  }
+
+  // Runs the room request with a fresh token; sends the visitor to sign in when there is none.
+  async function createRoom(create: (token: string) => Promise<{ id: string }>, url = "") {
+    const hadSession = getSession() !== null;
+    setBusy(true);
+    try {
+      const session = await getFreshSession();
+      if (!session) {
+        setBusy(false);
+        askToSignIn(url, hadSession);
+        return;
+      }
+      const { id } = await create(session.access_token);
+      router.push(`/r/${id}`);
+    } catch (err) {
+      setBusy(false);
+      if (err instanceof ApiError && err.status === 401) {
+        setSession(null);
+        askToSignIn(url, true);
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : "Something went wrong");
+    }
   }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const url = urlRef.current?.value.trim() ?? "";
     if (!url) return;
-    const session = requireSession(url);
-    if (!session) return;
-    setBusy(true);
-    try {
-      const withScheme = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-      const { id } = await api.createLinkRoom({ url: withScheme }, session.access_token);
-      router.push(`/r/${id}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong");
-      setBusy(false);
-    }
+    const withScheme = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    await createRoom((token) => api.createLinkRoom({ url: withScheme }, token), url);
   }
 
   async function onPdf(file: File | undefined) {
@@ -64,16 +81,7 @@ export function HeroLinkForm({ className }: { className?: string }) {
       toast.error("That PDF is over 20 MB.");
       return;
     }
-    const session = requireSession();
-    if (!session) return;
-    setBusy(true);
-    try {
-      const { id } = await api.createPdfRoom(file, session.access_token);
-      router.push(`/r/${id}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Something went wrong");
-      setBusy(false);
-    }
+    await createRoom((token) => api.createPdfRoom(file, token));
   }
 
   return (
