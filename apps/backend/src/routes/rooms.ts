@@ -3,15 +3,19 @@ import {
   AskRequest,
   CreateInviteRequest,
   EmbedResponse,
+  ANSWER_WITHHELD,
+  ModerateResponse,
   NOT_IN_DOCUMENT,
   type AiCitation,
   type AiMessage,
   CreateLinkRoomRequest,
   CreateTextRoomRequest,
+  CreateYoutubeRoomRequest,
   DashboardQuery,
   RecapData,
   RecapRequest,
   RoomDetail,
+  TranscriptResponse,
   UpdateRoomRequest,
   type SourceMeta,
   type CreateRoomResponse,
@@ -32,6 +36,7 @@ import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
+import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
@@ -100,6 +105,70 @@ roomsRouter.post("/pdf", requireAuth, upload.single("file"), async (req, res) =>
 
 // POST /api/rooms/file  multipart field "file": a PDF, DOCX, PPTX, Markdown or text file. The format
 // comes from the bytes (see lib/files.ts). PDFs become PDF rooms; the rest become file rooms with the
+// POST /api/rooms/youtube  { url, transcript? }: a room from a video's transcript. The transcript is
+// fetched by apps/ai, or pasted by the creator when YouTube's captions can't be fetched. Its
+// paragraphs are t{n} blocks that keep their time range. The room shows the transcript at first;
+// once the detailed doc is written from it (lib/ai-jobs.ts) the doc replaces it, and the
+// transcript stays in room_sources for chunks and citations.
+roomsRouter.post("/youtube", requireAuth, async (req, res) => {
+  const { url, transcript } = CreateYoutubeRoomRequest.parse(req.body);
+  const videoId = videoIdOf(url);
+  const [title, source] = await Promise.all([fetchVideoTitle(videoId), transcriptFor(videoId, transcript)]);
+  const { html, durationSec } = transcriptToHtml(source.segments);
+  if (!html) throw new HttpError(422, "The transcript has no text in it.");
+
+  const id = nanoid(8);
+  const { error } = await supabaseAdmin()
+    .from("rooms")
+    .insert({
+      id,
+      kind: "youtube",
+      source_url: watchUrl(videoId),
+      title: title ?? "YouTube video",
+      content_html: html,
+      source_meta: {
+        format: "youtube",
+        video_id: videoId,
+        language: source.language,
+        transcript: source.transcript,
+        duration_sec: durationSec,
+      } satisfies SourceMeta,
+      created_by: req.user!.id,
+    });
+  if (error) throw error;
+
+  // The transcript stays the source of chunks and citations after the doc replaces content_html.
+  const { error: sourceError } = await supabaseAdmin()
+    .from("room_sources")
+    .insert({ room_id: id, data: { kind: "transcript", segments: source.segments, html } });
+  if (sourceError) {
+    await supabaseAdmin().from("rooms").delete().eq("id", id);
+    throw sourceError;
+  }
+
+  startIndexing(id); // chunks with their times, then the detailed doc, in the background
+  res.status(201).json({ id } satisfies CreateRoomResponse);
+});
+
+// apps/ai gives YouTube 20 s.
+const TRANSCRIPT_TIMEOUT_MS = 30_000;
+const PASTE_INSTEAD = "Paste the transcript instead (on YouTube: ⋯ under the video → Show transcript).";
+
+async function transcriptFor(videoId: string, pasted: string | undefined) {
+  if (pasted?.trim()) {
+    return { segments: parsePastedTranscript(pasted), language: null, transcript: "pasted" as const };
+  }
+  const fetched = await callAi("/transcript", { video_id: videoId }, TranscriptResponse, TRANSCRIPT_TIMEOUT_MS, {
+    404: new HttpError(422, `This video has no captions we can read. ${PASTE_INSTEAD}`),
+    403: new HttpError(422, `YouTube didn't let us fetch this transcript right now. ${PASTE_INSTEAD}`),
+  });
+  return {
+    segments: fetched.segments,
+    language: fetched.language,
+    transcript: fetched.is_generated ? ("auto" as const) : ("manual" as const),
+  };
+}
+
 // same block HTML as a link room, and the original is kept in the private "files" bucket.
 roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) => {
   const file = req.file;
@@ -598,6 +667,8 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
 // Chunks a question is answered from (match_chunks p_k).
 const ASK_CHUNKS = 8;
 // apps/ai answers within 25 s; embedding the question is quick or not worth waiting for.
+// apps/ai gives Mistral's moderation 5 s.
+const MODERATE_TIMEOUT_MS = 8_000;
 const ANSWER_TIMEOUT_MS = 30_000;
 const QUESTION_EMBED_TIMEOUT_MS = 10_000;
 
@@ -649,6 +720,14 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
     throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
   }
 
+  // The question is shown to the whole room, so it is moderated before anything else, whether or not
+  // the search finds anything. Moderation fails open: if apps/ai can't check it, it goes through.
+  const moderation = await callAi("/moderate", { text: question }, ModerateResponse, MODERATE_TIMEOUT_MS).catch(() => {
+    console.warn(`[rooms] moderation unavailable for a question in room ${id}, allowing it`);
+    return { flagged: [] };
+  });
+  if (moderation.flagged.length) throw new HttpError(422, "That question can't be asked here. Try rephrasing it.");
+
   // Without an embedding the search is by keyword only.
   let embedding: number[] | null = null;
   try {
@@ -670,7 +749,7 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   // Nothing matched: the document can't answer, and there is nothing to send the AI.
   const answer: AnswerResponse = chunks.length
     ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
-    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] };
+    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
 
   // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
   const citations = answer.citations.flatMap((citation): AiCitation[] => {
@@ -687,7 +766,8 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
       kind: "ask",
       asked_by: askedBy,
       question,
-      answer: inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
+      // Our own text for a withheld answer: never the model's.
+      answer: answer.withheld ? ANSWER_WITHHELD : inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
       found_in_document: inDocument,
       citations: inDocument ? citations : [],
     })

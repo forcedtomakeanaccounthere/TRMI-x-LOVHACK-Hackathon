@@ -5,6 +5,7 @@ type Result = { data?: unknown; error?: unknown };
 
 // Records what reaches Supabase, per table, and answers with queued results.
 const calls: Record<string, unknown[][]> = {};
+const writes: string[] = []; // every call in order, across tables
 const results: Record<string, Result[]> = {};
 
 // Writes to room_ai (upserts) answer from "room_ai:upsert", so they don't take the results queued
@@ -15,9 +16,10 @@ function table(name: string) {
   const builder: Record<string, unknown> = {
     then: (resolve: (r: Result) => unknown) => resolve({ data: null, error: null, ...results[key]?.shift() }),
   };
-  for (const method of ["select", "eq", "single", "maybeSingle", "delete", "insert", "upsert", "in", "neq", "gt", "order", "limit"]) {
+  for (const method of ["select", "eq", "single", "maybeSingle", "delete", "insert", "upsert", "update", "in", "neq", "gt", "order", "limit"]) {
     builder[method] = (...args: unknown[]) => {
       log.push([method, ...args]);
+      writes.push(`${name}.${method}`);
       if (method === "upsert") key = `${name}:upsert`;
       return builder;
     };
@@ -60,6 +62,7 @@ const fakeAi = async (path: string, body: { texts: string[] }) => (path === "/em
 
 beforeEach(() => {
   for (const key of Object.keys(calls)) delete calls[key];
+  writes.length = 0;
   for (const key of Object.keys(results)) delete results[key];
   callAi.mockReset();
   callAi.mockImplementation(fakeAi);
@@ -321,5 +324,44 @@ describe("startIndexingIfWaiting (a restored room)", () => {
     results.room_ai = [{ error: new Error("database down") }];
     startIndexingIfWaiting("room0001");
     await vi.waitFor(() => expect(statuses()).toEqual(["failed"]));
+  });
+});
+
+describe("indexRoom for a YouTube room", () => {
+  const TRANSCRIPT = '<p data-block="t0" data-start="0" data-end="30.5">Hello and welcome to the talk</p>';
+
+  beforeEach(() => {
+    results.rooms = [{ data: { kind: "youtube", title: "Talk", content_html: "<p>shown</p>", content_text: null } }];
+    results.room_sources = [{ data: { data: { kind: "transcript", html: TRANSCRIPT } } }];
+    callAi.mockImplementation(async (path: string, body: { texts: string[] }) =>
+      path === "/embed"
+        ? vectorsFor(body)
+        : { overview: "About the talk", sections: [{ heading: "Start", points: [{ text: "It opens", source_blocks: ["t0"] }] }], key_terms: [] },
+    );
+  });
+
+  it("chunks the transcript with its times, not the page it shows", async () => {
+    await indexRoom("room0001");
+    expect(inserted()).toEqual([expect.objectContaining({ block_ids: ["t0"], start_sec: 0, end_sec: 30.5 })]);
+  });
+
+  it("writes the detailed doc into content_html before the room is ready", async () => {
+    await indexRoom("room0001");
+    const [[update]] = called("rooms", "update") as [[{ content_html: string }]];
+    expect(update.content_html).toBe(
+      '<p data-block="b0">About the talk</p><h2 data-block="b1">Start</h2><p data-block="b2" data-source="t0">It opens</p>',
+    );
+    expect(writes.indexOf("rooms.update")).toBeLessThan(writes.lastIndexOf("room_ai.upsert"));
+    expect(statuses().at(-1)).toBe("ready");
+  });
+
+  it("keeps the transcript as the page when no summary can be made", async () => {
+    callAi.mockImplementation(async (path: string, body: { texts: string[] }) => {
+      if (path === "/embed") return vectorsFor(body);
+      throw new HttpError(502, "down");
+    });
+    await indexRoom("room0001");
+    expect(called("rooms", "update")).toEqual([]);
+    expect(statuses().at(-1)).toBe("ready");
   });
 });

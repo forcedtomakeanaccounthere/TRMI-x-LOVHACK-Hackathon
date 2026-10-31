@@ -1,14 +1,19 @@
 from fastapi import APIRouter, HTTPException
 
-from app.schemas import AnswerData, AnswerRequest, ErrorResponse
-from app.services.answer import AnswerError, InvalidQuestion, NoProviderError, answer_question
+from app.schemas import AnswerRequest, AnswerResult, ErrorResponse
+from app.services.answer import (
+    AnswerError,
+    InvalidQuestion,
+    NoProviderError,
+    answer_question,
+)
 
 router = APIRouter()
 
 
 @router.post(
     "/answer",
-    response_model=AnswerData,
+    response_model=AnswerResult,
     summary="Answer a question from a room's chunks, with checked citations",
     responses={
         502: {"model": ErrorResponse, "description": "All AI providers failed"},
@@ -16,7 +21,7 @@ router = APIRouter()
         503: {"model": ErrorResponse, "description": "No AI provider has an API key"},
     },
 )
-async def answer(req: AnswerRequest) -> AnswerData:
+async def answer(req: AnswerRequest) -> AnswerResult:
     try:
         return await answer_question(req)
     except InvalidQuestion as e:

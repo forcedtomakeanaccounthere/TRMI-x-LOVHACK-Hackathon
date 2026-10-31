@@ -1,4 +1,4 @@
-import { NOT_IN_DOCUMENT } from "@linkroom/shared";
+import { ANSWER_WITHHELD, NOT_IN_DOCUMENT } from "@linkroom/shared";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../../src/middleware/error";
@@ -25,11 +25,12 @@ const CHUNKS = [
 // apps/ai: a query vector, and an answer citing chunk 1 (and chunk 2 when asked).
 function fakeAi({ embed = true, citations = [{ chunk: 1, quote: "turns sunlight into energy" }] } = {}) {
   callAi.mockImplementation(async (path: string) => {
+    if (path === "/moderate") return { flagged: [] };
     if (path === "/embed") {
       if (!embed) throw new HttpError(502, "down");
       return { model: "m", vectors: [[0.1, 0.2]] };
     }
-    return { answer: "Plants use photosynthesis.", found_in_document: true, citations };
+    return { answer: "Plants use photosynthesis.", found_in_document: true, citations, withheld: false };
   });
 }
 
@@ -49,11 +50,12 @@ describe("POST /api/rooms/:id/ask", () => {
     const res = await ask({ question: "  How do plants get energy?  ", name: "Priya" });
     expect(res.status).toBe(201);
 
-    expect(callAi.mock.calls[0]).toEqual(["/embed", { texts: ["How do plants get energy?"], input_type: "query" }, expect.anything(), 10_000]);
+    expect(callAi.mock.calls[0]!.slice(0, 2)).toEqual(["/moderate", { text: "How do plants get energy?" }]);
+    expect(callAi.mock.calls[1]).toEqual(["/embed", { texts: ["How do plants get energy?"], input_type: "query" }, expect.anything(), 10_000]);
     expect(state.rpc).toEqual([
       ["match_chunks", { p_room: "room0001", p_embedding: [0.1, 0.2], p_query: "How do plants get energy?", p_k: 8 }],
     ]);
-    expect(callAi.mock.calls[1]).toEqual([
+    expect(callAi.mock.calls[2]).toEqual([
       "/answer",
       { question: "How do plants get energy?", chunks: [{ content: CHUNKS[0]!.content }, { content: CHUNKS[1]!.content }] },
       expect.anything(),
@@ -78,6 +80,41 @@ describe("POST /api/rooms/:id/ask", () => {
     expect(state.inserts.ai_queries).toEqual([expect.objectContaining({ room_id: "room0001", kind: "ask", prompt: "How do plants get energy?" })]);
   });
 
+  it("refuses a question moderation flagged before searching, even when nothing would match, and saves nothing", async () => {
+    state.matches = [];
+    callAi.mockImplementation(async (path: string) => (path === "/moderate" ? { flagged: ["hate_and_discrimination"] } : {}));
+    const res = await ask({ question: "something hateful" });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("That question can't be asked here. Try rephrasing it.");
+    expect(callAi.mock.calls.map(([path]) => path)).toEqual(["/moderate"]);
+    expect(state.rpc).toEqual([]);
+    expect(state.inserts.ai_messages ?? []).toEqual([]);
+  });
+
+  it("lets a question through when moderation is unavailable", async () => {
+    state.matches = CHUNKS;
+    fakeAi();
+    const answerFor = callAi.getMockImplementation()!;
+    callAi.mockImplementation(async (path: string, ...rest: unknown[]) => {
+      if (path === "/moderate") throw new HttpError(502, "down");
+      return answerFor(path, ...rest);
+    });
+    expect((await ask()).status).toBe(201);
+  });
+
+  it("saves our own message for an answer moderation withheld, never the model's text", async () => {
+    state.matches = CHUNKS;
+    callAi.mockImplementation(async (path: string) =>
+      path === "/moderate"
+        ? { flagged: [] }
+        : path === "/embed"
+          ? { model: "m", vectors: [[1]] }
+          : { answer: "model text", found_in_document: false, citations: [], withheld: true },
+    );
+    const res = await ask();
+    expect(res.body).toMatchObject({ answer: ANSWER_WITHHELD, found_in_document: false, citations: [] });
+  });
+
   it("still answers by keyword when the question can't be embedded", async () => {
     state.matches = CHUNKS;
     fakeAi({ embed: false });
@@ -92,13 +129,13 @@ describe("POST /api/rooms/:id/ask", () => {
     const res = await ask({ question: "What is the capital of France?" });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] });
-    expect(callAi.mock.calls.map(([path]) => path)).toEqual(["/embed"]);
+    expect(callAi.mock.calls.map(([path]) => path)).toEqual(["/moderate", "/embed"]);
   });
 
   it("saves the AI's not-found answer as not found", async () => {
     state.matches = CHUNKS;
     callAi.mockImplementation(async (path: string) =>
-      path === "/embed" ? { model: "m", vectors: [[1]] } : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] },
+      path === "/moderate" ? { flagged: [] } : path === "/embed" ? { model: "m", vectors: [[1]] } : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] },
     );
     const res = await ask();
     expect(res.body).toMatchObject({ answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [] });

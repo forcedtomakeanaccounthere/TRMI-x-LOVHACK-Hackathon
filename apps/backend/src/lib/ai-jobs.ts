@@ -3,6 +3,14 @@ import { HttpError } from "../middleware/error";
 import { callAi } from "./ai";
 import { chunkRoom, embeddingText, type Chunk } from "./chunk";
 import { supabaseAdmin } from "./supabase";
+import { summaryToDocHtml } from "./youtube";
+
+// The t{n} transcript paragraphs a YouTube room was made from (room_sources, 0013).
+async function transcriptHtml(roomId: string) {
+  const { data, error } = await supabaseAdmin().from("room_sources").select("data").eq("room_id", roomId).single();
+  if (error) throw error;
+  return ((data.data as { html?: string }).html ?? "") as string;
+}
 
 // Background AI work on a room, run after the room is created without making the creator wait.
 // Progress is written to room_ai, which reaches the room's page over Realtime.
@@ -46,7 +54,8 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
       .single();
     if (error) throw error;
 
-    const chunks = chunkRoom(room);
+    // A YouTube room is chunked from its transcript, which keeps the times, not from the doc it shows.
+    const chunks = chunkRoom(room.kind === "youtube" ? { ...room, content_html: await transcriptHtml(roomId) } : room);
     const embeddings = chunks.length ? await embedChunks(roomId, chunks) : null;
 
     const { error: deleteError } = await db.from("chunks").delete().eq("room_id", roomId);
@@ -68,7 +77,7 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
     }
 
     await saveState(roomId, "summarizing");
-    const summarized = await summarizeRoom(roomId, (room.title as string | null) ?? "", chunks);
+    const summarized = await summarizeRoom(roomId, (room.title as string | null) ?? "", chunks, room.kind as string);
     return { chunks: chunks.length, embedded: Boolean(embeddings), summarized };
   } finally {
     running.delete(roomId);
@@ -80,7 +89,7 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
  * saved, so a summary that can't be made doesn't fail the room: it is "ready" (searchable, Q&A
  * works) with no summary and the reason in room_ai.error. Returns whether a summary was saved.
  */
-export async function summarizeRoom(roomId: string, title: string, chunks: Chunk[]) {
+export async function summarizeRoom(roomId: string, title: string, chunks: Chunk[], kind = "link") {
   let summary: RoomSummary;
   try {
     summary = await callAi(
@@ -103,6 +112,12 @@ export async function summarizeRoom(roomId: string, title: string, chunks: Chunk
     const reason = err instanceof HttpError ? err.message : "Something went wrong.";
     await saveState(roomId, "ready", { summary: null, error: `The summary couldn't be made. ${reason}` });
     return false;
+  }
+  // A video room reads as the detailed doc written from its transcript. Saved before "ready", so the
+  // page that reloads on that Realtime event gets the doc.
+  if (kind === "youtube") {
+    const { error } = await supabaseAdmin().from("rooms").update({ content_html: summaryToDocHtml(summary) }).eq("id", roomId);
+    if (error) throw error;
   }
   await saveState(roomId, "ready", { summary });
   return true;

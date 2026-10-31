@@ -9,6 +9,7 @@ import {
   CreateLinkRoomRequest,
   CreateRoomResponse as CreateRoomResponseSchema,
   CreateTextRoomRequest,
+  CreateYoutubeRoomRequest,
   DashboardQuery,
   DashboardResponse as DashboardResponseSchema,
   FollowStateResponse as FollowStateResponseSchema,
@@ -376,6 +377,27 @@ export const openApiDocument = createDocument({
         },
       },
     },
+    "/api/rooms/youtube": {
+      post: {
+        tags: ["Rooms"],
+        summary: "Create a room from a YouTube video's transcript",
+        description:
+          "The transcript is fetched from YouTube's captions (preferring English, then Hindi, then any " +
+          "language), or taken from `transcript` when given: text copied from YouTube's \"Show " +
+          "transcript\", with or without its timestamps. Paragraphs become t{n} blocks that keep their " +
+          "time range in `data-start` / `data-end`, so answers and summaries can point into the video. " +
+          "The detailed summary is written in the background.",
+        security: bearer,
+        requestBody: body(CreateYoutubeRoomRequest),
+        responses: {
+          ...roomCreated,
+          "400": failure("Not a YouTube video link, or an invalid body"),
+          ...needsVerifiedUser,
+          "422": failure("No readable captions, YouTube blocked the fetch, or the transcript is empty: paste it instead"),
+          "502": failure("Fetching the transcript failed or timed out"),
+        },
+      },
+    },
     "/api/rooms/file": {
       post: {
         tags: ["Rooms"],
@@ -509,6 +531,7 @@ export const openApiDocument = createDocument({
           ...invalidInput,
           "404": failure("Room not found or deleted"),
           "409": failure("The room is archived, or the AI is still reading it or couldn't read it"),
+          "422": failure("Moderation refused the question; it is not saved or shown to the room"),
           "429": failure("Too many questions from this IP or in this room in the last minute"),
           "502": failure("The AI service failed, timed out or returned an unexpected shape"),
           "503": failure("No AI provider is configured"),

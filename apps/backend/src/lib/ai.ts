@@ -18,9 +18,16 @@ function neverSent(err: unknown) {
 /**
  * POSTs to apps/ai and validates the reply. Every AI call goes through here, so each one carries
  * the internal token and a request id, and any failure reaches the user as a friendly 502 or 503
- * (never a 400 because the model returned the wrong shape).
+ * (never a 400 because the model returned the wrong shape). `onStatus` turns a status apps/ai
+ * answers with into a specific error instead, e.g. a question moderation refused.
  */
-export async function callAi<T>(path: string, body: unknown, schema: z.ZodType<T>, timeoutMs: number): Promise<T> {
+export async function callAi<T>(
+  path: string,
+  body: unknown,
+  schema: z.ZodType<T>,
+  timeoutMs: number,
+  onStatus: Partial<Record<number, HttpError>> = {},
+): Promise<T> {
   const requestId = randomUUID();
   // One deadline for both attempts: a retry gets only the time the first one left.
   const signal = AbortSignal.timeout(timeoutMs);
@@ -53,6 +60,8 @@ export async function callAi<T>(path: string, body: unknown, schema: z.ZodType<T
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     console.error(`AI ${path} [${requestId}] answered ${res.status}: ${detail.slice(0, 500)}`);
+    const mapped = onStatus[res.status];
+    if (mapped) throw mapped;
     if (res.status === 503) throw new HttpError(503, "AI features aren't set up on this server yet.");
     throw new HttpError(502, UNAVAILABLE);
   }
