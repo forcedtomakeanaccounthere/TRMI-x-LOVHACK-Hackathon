@@ -185,12 +185,17 @@ export const openApiDocument = createDocument({
       post: {
         tags: ["Rooms"],
         summary: "Create a room from a PDF",
+        description:
+          "The file must start with `%PDF-`, whatever its Content-Type. The text of the first 50 pages " +
+          "(up to 60,000 characters) is kept for the AI recap.",
         security: bearer,
         requestBody: { required: true, content: { "multipart/form-data": { schema: PdfUpload } } },
         responses: {
           ...roomCreated,
-          "400": failure("The upload is not a PDF"),
+          "400": failure('No file, more than one file, or the upload is not a PDF'),
           ...needsVerifiedUser,
+          "413": failure("The PDF is over 20 MB"),
+          "422": failure("The PDF is damaged or password-protected"),
         },
       },
     },
