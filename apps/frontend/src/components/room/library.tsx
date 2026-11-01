@@ -22,9 +22,9 @@ import type { DocContent, DocRef } from "./types";
 
 export function docIcon(doc: Pick<DocRef, "kind" | "format">): Icon {
   if (doc.kind === "video" || doc.kind === "youtube") return YoutubeLogoIcon;
-  if (doc.kind === "pdf" || doc.format === "pdf") return FilePdfIcon;
-  if (doc.format === "pptx") return PresentationChartIcon;
+  if (doc.format === "pptx" || doc.format === "ppt") return PresentationChartIcon;
   if (doc.format === "docx") return FileDocIcon;
+  if (doc.kind === "pdf" || doc.format === "pdf") return FilePdfIcon;
   if (doc.kind === "file") return FileTextIcon;
   return GlobeIcon;
 }

@@ -48,6 +48,7 @@ import { htmlBlocks, pdfBlocks } from "../lib/chunk";
 import { blockFor, inviteViews, likePattern, participantBlocks } from "../lib/dashboard";
 import { extractArticle, htmlToText, textToHtml } from "../lib/extract";
 import { CONTENT_TYPES, parseFile } from "../lib/files";
+import { convertOfficeToPdf } from "../lib/office-to-pdf";
 import { summaryToMarkdown, summaryToPlainText } from "../lib/summary-export";
 import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
@@ -207,6 +208,11 @@ roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) =
     res.status(201).json({ id } satisfies CreateRoomResponse);
     return;
   }
+  if (parsed.format === "docx" || parsed.format === "pptx" || parsed.format === "ppt") {
+    const id = await createOfficePdfRoom(file, parsed.format, req.user!.id);
+    res.status(201).json({ id } satisfies CreateRoomResponse);
+    return;
+  }
 
   const id = nanoid(8);
   const path = `${id}.${parsed.format}`;
@@ -236,6 +242,55 @@ roomsRouter.post("/file", requireAuth, upload.single("file"), async (req, res) =
 });
 
 const FILES_BUCKET = "files";
+
+// Converts DOCX, PPTX, or PPT to PDF with LibreOffice headless and creates a PDF room.
+// The original file is preserved in the private "files" bucket for downloads.
+async function createOfficePdfRoom(
+  file: Express.Multer.File,
+  format: "docx" | "pptx" | "ppt",
+  userId: string,
+) {
+  const pdfBuffer = await convertOfficeToPdf(file.buffer, format);
+  const contentText = await extractPdfText(pdfBuffer);
+
+  const id = nanoid(8);
+  const originalPath = `${id}.${format}`;
+  const pdfPath = `${id}.pdf`;
+  const db = supabaseAdmin();
+
+  const { error: originalUploadError } = await db.storage
+    .from(FILES_BUCKET)
+    .upload(originalPath, file.buffer, { contentType: CONTENT_TYPES[format] });
+  if (originalUploadError) throw originalUploadError;
+
+  const { error: pdfUploadError } = await db.storage
+    .from("pdfs")
+    .upload(pdfPath, pdfBuffer, { contentType: "application/pdf" });
+  if (pdfUploadError) {
+    await db.storage.from(FILES_BUCKET).remove([originalPath]).catch(console.error);
+    throw pdfUploadError;
+  }
+
+  const { error: insertError } = await db.from("rooms").insert({
+    id,
+    kind: "pdf",
+    title: file.originalname.trim().slice(0, 200) || "Untitled document",
+    pdf_path: pdfPath,
+    content_text: contentText,
+    source_meta: { format, file_name: file.originalname } satisfies SourceMeta,
+    created_by: userId,
+  });
+  if (insertError) {
+    await Promise.all([
+      db.storage.from(FILES_BUCKET).remove([originalPath]).catch(console.error),
+      db.storage.from("pdfs").remove([pdfPath]).catch(console.error),
+    ]);
+    throw insertError;
+  }
+
+  startIndexing(id);
+  return id;
+}
 
 // Stores a PDF in the public bucket and creates its room. Returns the room id.
 async function createPdfRoom(file: Express.Multer.File, userId: string) {
@@ -1154,7 +1209,10 @@ roomsRouter.get("/:id/original", optionalAuth, async (req, res) => {
   const meta = room.source_meta as { format?: string; file_name?: string } | null;
   let bucket: string;
   let path: string;
-  if (room.kind === "file" && meta?.format) {
+  if (meta?.format && ["docx", "pptx", "ppt"].includes(meta.format)) {
+    bucket = FILES_BUCKET;
+    path = `${id}.${meta.format}`;
+  } else if (room.kind === "file" && meta?.format) {
     bucket = FILES_BUCKET;
     path = `${id}.${meta.format}`;
   } else if (room.kind === "pdf" && room.pdf_path) {
