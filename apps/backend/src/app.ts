@@ -10,6 +10,7 @@ import { authRouter } from "./routes/auth";
 import { groupsRouter } from "./routes/groups";
 import { healthRouter } from "./routes/health";
 import { meRouter } from "./routes/me";
+import { notificationsRouter } from "./routes/notifications";
 import { roomsRouter } from "./routes/rooms";
 import { studyRouter } from "./routes/study";
 import { usersRouter } from "./routes/users";
@@ -20,6 +21,7 @@ export const apiRouters = {
   "/api/auth": authRouter,
   "/api/me": meRouter,
   "/api/rooms": roomsRouter,
+  "/api/notifications": notificationsRouter,
   "/api/groups": groupsRouter,
   "/api/study": studyRouter,
   "/api/users": usersRouter,

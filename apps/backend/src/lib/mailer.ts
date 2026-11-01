@@ -44,6 +44,30 @@ export function verificationEmail(link: string, name?: string) {
   return { subject: "Confirm your LinkRoom account", text, html };
 }
 
+// A mention in a room chat or a note: brings the tagged reader back into the room.
+export function mentionEmail(opts: { link: string; roomTitle: string; actorName: string; body: string }) {
+  const excerpt = opts.body.length > 280 ? `${opts.body.slice(0, 280)}…` : opts.body;
+  const text = `Hi,\n\n${opts.actorName} mentioned you in "${opts.roomTitle}":\n\n"${excerpt}"\n\nJump back into the room:\n${opts.link}\n\nYou get this because someone tagged you (@you). Notifications can be turned off by leaving the room.\n`;
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:32px 16px;background:#f6f7fb;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <p style="margin:0 0 6px">${escapeHtml(opts.actorName)} mentioned you</p>
+    <h1 style="margin:0 0 20px;font-size:20px;font-weight:600">${escapeHtml(opts.roomTitle)}</h1>
+    <blockquote style="margin:0 0 24px;border-left:3px solid #2f5bff;padding:4px 16px;color:#444;font-size:15px">&ldquo;${escapeHtml(excerpt)}&rdquo;</blockquote>
+    <p style="margin:0 0 24px"><a href="${escapeHtml(opts.link)}" style="display:inline-block;background:#2f5bff;color:#fff;text-decoration:none;padding:12px 24px;border-radius:999px;font-weight:600">Open the room</a></p>
+    <p style="margin:0;font-size:13px;color:#555">You get this because someone tagged you (@you) in a LinkRoom room.</p>
+  </div>
+</body></html>`;
+  return { subject: `${opts.actorName} mentioned you in ${opts.roomTitle}`, text, html };
+}
+
+export async function sendMentionEmail(
+  to: string,
+  opts: { link: string; roomTitle: string; actorName: string; body: string },
+) {
+  await transport().sendMail({ from: from(), to, ...mentionEmail(opts) });
+}
+
 export async function sendVerificationEmail(to: string, link: string, name?: string) {
   await transport().sendMail({ from: from(), to, ...verificationEmail(link, name) });
 }

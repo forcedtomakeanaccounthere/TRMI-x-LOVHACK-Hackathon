@@ -500,6 +500,81 @@ export type AuthSession = z.infer<typeof AuthSession>;
 export const MessageResponse = z.object({ message: z.string() });
 export type MessageResponse = z.infer<typeof MessageResponse>;
 
+// --- Mentions & notifications (apps/backend /api/notifications) ---
+
+// The chamber a mention came from: the room chat or a note pinned on the page.
+export const MentionKind = z.enum(["chat", "note"]);
+export type MentionKind = z.infer<typeof MentionKind>;
+
+// The browser announces the mentions it just wrote into a ledger event, so the backend can fan out
+// notifications. The author may be signed in (then their identity comes from the access token and
+// `author.id` must agree) or a guest, whose id starts with "guest-".
+export const MentionNotifyRequest = z.object({
+  event_id: z.string().min(1).max(64),
+  kind: MentionKind,
+  body: z.string().min(1).max(2000),
+  author: z.object({ id: z.string().max(128), name: z.string().min(1).max(40) }),
+  mentions: z
+    .array(z.object({ id: z.string().max(128), name: z.string().min(1).max(40) }))
+    .max(20),
+});
+export type MentionNotifyRequest = z.infer<typeof MentionNotifyRequest>;
+
+// One notification in the bell: a mention is what rooms make people come back for.
+export const NotificationItem = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(["mention"]),
+  room_id: z.string().nullable(),
+  room_title: z.string().nullable(),
+  actor_name: z.string(),
+  body: z.string(),
+  created_at: z.string(),
+  read_at: z.string().nullable(),
+});
+export type NotificationItem = z.infer<typeof NotificationItem>;
+
+export const NotificationsResponse = z.object({
+  notifications: z.array(NotificationItem),
+  unread: z.number().int().nonnegative(),
+});
+export type NotificationsResponse = z.infer<typeof NotificationsResponse>;
+
+// Empty ids = mark everything read.
+export const MarkReadRequest = z.object({ ids: z.array(z.string().uuid()).max(100).optional() });
+export type MarkReadRequest = z.infer<typeof MarkReadRequest>;
+
+// A web-push registration: the endpoint URL and the encryption keys the push service minted.
+export const PushSubscribeRequest = z.object({
+  endpoint: z.string().url().max(2048),
+  keys: z.object({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(256) }),
+  user_agent: z.string().max(256).optional(),
+});
+export type PushSubscribeRequest = z.infer<typeof PushSubscribeRequest>;
+
+export const PushKeyResponse = z.object({ vapid_public_key: z.string().nullable() });
+export type PushKeyResponse = z.infer<typeof PushKeyResponse>;
+
+// Who can be @mentioned in a room even when they are not in it right now: its owner and every
+// signed-in reader who has opened it. Guests are mentionable only while present.
+export const Mentionable = z.object({ id: z.string().uuid(), name: z.string() });
+export type Mentionable = z.infer<typeof Mentionable>;
+export const MentionablesResponse = z.object({ people: z.array(Mentionable) });
+export type MentionablesResponse = z.infer<typeof MentionablesResponse>;
+
+export const MentionAck = z.object({ notified: z.number().int().nonnegative() });
+export type MentionAck = z.infer<typeof MentionAck>;
+
+// The realtime payload the backend broadcasts into `room:{id}` so a reader who is in the room right
+// now sees a toast without a round trip. Everyone in the room receives it; only `user_id` shows it.
+export const RoomNotification = z.object({
+  user_id: z.string(),
+  room_id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  actor_name: z.string(),
+});
+export type RoomNotification = z.infer<typeof RoomNotification>;
+
 export const ApiError = z.object({ error: z.string() });
 export type ApiError = z.infer<typeof ApiError>;
 

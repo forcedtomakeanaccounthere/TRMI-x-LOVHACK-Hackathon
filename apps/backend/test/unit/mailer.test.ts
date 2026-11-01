@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verificationEmail } from "../../src/lib/mailer";
+import { mentionEmail, verificationEmail } from "../../src/lib/mailer";
 
 const LINK = "https://api.linkroom.app/api/auth/verify?token_hash=abc&type=email";
 
@@ -20,5 +20,28 @@ describe("verificationEmail", () => {
 
   it("greets without a name", () => {
     expect(verificationEmail(LINK).text).toMatch(/^Hi,\n/);
+  });
+});
+
+describe("mentionEmail", () => {
+  const opts = { link: "https://linkroom.app/r/x7Kp2qLm", roomTitle: "Chapter 3", actorName: "Ana", body: "@Cleo look at this" };
+
+  it("says who tagged you where, quotes the message and links back first", () => {
+    const { subject, html, text } = mentionEmail(opts);
+    expect(subject).toBe("Ana mentioned you in Chapter 3");
+    expect(html.match(/href="([^"]+)"/)?.[1]).toBe(opts.link);
+    expect(text).toContain(opts.link);
+    expect(text).toContain("@Cleo look at this");
+  });
+
+  it("escapes everything people typed", () => {
+    const { html } = mentionEmail({ ...opts, actorName: "<b>x</b>", roomTitle: "<script>", body: "<img src=x>" });
+    expect(html).not.toMatch(/<b>|<script>|<img/);
+  });
+
+  it("shortens a long message", () => {
+    const { text } = mentionEmail({ ...opts, body: "a".repeat(400) });
+    expect(text).toContain(`${"a".repeat(280)}…`);
+    expect(text).not.toContain("a".repeat(281));
   });
 });

@@ -45,11 +45,15 @@ export async function connectSupabase() {
   }
 
   return {
+    // Direct SQL to the local database, past RLS.
+    sql,
     anonKey: local.anonKey,
     serviceRoleKey: local.serviceRoleKey,
     // The backend under test talks to Supabase through the fault proxy; requests pass through
     // unchanged unless a test calls failNext.
     url: proxy.url,
+    // Supabase itself, for what the proxy can't carry (Realtime websockets).
+    directUrl: local.url,
     failNext: proxy.failNext,
     verificationLinks,
     // The latest verification link, once at least `count` emails have reached the inbox.
@@ -65,6 +69,31 @@ export async function connectSupabase() {
     // Makes the user's current verification link expired, as if it had been sent a day ago.
     async expireVerificationLink(email: string) {
       await sql`update auth.users set confirmation_sent_at = now() - interval '1 day' where email = ${email}`;
+    },
+    // Emails to `email` (subject and plain text), oldest first: for mails other than verification.
+    async inbox(email: string) {
+      const query = encodeURIComponent(`to:"${email}"`);
+      const { messages } = (await (await fetch(`${local.mailUrl}/api/v1/search?query=${query}`)).json()) as {
+        messages: { ID: string; Subject: string }[];
+      };
+      const mails: { subject: string; text: string; html: string }[] = [];
+      for (const { ID, Subject } of messages.reverse()) {
+        const { Text, HTML } = (await (await fetch(`${local.mailUrl}/api/v1/message/${ID}`)).json()) as {
+          Text: string;
+          HTML: string;
+        };
+        mails.push({ subject: Subject, text: Text, html: HTML });
+      }
+      return mails;
+    },
+    // Moves a reader's last heartbeat in a room, e.g. into the past to make them offline.
+    async setLastSeen(roomId: string, userId: string, at: Date) {
+      await sql`update room_participants set last_seen_at = ${at.toISOString()} where room_id = ${roomId} and user_id = ${userId}`;
+    },
+    // Removes a member the way an admin's kick does (room_members.kicked_at).
+    async kick(roomId: string, memberId: string, name: string) {
+      await sql`insert into room_members (room_id, member_id, name, kicked_at) values (${roomId}, ${memberId}, ${name}, now())
+        on conflict (room_id, member_id) do update set kicked_at = now()`;
     },
     async userId(email: string) {
       const [row] = await sql<{ id: string }[]>`select id from auth.users where email = ${email}`;
