@@ -80,20 +80,19 @@ function unavailable(err: unknown) {
   return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
 }
 
-// The backend's /ask takes one question of up to 500 characters about one room. The passage an AI box
-// is about and the previous question go into that text, so follow-ups and "explain this" keep their
-// context.
+// What POST /api/rooms/:id/ask gets: the question (up to 500 characters), plus the passage an AI box
+// is about, its earlier turns and a lens snapshot as their own fields, so follow-ups and "explain
+// this" keep their context and a snapshot reaches a vision model.
 const ASK_MAX = 500;
-export function backendQuestion(req: Pick<AskRequest, "question" | "quote" | "history">): string {
-  let text = req.question.trim().slice(0, ASK_MAX);
-  const add = (extra: string) => {
-    if (text.length + extra.length <= ASK_MAX) text += extra;
-    else if (ASK_MAX - text.length > 40) text += `${extra.slice(0, ASK_MAX - text.length - 2)}…"`;
+export function backendBody(req: AskRequest): Parameters<typeof api.ask>[1] {
+  const history = req.history?.filter((m) => m.text.trim()).slice(-8);
+  return {
+    question: req.question.trim().slice(0, ASK_MAX),
+    ...(req.name && { name: req.name }),
+    ...(req.quote?.trim() && { quote: req.quote }),
+    ...(history?.length && { history }),
+    ...(req.image && { image: req.image }),
   };
-  if (req.quote?.trim()) add(`\n\nAbout this passage: "${req.quote.replace(/\s+/g, " ").trim()}"`);
-  const earlier = req.history?.filter((m) => m.role === "user").at(-1)?.text;
-  if (earlier && earlier !== req.question) add(`\n\nEarlier question: "${earlier.replace(/\s+/g, " ").trim()}"`);
-  return text;
 }
 
 // The backend cites block ids; the first one is where the citation jumps.
@@ -105,13 +104,16 @@ export function toCitations(doc: string, message: Pick<AiMessage, "citations">):
 }
 
 // Asks the backend about each chosen document that is a backend room (`remote`), one call per
-// document, and joins the answers. What it can't answer (a snapshot, the demo room's bundled
-// documents, the backend being down) gets the browser preview below, marked as such.
+// document, and joins the answers. A lens snapshot goes only to the first one (the document it was
+// taken from), so one picture isn't sent to the vision model once per source. What the backend
+// can't answer (the demo room's bundled documents, the backend being down) gets the browser preview
+// below, marked as such.
 export async function ask(req: AskRequest, docs: DocContent[], remote: string[]): Promise<Answer> {
-  const targets = req.image ? [] : req.sources.filter((id) => remote.includes(id));
+  const backendDocs = req.sources.filter((id) => remote.includes(id));
+  const targets = req.image ? backendDocs.slice(0, 1) : backendDocs;
   if (targets.length > 0) {
-    const question = backendQuestion(req);
-    const results = await Promise.allSettled(targets.map((id) => api.ask(id, { question, name: req.name })));
+    const body = backendBody(req);
+    const results = await Promise.allSettled(targets.map((id) => api.ask(id, body)));
     const answered = results.flatMap((r, i) => (r.status === "fulfilled" ? [{ id: targets[i]!, message: r.value }] : []));
     const failed = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
     if (failed.length === 0 || answered.length > 0) {
@@ -138,7 +140,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
 
   if (req.image) {
     return {
-      text: "The AI lens needs the backend's /ask endpoint with image input, which isn't live yet. Your snapshot is saved in this box, so the answer can be added once it is.",
+      text: "The AI lens couldn't reach the backend, so this snapshot wasn't read. It's saved in this box: ask again once the AI is back.",
       citations: [],
       preview: true,
     };

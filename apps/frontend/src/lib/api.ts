@@ -22,8 +22,8 @@ import type {
 } from "@linkroom/shared";
 
 // What the room workspace asks the AI: the question plus the documents, passage, snapshot and recent
-// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, which answers
-// one document per call from `question` (and `name`) only.
+// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, one per
+// document, with the passage, turns and snapshot as their own fields.
 export type AskRequest = {
   question: string;
   sources: string[]; // room ids of the documents to answer from
@@ -106,7 +106,16 @@ export const api = {
     request<CreateRoomResponse>("/api/rooms/youtube", json(transcript ? { url, transcript } : { url }), token),
 
   // Answers a question about one room's document, with citations into its blocks.
-  ask: (roomId: string, body: { question: string; name?: string }) =>
+  ask: (
+    roomId: string,
+    body: {
+      question: string;
+      name?: string;
+      quote?: string;
+      history?: { role: "user" | "ai"; text: string }[];
+      image?: string;
+    },
+  ) =>
     request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
