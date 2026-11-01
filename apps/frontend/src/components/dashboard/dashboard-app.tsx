@@ -11,6 +11,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { api } from "@/lib/api";
 import { getFreshSession, getSession, useSession } from "@/lib/session";
 import { createDemoDashboard, type DashboardData } from "./demo-data";
+import { foldSources, readRoomLedgers } from "./room-sources";
 import { getProfileOverride, getRoomMeta, getSavedGroups } from "./local-prefs";
 import { GroupsSection } from "./groups-section";
 import { InviteDialog, type InviteTarget } from "./invite-dialog";
@@ -109,7 +110,11 @@ async function loadLive(user: AuthUser): Promise<Loaded> {
       api.me.participants(token),
     ]);
     const value = <T,>(r: PromiseSettledResult<T>) => (r.status === "fulfilled" ? r.value : null);
-    const rooms = [...active.rooms, ...deleted.rooms].map((r) => fromApiRoom(r));
+    // Sources attached inside a room come back as rooms of their own: fold them into their room.
+    const rooms = foldSources(
+      [...active.rooms, ...deleted.rooms].map((r) => fromApiRoom(r)),
+      readRoomLedgers(),
+    );
     const live = rooms.filter((r) => r.status !== "deleted");
     const hosted = live.filter((r) => r.role === "owner").length;
     const p = value(profile);
