@@ -33,6 +33,7 @@ import {
   HuddleFocusRequest,
   HuddleTranscriptQuery,
   HuddleTranscriptResponse,
+  HuddleNotesResponse,
   ArtifactRequest,
   NotebookResponse,
   NotebookUpdateRequest,
@@ -1140,6 +1141,33 @@ export const openApiDocument = createDocument({
         requestParams: { path: z.object({ id: z.string(), hid: z.string() }), query: HuddleTranscriptQuery },
         responses: {
           "200": reply("Transcript segments", HuddleTranscriptResponse),
+          "403": failure("Permission denied"),
+          "404": failure("Unknown huddle"),
+          "503": failure("Voice huddles aren't set up"),
+        },
+      },
+    },
+    "/api/rooms/{id}/huddles/{hid}/notes": {
+      post: {
+        tags: ["Voice huddles"],
+        summary: "Start or refresh AI huddle notes generation",
+        requestParams: { path: z.object({ id: z.string(), hid: z.string() }) },
+        responses: {
+          "202": reply("Notes generation started", z.object({ ok: z.boolean() })),
+          "401": failure("Authentication required"),
+          "403": failure("Permission denied"),
+          "404": failure("Unknown huddle"),
+          "429": failure("Too many requests"),
+          "503": failure("Voice huddles aren't set up"),
+        },
+      },
+      get: {
+        tags: ["Voice huddles"],
+        summary: "Get latest AI huddle notes",
+        requestParams: { path: z.object({ id: z.string(), hid: z.string() }) },
+        responses: {
+          "200": reply("Latest notes and status", HuddleNotesResponse),
+          "401": failure("Authentication required"),
           "403": failure("Permission denied"),
           "404": failure("Unknown huddle"),
           "503": failure("Voice huddles aren't set up"),

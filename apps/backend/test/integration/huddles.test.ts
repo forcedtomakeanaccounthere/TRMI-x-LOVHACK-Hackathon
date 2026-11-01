@@ -117,6 +117,7 @@ describe("voice huddles", () => {
 
     const ownerPayload = decodeJwt(createRes.body.livekit.token);
     expect(ownerPayload.sub).toBe(alice.id);
+    expect(ownerPayload.name).toBe("Alice");
     const ownerVideo = ownerPayload.video as Record<string, unknown>;
     expect(ownerVideo.canPublish).toBe(true);
 
@@ -650,5 +651,150 @@ describe("voice huddles", () => {
         ],
       });
     expect(latePostRes.status).toBe(403);
+  });
+
+  it("story: ending a huddle produces ready notes, refresh bumps version, viewer restrictions and non-member privacy hold", async () => {
+    const roomId = await newRoom();
+    const alice = asUser(owner, "Alice");
+    const bob = asUser(member, "Bob");
+
+    // 1. Alice starts a room-wide huddle
+    const huddleRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(alice.headers)
+      .send({ audience: "all" });
+    expect(huddleRes.status).toBe(201);
+    const hid = huddleRes.body.huddle.id as string;
+
+    // Bob joins
+    await request(app).post(`/api/rooms/${roomId}/huddles/${hid}/join`).set(bob.headers).send();
+
+    // Post focus and segments
+    const now = Date.now();
+    await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/focus`)
+      .set(bob.headers)
+      .send({ doc: roomId, block: "b0" });
+
+    await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_notes_1",
+            text: "Let us build voice huddles with AI notes.",
+            start_at: new Date(now - 10_000).toISOString(),
+            end_at: new Date(now - 5_000).toISOString(),
+            focus: { doc: roomId, block: "b0" },
+          },
+        ],
+      });
+
+    // 2. Alice ends the huddle -> produces notes with status ready
+    const endRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/end`)
+      .set(alice.headers);
+    expect(endRes.status).toBe(200);
+
+    let readyNotesRes: request.Response | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = await request(app)
+        .get(`/api/rooms/${roomId}/huddles/${hid}/notes`)
+        .set(alice.headers);
+      if (res.body.status === "ready") {
+        readyNotesRes = res;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(readyNotesRes).toBeDefined();
+    if (!readyNotesRes) throw new Error("readyNotesRes not set");
+    expect(readyNotesRes.status).toBe(200);
+    expect(readyNotesRes.body.status).toBe("ready");
+    expect(readyNotesRes.body.version).toBe(1);
+    expect(readyNotesRes.body.notes).toBeDefined();
+    expect(readyNotesRes.body.notes.summary).toBe("Fake huddle notes summary");
+
+    // 3. Refresh bumps the version
+    const refreshRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/notes`)
+      .set(alice.headers);
+    expect(refreshRes.status).toBe(202);
+
+    let bumpedNotesRes: request.Response | undefined;
+    for (let i = 0; i < 50; i++) {
+      const res = await request(app)
+        .get(`/api/rooms/${roomId}/huddles/${hid}/notes`)
+        .set(alice.headers);
+      if (res.body.status === "ready" && res.body.version === 2) {
+        bumpedNotesRes = res;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(bumpedNotesRes).toBeDefined();
+    if (!bumpedNotesRes) throw new Error("bumpedNotesRes not set");
+    expect(bumpedNotesRes.body.version).toBe(2);
+
+    // 4. A non-member can't read a private huddle's notes (404)
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(bob.headers)
+      .send({ events: [event(bob, { type: "chat", message: { id: "m_bob_p", text: "Active", author: actor(bob), at: at() } })] });
+
+    const privHuddleRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(alice.headers)
+      .send({ audience: "private", members: [bob.id] });
+    expect(privHuddleRes.status).toBe(201);
+    const privHid = privHuddleRes.body.huddle.id as string;
+
+    const charlie = asGuest("Charlie");
+    const nonMemberNotes = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${privHid}/notes`)
+      .set(charlie.headers);
+    expect(nonMemberNotes.status).toBe(404);
+
+    const memberNotes = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${privHid}/notes`)
+      .set(bob.headers);
+    expect(memberNotes.status).toBe(200);
+
+    // 5. A viewer refreshing in a room with viewersUseAi=false gets 403
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(alice.headers)
+      .send({
+        events: [
+          event(alice, {
+            type: "settings.update",
+            patch: { guestRole: "viewer", viewersUseAi: false },
+          }),
+        ],
+      });
+
+    const viewerGuest = asGuest("ViewerGuest");
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(viewerGuest.headers)
+      .send({
+        events: [
+          event(viewerGuest, {
+            type: "chat",
+            message: { id: "m_viewer_hi", text: "Hello", author: actor(viewerGuest), at: at() },
+          }),
+        ],
+      });
+
+    const viewerRefresh = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/notes`)
+      .set(viewerGuest.headers);
+    expect(viewerRefresh.status).toBe(403);
+
+    // 6. Anonymous request without auth headers -> 401
+    const noAuthRefresh = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/notes`);
+    expect(noAuthRefresh.status).toBe(401);
   });
 });

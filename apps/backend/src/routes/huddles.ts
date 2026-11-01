@@ -1,12 +1,14 @@
 import {
   CreateHuddleRequest,
   HuddleFocusRequest,
+  HuddleNotesResponse,
   HuddleTranscriptQuery,
   InviteHuddleRequest,
   JoinHuddleRequest,
   PostSegmentsRequest,
   type HuddleJoinResponse,
   type HuddleMemberSummary,
+  type HuddleNotes,
   type HuddleSummary,
   type HuddleTranscriptResponse,
   type HuddleTranscriptSegment,
@@ -20,6 +22,7 @@ import {
   canEndHuddle,
   canInviteToHuddle,
   canPostSegments,
+  canRefreshHuddleNotes,
   canStartHuddle,
   closeIfEmpty,
   huddleAccess,
@@ -28,6 +31,7 @@ import {
   type HuddleMemberRow,
   type HuddleRow,
 } from "../lib/huddles";
+import { startNotes } from "../lib/huddle-notes";
 import { assertParticipant, assertReader, claimGuest, roomAccess, type Access } from "../lib/ledger";
 import {
   closeRoom,
@@ -76,7 +80,7 @@ function getCallerName(access: Access, req: Request, requestedName?: string): st
     return requestedName;
   }
   return (
-    (req.user as { user_metadata?: { name?: string } } | undefined)?.user_metadata?.name ||
+    req.user?.name ||
     (req.user?.email ? req.user.email.split("@")[0]! : null) ||
     (access.identity?.signedIn ? "Someone" : "Guest")
   );
@@ -107,7 +111,7 @@ function toHuddleSummary(huddle: HuddleRow, members?: HuddleMemberRow[]): Huddle
   };
 }
 
-export function huddlesRoutes(router: Router) {
+export function huddlesRoutes(router: Router, limits: RequestHandler[] = []) {
   // GET /api/rooms/:id/huddles: open + last 10 ended huddles visible to caller.
   router.get("/:id/huddles", ensureLiveKit, optionalAuth, async (req, res) => {
     const id = req.params.id as string;
@@ -447,6 +451,7 @@ export function huddlesRoutes(router: Router) {
         .is("ended_at", null);
       if (endErr) throw endErr;
       await closeRoom(huddle.livekit_room);
+      startNotes(huddle.id);
     }
 
     await pingHuddles(id);
@@ -556,6 +561,7 @@ export function huddlesRoutes(router: Router) {
       if (endErr) throw endErr;
       await closeRoom(huddle.livekit_room);
       await pingHuddles(id);
+      startNotes(huddle.id);
     }
 
     res.json({ ok: true });
@@ -710,5 +716,95 @@ export function huddlesRoutes(router: Router) {
       segments,
       next: segments.length === query.limit ? segments.at(-1)!.seq : null,
     } satisfies HuddleTranscriptResponse);
+  });
+
+  // POST /api/rooms/:id/huddles/:hid/notes: start or refresh notes generation.
+  router.post("/:id/huddles/:hid/notes", ensureLiveKit, ...limits, optionalAuth, async (req, res) => {
+    const id = req.params.id as string;
+    const hid = req.params.hid as string;
+    const access = await roomAccess(id, req);
+    if (!access.identity) {
+      throw new HttpError(401, "Sign in, or send your guest id and key (X-Guest-Id, X-Guest-Key).");
+    }
+    assertParticipant(access);
+
+    const db = supabaseAdmin();
+    const { data: huddle, error: hErr } = await db
+      .from("huddles")
+      .select("*")
+      .eq("id", hid)
+      .eq("room_id", id)
+      .maybeSingle();
+    if (hErr) throw hErr;
+    if (!huddle) throw new HttpError(404, "Huddle not found");
+
+    const { data: member, error: mErr } = await db
+      .from("huddle_members")
+      .select("member_id")
+      .eq("huddle_id", hid)
+      .eq("member_id", access.identity!.id)
+      .maybeSingle();
+    if (mErr) throw mErr;
+
+    const isMember = Boolean(member);
+    if (huddle.audience === "private" && !isMember) {
+      throw new HttpError(404, "Huddle not found");
+    }
+
+    if (!canRefreshHuddleNotes(access.role, access.settings, huddle.audience, isMember)) {
+      throw new HttpError(403, "Your role cannot refresh notes in this room.");
+    }
+
+    startNotes(huddle.id);
+    res.status(202).json({ ok: true });
+  });
+
+  // GET /api/rooms/:id/huddles/:hid/notes: latest notes + status.
+  router.get("/:id/huddles/:hid/notes", ensureLiveKit, optionalAuth, async (req, res) => {
+    const id = req.params.id as string;
+    const hid = req.params.hid as string;
+    const access = await roomAccess(id, req);
+    assertReader(access);
+
+    const db = supabaseAdmin();
+    const { data: huddle, error: hErr } = await db
+      .from("huddles")
+      .select("*")
+      .eq("id", hid)
+      .eq("room_id", id)
+      .maybeSingle();
+    if (hErr) throw hErr;
+    if (!huddle) throw new HttpError(404, "Huddle not found");
+
+    if (huddle.audience === "private") {
+      if (!access.identity) {
+        throw new HttpError(404, "Huddle not found");
+      }
+      const { data: member, error: mErr } = await db
+        .from("huddle_members")
+        .select("member_id")
+        .eq("huddle_id", hid)
+        .eq("member_id", access.identity.id)
+        .maybeSingle();
+      if (mErr) throw mErr;
+      if (!member) {
+        throw new HttpError(404, "Huddle not found");
+      }
+    }
+
+    const { data: latest, error: nErr } = await db
+      .from("huddle_notes")
+      .select("version, notes")
+      .eq("huddle_id", hid)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (nErr) throw nErr;
+
+    res.json({
+      status: huddle.notes_status,
+      version: latest ? Number(latest.version) : null,
+      notes: (latest?.notes as HuddleNotes) ?? null,
+    } satisfies HuddleNotesResponse);
   });
 }

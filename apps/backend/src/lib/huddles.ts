@@ -3,6 +3,7 @@ import type { Request } from "express";
 import { HttpError } from "../middleware/error";
 import { assertParticipant, can, roomAccess, type Access } from "./ledger";
 import { closeRoom, participantCount, removeFromRoom, setPublish } from "./livekit";
+import { startNotes } from "./huddle-notes";
 import { supabaseAdmin } from "./supabase";
 
 // Access rules and side effects for voice huddles (supabase/migrations/0028_huddles.sql).
@@ -173,6 +174,7 @@ export async function closeIfEmpty(huddle: HuddleRow): Promise<boolean> {
     }
     await closeRoom(huddle.livekit_room);
     await pingHuddles(huddle.room_id);
+    startNotes(huddle.id);
     return true;
   }
   return false;

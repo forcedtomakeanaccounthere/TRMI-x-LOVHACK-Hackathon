@@ -380,3 +380,41 @@ StudyData = Annotated[
     StudyQuizData | StudyFlashcardsData | StudyMindMapData | StudyInfographicData,
     Field(discriminator="kind"),
 ]
+
+
+# --- Voice huddle meeting notes (POST /huddle-notes) ---
+
+MAX_HUDDLE_SEGMENTS = 800
+MAX_HUDDLE_BLOCKS = 200
+
+
+class HuddleSegmentIn(BaseModel):
+    id: str = Field(max_length=64)
+    speaker: str = Field(max_length=40)
+    text: str = Field(max_length=1000)
+    block_key: str | None = Field(default=None, max_length=100)
+
+
+class HuddleBlockIn(BaseModel):
+    key: str = Field(max_length=100)
+    excerpt: str = Field(max_length=1500)
+
+
+class HuddleNotesRequest(BaseModel):
+    title: str = Field(default="Huddle", max_length=300)
+    segments: list[HuddleSegmentIn] = Field(default=[], max_length=MAX_HUDDLE_SEGMENTS)
+    blocks: list[HuddleBlockIn] = Field(default=[], max_length=MAX_HUDDLE_BLOCKS)
+
+
+class HuddleNotePoint(BaseModel):
+    text: str
+    owner: str | None = None
+    segment_ids: list[str] = Field(default=[])
+
+
+class HuddleNotesData(BaseModel):
+    summary: str
+    key_points: list[HuddleNotePoint] = Field(default=[])
+    decisions: list[HuddleNotePoint] = Field(default=[])
+    action_items: list[HuddleNotePoint] = Field(default=[])
+    open_questions: list[HuddleNotePoint] = Field(default=[])

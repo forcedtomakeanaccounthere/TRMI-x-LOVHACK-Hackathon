@@ -1346,4 +1346,4 @@ artifactsRoutes(roomsRouter, [askPerIp, askPerRoom]);
 // Shared notebook: GET/POST /:id/notebook (routes/notebook.ts).
 notebookRoutes(roomsRouter);
 // Voice huddles: /:id/huddles (routes/huddles.ts).
-huddlesRoutes(roomsRouter);
+huddlesRoutes(roomsRouter, [askPerIp, askPerRoom]);

@@ -131,7 +131,7 @@ export type HuddleTranscriptResponse = z.infer<typeof HuddleTranscriptResponse>;
 
 export const HuddleNotePoint = z.object({
   text: Text(1000),
-  owner: Text(40).optional(),
+  owner: Text(40).nullable().optional(),
   segment_ids: z.array(Id),
   anchor: HuddleFocus.nullable(),
   at: z.string(),
@@ -146,6 +146,22 @@ export const HuddleNotes = z.object({
   key_points: z.array(HuddleNotePoint),
 });
 export type HuddleNotes = z.infer<typeof HuddleNotes>;
+
+export const HuddleNotePointData = z.object({
+  text: Text(1000),
+  owner: Text(40).nullable().optional(),
+  segment_ids: z.array(Id).default([]),
+});
+export type HuddleNotePointData = z.infer<typeof HuddleNotePointData>;
+
+export const HuddleNotesData = z.object({
+  summary: z.string(),
+  decisions: z.array(HuddleNotePointData).default([]),
+  action_items: z.array(HuddleNotePointData).default([]),
+  open_questions: z.array(HuddleNotePointData).default([]),
+  key_points: z.array(HuddleNotePointData).default([]),
+});
+export type HuddleNotesData = z.infer<typeof HuddleNotesData>;
 
 export const HuddleNotesResponse = z.object({
   status: HuddleNotesStatus,
