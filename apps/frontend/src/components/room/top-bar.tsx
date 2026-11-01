@@ -3,6 +3,7 @@
 import {
   ArrowLeftIcon,
   CopyIcon,
+  CrosshairIcon,
   EyeIcon,
   GearSixIcon,
   QrCodeIcon,
@@ -154,6 +155,7 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
         <Avatar actor={me} size={32} ring className="ml-1 hidden sm:grid" />
       </div>
 
+      <FocusButton />
       <SharePopover />
       <button
         type="button"
@@ -176,6 +178,30 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
       </button>
       <SettingsDialog open={settings} onOpenChange={setSettings} />
     </header>
+  );
+}
+
+// Laser focus: "everyone look here". While it's on, everyone else follows you and sees your pointer
+// as a laser; they go back to where they were when you stop.
+function FocusButton() {
+  const { focus, perms, channel, isDemo } = useRoom();
+  const someoneElse = focus.leader;
+  if (isDemo || channel.status !== "live" || !perms.annotate) return null;
+  const label = focus.mine ? "Stop focus" : someoneElse ? `${someoneElse.name.split(" ")[0]} is focusing` : "Everyone look here";
+  return (
+    <button
+      type="button"
+      onClick={focus.mine ? focus.stop : focus.start}
+      disabled={!!someoneElse}
+      title={focus.mine ? "Let everyone go back to where they were" : "Bring everyone to where you are, with your pointer as a laser"}
+      className={cn(
+        "flex h-9 items-center gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium transition disabled:opacity-50",
+        focus.mine ? "bg-red-500 text-white hover:bg-red-600" : "bg-foreground/6 hover:bg-foreground/10",
+      )}
+    >
+      <CrosshairIcon weight={focus.mine ? "fill" : "regular"} className="size-4" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
   );
 }
 
