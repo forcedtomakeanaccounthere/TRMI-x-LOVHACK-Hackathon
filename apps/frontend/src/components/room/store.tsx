@@ -96,13 +96,31 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- View ---
   const [activeDoc, setActiveDoc] = useState(primary.id);
   const [following, setFollowing] = useState<string | null>(null);
+  // The artifact open in the viewer dialog. Shared through presence, so followers see it too.
+  const [openArtifact, setOpenArtifact] = useState<string | null>(null);
+  // Other people's cursors can be hidden when they distract; remembered in this browser.
+  const [showCursors, setShowCursorsState] = useState(() => {
+    try {
+      return localStorage.getItem(CURSORS_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const setShowCursors = (on: boolean) => {
+    setShowCursorsState(on);
+    try {
+      localStorage.setItem(CURSORS_KEY, on ? "on" : "off");
+    } catch {
+      // the choice lasts for this page only
+    }
+  };
 
   const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
 
   const channel = useRoomChannel(
     roomId,
     me,
-    { doc: activeDoc, following },
+    { doc: activeDoc, following, artifact: openArtifact },
     {
       onEvents: receive,
       allEvents: () => eventsRef.current,
@@ -110,6 +128,28 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       onPresenceChange: (change) => setPresenceFeed((prev) => [...prev.slice(-80), change]),
     },
   );
+
+  // Follow mode: go where the leader goes. Their document comes from presence (so a switch shows up
+  // before they scroll) and so does the artifact they have open; scrolling is handled by the viewer.
+  const leader = following ? channel.peers.find((p) => p.id === following) : undefined;
+  const leaderDoc = leader?.doc ?? null;
+  const leaderArtifact = leader?.artifact ?? null;
+  const leaderHere = !!leader;
+  useEffect(() => {
+    if (!following) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
+    setOpenArtifact(leaderArtifact);
+  }, [following, leaderArtifact]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
+    if (following && leaderDoc) setActiveDoc(leaderDoc);
+  }, [following, leaderDoc]);
+  // The leader left the room: stop following (after a moment, so a reconnect doesn't end it).
+  useEffect(() => {
+    if (!following || leaderHere) return;
+    const timer = setTimeout(() => setFollowing(null), 4000);
+    return () => clearTimeout(timer);
+  }, [following, leaderHere]);
 
   // A kick also lands in the ledger, so it holds after a reload or a missed broadcast.
   useEffect(() => {
@@ -262,7 +302,11 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     editNote(id: string, body: string) {
       emit({ type: "note.edit", annotation_id: id, body });
     },
-    chat(text: string) {
+    moveAnnotation(id: string, x: number, y: number) {
+      const round = (n: number) => Math.round(n * 10000) / 10000;
+      emit({ type: "annot.move", annotation_id: id, x: round(x), y: round(y) });
+    },
+    chat(text: string, replyTo?: string) {
       emit({
         type: "chat",
         message: {
@@ -270,8 +314,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
           text,
           author: actor,
           at: new Date().toISOString(),
+          ...(replyTo ? { reply_to: replyTo } : {}),
         },
       });
+    },
+    react(messageId: string, emoji: string) {
+      emit({ type: "chat.react", message_id: messageId, emoji });
     },
     async ask(
       thread: string,
@@ -371,6 +419,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setActiveDoc,
     following,
     setFollowing,
+    openArtifact,
+    setOpenArtifact,
+    showCursors,
+    setShowCursors,
     included,
     excluded,
     toggleSource,
@@ -400,6 +452,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     actions,
   };
 }
+
+const CURSORS_KEY = "linkroom-show-cursors";
 
 export type RoomContextValue = ReturnType<typeof useRoomValue>;
 const RoomContext = createContext<RoomContextValue | null>(null);

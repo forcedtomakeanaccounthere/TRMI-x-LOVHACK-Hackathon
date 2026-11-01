@@ -8,9 +8,12 @@ import type {
   CreateTextRoomRequest,
   DashboardQuery,
   DashboardResponse,
+  FollowStateResponse,
   ExportSummaryQuery,
   LoginRequest,
   MessageResponse,
+  ParticipantsResponse,
+  Profile,
   RecapData,
   RoomDetail,
   RoomStatusResponse,
@@ -18,6 +21,7 @@ import type {
   StudySet,
   StudySetsResponse,
   StudySourcesResponse,
+  UsersResponse,
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
@@ -33,7 +37,7 @@ export type AskRequest = {
   name?: string; // shown as "asked by"
 };
 
-const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
@@ -68,17 +72,14 @@ export const api = {
 
     login: (data: LoginRequest) => request<AuthSession>("/api/auth/login", json(data)),
 
-    resendVerification: (email: string) =>
-      request<MessageResponse>("/api/auth/resend-verification", json({ email })),
+    resendVerification: (email: string) => request<MessageResponse>("/api/auth/resend-verification", json({ email })),
 
-    refresh: (refresh_token: string) =>
-      request<AuthSession>("/api/auth/refresh", json({ refresh_token })),
+    refresh: (refresh_token: string) => request<AuthSession>("/api/auth/refresh", json({ refresh_token })),
 
     me: (token: string) => request<AuthUser>("/api/auth/me", { method: "GET" }, token),
 
     // 204 on success; rejects if the backend could not revoke the session, so callers can retry.
-    logout: (token: string) =>
-      request<unknown>("/api/auth/logout", { method: "POST" }, token).then(() => undefined),
+    logout: (token: string) => request<unknown>("/api/auth/logout", { method: "POST" }, token).then(() => undefined),
   },
 
   createLinkRoom: (data: CreateLinkRoomRequest, token: string) =>
@@ -152,6 +153,24 @@ export const api = {
     request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}/restore`, { method: "POST" }, token),
 
   // Study tools: quiz, flashcards, mind map or infographic from the documents the user picks.
+  // The signed-in user: profile, who they follow and who follows them, and people they've read with.
+  me: {
+    profile: (token: string) => request<Profile>("/api/me/profile", { method: "GET" }, token),
+    following: (token: string) => request<UsersResponse>("/api/me/following", { method: "GET" }, token),
+    followers: (token: string) => request<UsersResponse>("/api/me/followers", { method: "GET" }, token),
+    participants: (token: string) => request<ParticipantsResponse>("/api/me/participants", { method: "GET" }, token),
+  },
+
+  users: {
+    // People on LinkRoom whose name matches, with whether you already follow them.
+    search: (q: string, token: string) =>
+      request<UsersResponse>(`/api/users/search?q=${encodeURIComponent(q)}&limit=20`, { method: "GET" }, token),
+    follow: (id: string, token: string) =>
+      request<FollowStateResponse>(`/api/users/${encodeURIComponent(id)}/follow`, { method: "POST" }, token),
+    unfollow: (id: string, token: string) =>
+      request<FollowStateResponse>(`/api/users/${encodeURIComponent(id)}/follow`, { method: "DELETE" }, token),
+  },
+
   study: {
     // The documents to show in the picker (optionally one project's).
     sources: (token: string, groupId?: string) =>

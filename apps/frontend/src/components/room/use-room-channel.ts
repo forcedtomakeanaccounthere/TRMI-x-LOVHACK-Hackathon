@@ -18,6 +18,7 @@ export type Peer = {
   signedIn: boolean;
   following: string | null;
   doc: string | null;
+  artifact: string | null; // the artifact they have open, so followers can open it too
 };
 
 export type CursorAnchor = { block: string; x: number; y: number };
@@ -129,7 +130,7 @@ const removing = new Map<string, Promise<unknown>>();
 export function useRoomChannel(
   roomId: string,
   me: Identity | null,
-  view: { doc: string; following: string | null },
+  view: { doc: string; following: string | null; artifact: string | null },
   handlers: Handlers,
 ) {
   const [status, setStatus] = useState<ChannelStatus>("connecting");
@@ -263,6 +264,7 @@ export function useRoomChannel(
               signedIn: meSignedIn,
               following: viewRef.current.following,
               doc: viewRef.current.doc,
+              artifact: viewRef.current.artifact,
             } satisfies Peer);
             void channel.send({
               type: "broadcast",
@@ -291,7 +293,7 @@ export function useRoomChannel(
     };
   }, [roomId, meId, meName, meColor, meSignedIn]);
 
-  // Keep presence current when you switch documents or start following someone.
+  // Keep presence current when you switch documents, open an artifact or start following someone.
   useEffect(() => {
     const channel = channelRef.current;
     if (!channel || status !== "live" || !meId) return;
@@ -302,8 +304,9 @@ export function useRoomChannel(
       signedIn: meSignedIn,
       following: view.following,
       doc: view.doc,
+      artifact: view.artifact,
     } satisfies Peer);
-  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following]);
+  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.artifact]);
 
   // Cursors that haven't moved for 5 s fade out.
   useEffect(() => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpIcon, CaretDownIcon, SparkleIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowUpIcon, CaretDownIcon, DotsSixVerticalIcon, SparkleIcon, TrashIcon, XIcon } from "@phosphor-icons/react";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { initials } from "@/components/dashboard/primitives";
@@ -12,15 +12,75 @@ import type { Annotation } from "./types";
 type Note = Extract<Annotation, { kind: "note" }>;
 type AiNote = Extract<Annotation, { kind: "ai" }>;
 
-const CARD =
-  "liquid-glass liquid-glass-strong pointer-events-auto absolute z-30 w-72 rounded-2xl text-left shadow-[0_24px_60px_-24px_rgb(14_30_90/0.45)]";
+const CARD_SURFACE =
+  "liquid-glass liquid-glass-strong pointer-events-auto w-72 rounded-2xl text-left shadow-[0_24px_60px_-24px_rgb(14_30_90/0.45)]";
+const CARD = `${CARD_SURFACE} absolute z-30`;
 
 function useCanRemove(a: Annotation) {
   return useRoom().canRemove(a.author.id);
 }
 
+// Drag a box by a handle: it follows the pointer 1:1 (a CSS translate), and on release the new spot
+// is saved through onDrop. A press that barely moves stays a click, so handles can also be buttons.
+function useDrag(onDrop: (dx: number, dy: number) => void, enabled: boolean) {
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const start = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  const handlers = enabled
+    ? {
+        onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+          if (e.button !== 0 || (e.target as HTMLElement).closest("[data-no-drag]")) return;
+          e.stopPropagation();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          start.current = { x: e.clientX, y: e.clientY, moved: false };
+        },
+        onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+          const s = start.current;
+          if (!s) return;
+          const dx = e.clientX - s.x;
+          const dy = e.clientY - s.y;
+          if (!s.moved && Math.hypot(dx, dy) < 4) return;
+          s.moved = true;
+          setOffset({ x: dx, y: dy });
+        },
+        onPointerUp: (e: React.PointerEvent<HTMLElement>) => {
+          const s = start.current;
+          start.current = null;
+          if (!s?.moved) return;
+          suppressClick.current = true;
+          setOffset({ x: 0, y: 0 });
+          onDrop(e.clientX - s.x, e.clientY - s.y);
+        },
+        onPointerCancel: () => {
+          start.current = null;
+          setOffset({ x: 0, y: 0 });
+        },
+      }
+    : {};
+
+  // Call from a handle's onClick: true when that click ended a drag and should be ignored.
+  const wasDrag = () => {
+    const was = suppressClick.current;
+    suppressClick.current = false;
+    return was;
+  };
+  const dragging = offset.x !== 0 || offset.y !== 0;
+  return { handlers, wasDrag, dragging, transform: dragging ? `translate(${offset.x}px, ${offset.y}px)` : undefined };
+}
+
 // A text comment pinned anywhere on the page. New notes open in edit mode for their author.
-export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CSSProperties; autoEdit: boolean }) {
+export function NoteBox({
+  note,
+  style,
+  autoEdit,
+  onDrop,
+}: {
+  note: Note;
+  style: React.CSSProperties;
+  autoEdit: boolean;
+  onDrop: (dx: number, dy: number) => void;
+}) {
   const { me, actions, focusAnnotation, setFocusAnnotation, readOnly } = useRoom();
   // Only the author edits a note, and not once the room is read only.
   const mine = note.author.id === me.id && !readOnly;
@@ -29,6 +89,7 @@ export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CS
   const [open, setOpen] = useState(autoEdit || !note.body);
   const canRemove = useCanRemove(note);
   const focused = focusAnnotation === note.id;
+  const drag = useDrag(onDrop, canRemove);
 
   const save = () => {
     const body = draft.trim();
@@ -38,15 +99,21 @@ export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CS
   };
 
   return (
-    <div data-room-ui className="pointer-events-none absolute z-30" style={style}>
+    <div
+      data-room-ui
+      className={cn("pointer-events-none absolute z-30", drag.dragging && "z-50")}
+      style={{ ...style, transform: drag.transform }}
+    >
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-label={`Comment by ${note.author.name}`}
+        onClick={() => !drag.wasDrag() && setOpen((o) => !o)}
+        {...drag.handlers}
+        aria-label={`Comment by ${note.author.name}${canRemove ? ", drag to move" : ""}`}
         aria-expanded={open}
         className={cn(
-          "pointer-events-auto grid size-7 -translate-x-1/2 -translate-y-full place-items-center rounded-full rounded-bl-none text-[0.625rem] font-bold text-white shadow-lg ring-2 ring-background transition-transform hover:scale-110",
-          focused && "animate-bounce",
+          "pointer-events-auto grid size-7 -translate-x-1/2 -translate-y-full touch-none place-items-center rounded-full rounded-bl-none text-[0.625rem] font-bold text-white shadow-lg ring-2 ring-background transition-transform hover:scale-110",
+          canRemove && "cursor-grab active:cursor-grabbing",
+          focused && !drag.dragging && "animate-bounce",
         )}
         style={{ backgroundColor: note.color }}
       >
@@ -64,11 +131,15 @@ export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CS
             setFocusAnnotation(note.id);
           }}
         >
-          <div className="flex items-center gap-2">
+          <div
+            className={cn("flex touch-none items-center gap-2", canRemove && "cursor-grab active:cursor-grabbing")}
+            {...drag.handlers}
+          >
             <ByLine actor={note.author} at={note.at} className="flex-1" />
             {canRemove && (
               <button
                 type="button"
+                data-no-drag
                 aria-label="Delete comment"
                 onClick={() => actions.removeAnnotation(note.id)}
                 className="text-muted-foreground hover:text-destructive"
@@ -78,6 +149,7 @@ export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CS
             )}
             <button
               type="button"
+              data-no-drag
               aria-label="Close"
               onClick={() => setOpen(false)}
               className="text-muted-foreground hover:text-foreground"
@@ -135,15 +207,27 @@ export function NoteBox({ note, style, autoEdit }: { note: Note; style: React.CS
 const QUICK = ["Explain this", "Simplify it", "Give an example", "Why does it matter?"];
 
 // An AI conversation anchored beside a line (or a lens snapshot). Anyone with AI access can follow up.
-export function AiBox({ box, style, autoFocus }: { box: AiNote; style: React.CSSProperties; autoFocus: boolean }) {
+export function AiBox({
+  box,
+  style,
+  autoFocus,
+  onDrop,
+}: {
+  box: AiNote;
+  style: React.CSSProperties;
+  autoFocus: boolean;
+  onDrop: (dx: number, dy: number) => void;
+}) {
   const { state, actions, perms, included, activeDoc, setFocusAnnotation, focusAnnotation } = useRoom();
   const thread = state.threads[box.id] ?? [];
-  const [open, setOpen] = useState(true);
+  // Only a box just made here opens by itself; after a reload they all start folded into chips.
+  const [open, setOpen] = useState(autoFocus);
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const canRemove = useCanRemove(box);
   const pending = useAwaitingAnswer(thread);
   const focused = focusAnnotation === box.id;
+  const drag = useDrag(onDrop, canRemove);
 
   useEffect(() => {
     scroller.current?.scrollTo({
@@ -167,11 +251,20 @@ export function AiBox({ box, style, autoFocus }: { box: AiNote; style: React.CSS
 
   if (!open) {
     return (
-      <div data-room-ui className="pointer-events-none absolute z-30" style={style}>
+      <div
+        data-room-ui
+        className={cn("pointer-events-none absolute z-30", drag.dragging && "z-50")}
+        style={{ ...style, width: undefined, transform: drag.transform }}
+      >
         <button
           type="button"
-          onClick={() => setOpen(true)}
-          className="liquid-glass pointer-events-auto flex h-8 items-center gap-1.5 rounded-full pr-3 pl-1.5 text-[0.75rem] font-medium"
+          onClick={() => !drag.wasDrag() && setOpen(true)}
+          {...drag.handlers}
+          title={canRemove ? "Open, or drag to move" : undefined}
+          className={cn(
+            "liquid-glass pointer-events-auto flex h-8 touch-none items-center gap-1.5 rounded-full pr-3 pl-1.5 text-[0.75rem] font-medium",
+            canRemove && "cursor-grab active:cursor-grabbing",
+          )}
         >
           <span className="grid size-5 place-items-center rounded-full bg-[linear-gradient(120deg,#2f5bff,#8b5cf6)] text-white">
             <SparkleIcon weight="fill" className="size-3" />
@@ -183,127 +276,148 @@ export function AiBox({ box, style, autoFocus }: { box: AiNote; style: React.CSS
   }
 
   return (
-    <motion.div
+    // The outer layer is positioned and dragged; the card inside keeps its own entrance animation.
+    <div
       data-room-ui
-      initial={{ opacity: 0, x: -8, scale: 0.97 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
-      className={cn(CARD, "flex max-h-[26rem] flex-col overflow-hidden", focused && "ring-2 ring-azure/60")}
-      style={style}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-        setFocusAnnotation(box.id);
-      }}
+      className={cn("pointer-events-none absolute z-30", (drag.dragging || focused) && "z-40")}
+      style={{ ...style, transform: drag.transform }}
     >
-      <div className="flex items-center gap-2 border-b border-(--hairline) px-3 py-2">
-        <span className="grid size-6 place-items-center rounded-full bg-[linear-gradient(120deg,#2f5bff,#8b5cf6)] text-white shadow-[0_4px_12px_-4px_rgb(47_91_255/0.8)]">
-          <SparkleIcon weight="fill" className="size-3.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[0.75rem] font-semibold">{box.image ? "AI lens" : "Ask AI"}</div>
-          <ByLine actor={box.author} at={box.at} />
-        </div>
-        {canRemove && (
+      <motion.div
+        initial={{ opacity: 0, x: -8, scale: 0.97 }}
+        animate={{ opacity: 1, x: 0, scale: 1 }}
+        transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
+        className={cn(
+          CARD_SURFACE,
+          "relative flex max-h-[26rem] w-full flex-col overflow-hidden",
+          focused && "ring-2 ring-azure/60",
+          drag.dragging && "shadow-[0_32px_80px_-24px_rgb(14_30_90/0.6)]",
+        )}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          setFocusAnnotation(box.id);
+        }}
+      >
+        <div
+          className={cn(
+            "flex touch-none items-center gap-2 border-b border-(--hairline) px-3 py-2",
+            canRemove && "cursor-grab active:cursor-grabbing",
+          )}
+          {...drag.handlers}
+        >
+          {canRemove && (
+            <DotsSixVerticalIcon weight="bold" className="-mx-1 size-3.5 text-muted-foreground/60" aria-hidden />
+          )}
+          <span className="grid size-6 place-items-center rounded-full bg-[linear-gradient(120deg,#2f5bff,#8b5cf6)] text-white shadow-[0_4px_12px_-4px_rgb(47_91_255/0.8)]">
+            <SparkleIcon weight="fill" className="size-3.5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[0.75rem] font-semibold">{box.image ? "AI lens" : "Ask AI"}</div>
+            <ByLine actor={box.author} at={box.at} />
+          </div>
+          {canRemove && (
+            <button
+              type="button"
+              data-no-drag
+              aria-label="Delete AI box"
+              onClick={() => actions.removeAnnotation(box.id)}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <TrashIcon className="size-3.5" />
+            </button>
+          )}
           <button
             type="button"
-            aria-label="Delete AI box"
-            onClick={() => actions.removeAnnotation(box.id)}
-            className="text-muted-foreground hover:text-destructive"
+            data-no-drag
+            aria-label="Collapse"
+            onClick={() => setOpen(false)}
+            className="text-muted-foreground hover:text-foreground"
           >
-            <TrashIcon className="size-3.5" />
+            <CaretDownIcon className="size-3.5" />
           </button>
-        )}
-        <button
-          type="button"
-          aria-label="Collapse"
-          onClick={() => setOpen(false)}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <CaretDownIcon className="size-3.5" />
-        </button>
-      </div>
+        </div>
 
-      <div
-        ref={scroller}
-        data-lenis-prevent
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-2.5"
-      >
-        {box.quote && (
-          <blockquote className="border-l-2 border-azure/60 pl-2 text-[0.75rem] text-muted-foreground italic line-clamp-4">
-            “{box.quote}”
-          </blockquote>
-        )}
-        {box.image && (
-          // eslint-disable-next-line @next/next/no-img-element -- a data URL snapshot
-          <img src={box.image} alt="Snapshot sent to the AI" className="w-full rounded-lg ring-1 ring-(--hairline)" />
-        )}
-        {thread.map((m) =>
-          m.role === "user" ? (
-            <div key={m.id} className="flex items-start gap-2">
-              <Avatar actor={m.author} size={20} />
-              <div className="min-w-0">
-                <div className="text-[0.625rem] text-muted-foreground">
-                  {m.author.name} · {timeAgo(m.at)}
+        <div
+          ref={scroller}
+          data-lenis-prevent
+          className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-2.5"
+        >
+          {box.quote && (
+            <blockquote className="border-l-2 border-azure/60 pl-2 text-[0.75rem] text-muted-foreground italic line-clamp-4">
+              “{box.quote}”
+            </blockquote>
+          )}
+          {box.image && (
+            // eslint-disable-next-line @next/next/no-img-element -- a data URL snapshot
+            <img src={box.image} alt="Snapshot sent to the AI" className="w-full rounded-lg ring-1 ring-(--hairline)" />
+          )}
+          {thread.map((m) =>
+            m.role === "user" ? (
+              <div key={m.id} className="flex items-start gap-2">
+                <Avatar actor={m.author} size={20} />
+                <div className="min-w-0">
+                  <div className="text-[0.625rem] text-muted-foreground">
+                    {m.author.name} · {timeAgo(m.at)}
+                  </div>
+                  <p className="text-[0.8125rem] font-medium">{m.text}</p>
                 </div>
-                <p className="text-[0.8125rem] font-medium">{m.text}</p>
               </div>
+            ) : (
+              <div key={m.id} className="rounded-xl bg-foreground/[0.035] p-2.5 ring-1 ring-(--hairline)">
+                {m.preview && <PreviewTag className="mb-1.5 inline-block" />}
+                <AiText text={m.text} />
+              </div>
+            ),
+          )}
+          {pending && <Thinking />}
+          {thread.length === 0 && perms.useAi && (
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK.map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  onClick={() => send(q)}
+                  className="rounded-full bg-background/70 px-2.5 py-1 text-[0.6875rem] ring-1 ring-(--hairline) hover:ring-azure/50"
+                >
+                  {q}
+                </button>
+              ))}
             </div>
-          ) : (
-            <div key={m.id} className="rounded-xl bg-foreground/[0.035] p-2.5 ring-1 ring-(--hairline)">
-              {m.preview && <PreviewTag className="mb-1.5 inline-block" />}
-              <AiText text={m.text} />
-            </div>
-          ),
-        )}
-        {pending && <Thinking />}
-        {thread.length === 0 && perms.useAi && (
-          <div className="flex flex-wrap gap-1.5">
-            {QUICK.map((q) => (
-              <button
-                key={q}
-                type="button"
-                onClick={() => send(q)}
-                className="rounded-full bg-background/70 px-2.5 py-1 text-[0.6875rem] ring-1 ring-(--hairline) hover:ring-azure/50"
-              >
-                {q}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
 
-      {perms.useAi && (
-        <form
-          className="flex items-center gap-1.5 border-t border-(--hairline) p-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send(draft);
-          }}
-        >
-          <input
-            autoFocus={autoFocus}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={1000}
-            placeholder={
-              thread.length
-                ? "Ask a follow-up…"
-                : box.image
-                  ? "What do you want to know about this?"
-                  : "Ask about this line…"
-            }
-            className="h-8 min-w-0 flex-1 rounded-full bg-background/60 px-3 text-[0.8125rem] ring-1 ring-(--hairline) outline-none focus:ring-azure/50"
-          />
-          <button
-            type="submit"
-            disabled={!draft.trim() || pending}
-            aria-label="Send"
-            className="grid size-8 place-items-center rounded-full bg-ink text-pearl transition disabled:opacity-30 dark:bg-azure"
+        {perms.useAi && (
+          <form
+            className="flex items-center gap-1.5 border-t border-(--hairline) p-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              send(draft);
+            }}
           >
-            <ArrowUpIcon weight="bold" className="size-3.5" />
-          </button>
-        </form>
-      )}
-    </motion.div>
+            <input
+              autoFocus={autoFocus}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              maxLength={1000}
+              placeholder={
+                thread.length
+                  ? "Ask a follow-up…"
+                  : box.image
+                    ? "What do you want to know about this?"
+                    : "Ask about this line…"
+              }
+              className="h-8 min-w-0 flex-1 rounded-full bg-background/60 px-3 text-[0.8125rem] ring-1 ring-(--hairline) outline-none focus:ring-azure/50"
+            />
+            <button
+              type="submit"
+              disabled={!draft.trim() || pending}
+              aria-label="Send"
+              className="grid size-8 place-items-center rounded-full bg-ink text-pearl transition disabled:opacity-30 dark:bg-azure"
+            >
+              <ArrowUpIcon weight="bold" className="size-3.5" />
+            </button>
+          </form>
+        )}
+      </motion.div>
+    </div>
   );
 }

@@ -32,9 +32,9 @@ export const ARTIFACT_STYLE: Record<ArtifactKind, { icon: Icon; tint: string }> 
 // Like NotebookLM's Studio: make a summary, quiz, flashcards, mind map or infographic from the sources
 // you pick. Everything made here is kept in Library → Artifacts.
 export function Studio() {
-  const { state, perms } = useRoom();
+  const { state, perms, setOpenArtifact } = useRoom();
   const [making, setMaking] = useState<ArtifactKind | null>(null);
-  const [open, setOpen] = useState<Artifact | null>(null);
+  const open = (a: Artifact) => setOpenArtifact(a.id);
 
   return (
     <div data-lenis-prevent className="h-full overflow-y-auto overscroll-contain px-4 py-4">
@@ -81,10 +81,9 @@ export function Studio() {
         <h3 className="eyebrow text-[0.5625rem] text-muted-foreground">Made in this room</h3>
         <span className="text-[0.6875rem] text-muted-foreground">{state.artifacts.length}</span>
       </div>
-      <ArtifactList artifacts={state.artifacts.slice(0, 6)} onOpen={setOpen} />
+      <ArtifactList artifacts={state.artifacts.slice(0, 6)} onOpen={open} />
 
-      <GenerateDialog kind={making} onClose={() => setMaking(null)} onMade={setOpen} />
-      <ArtifactDialog artifact={open} onClose={() => setOpen(null)} />
+      <GenerateDialog kind={making} onClose={() => setMaking(null)} onMade={open} />
     </div>
   );
 }
@@ -142,7 +141,11 @@ export function ArtifactList({ artifacts, onOpen }: { artifacts: Artifact[]; onO
   );
 }
 
-export function ArtifactDialog({ artifact, onClose }: { artifact: Artifact | null; onClose: () => void }) {
+// The one artifact viewer in the room, opened from Studio, Library or by following someone.
+export function ArtifactDialog() {
+  const { state, openArtifact, setOpenArtifact } = useRoom();
+  const artifact = state.artifacts.find((a) => a.id === openArtifact) ?? null;
+  const onClose = () => setOpenArtifact(null);
   return (
     <Dialog open={!!artifact} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto rounded-[1.75rem] p-7 sm:max-w-3xl" data-lenis-prevent>

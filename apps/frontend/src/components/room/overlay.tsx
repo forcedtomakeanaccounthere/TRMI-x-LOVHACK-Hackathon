@@ -2,6 +2,7 @@
 
 import { motion } from "motion/react";
 import { useLayoutEffect, useState } from "react";
+import { cn } from "@/lib/utils";
 import { findBlock, textRects } from "./anchors";
 import { AiBox, NoteBox } from "./boxes";
 import type { Peer, RemoteCursor } from "./use-room-channel";
@@ -115,7 +116,12 @@ type Props = {
     | null;
   cursors: RemoteCursor[];
   peers: Peer[];
+  following: string | null; // whose cursor to ring, while you follow them
+  // The document is white pages (PDF, slides): marks multiply into the paper in both themes, since a
+  // screen blend over white would wash them out in dark mode.
+  paper: boolean;
   onGeometry: (g: Geometry) => void;
+  onMove: (annotation: Annotation, x: number, y: number) => void;
 };
 
 const GUTTER_GAP = 20;
@@ -131,7 +137,10 @@ export function Overlay({
   draft,
   cursors,
   peers,
+  following,
+  paper,
   onGeometry,
+  onMove,
 }: Props) {
   const [geom, setGeom] = useState<Geometry>(new Map());
   const [width, setWidth] = useState(0);
@@ -150,13 +159,27 @@ export function Overlay({
 
   // An AI box or note placed past the block's right edge sits in the margin when there's room,
   // otherwise just inside the right edge of the page.
-  const place = (box: Box, x: number, y: number): React.CSSProperties => {
+  const place = (box: Box, x: number, y: number, moved?: boolean): React.CSSProperties => {
+    // Dragged boxes sit exactly where they were dropped, kept on the page.
+    if (moved) {
+      const left = Math.min(Math.max(0, box.left + x * box.width), Math.max(0, width - 40));
+      return { left, top: box.top + y * box.height };
+    }
     if (x >= 1) {
       const gutter = box.left + box.width + GUTTER_GAP;
       const left = gutter + BOX_WIDTH <= width ? gutter : Math.max(8, width - BOX_WIDTH - 8);
       return { left, top: box.top + y * box.height };
     }
     return { left: box.left + x * box.width, top: box.top + y * box.height };
+  };
+
+  // A drag moved a box by (dx, dy) px from where it was drawn: store it as fractions of its block.
+  const dropped = (a: Annotation, style: React.CSSProperties, dx: number, dy: number) => {
+    const g = geom.get(a.id);
+    if (!g || !g.box.width || !g.box.height) return;
+    const left = Number(style.left ?? 0) + dx;
+    const top = Number(style.top ?? 0) + dy;
+    onMove(a, (left - g.box.left) / g.box.width, (top - g.box.top) / g.box.height);
   };
 
   return (
@@ -170,14 +193,17 @@ export function Overlay({
           return g.rects.map((r, i) => (
             <div
               key={`${a.id}-${i}`}
-              className="absolute rounded-[3px] mix-blend-multiply transition-opacity dark:mix-blend-screen"
+              className={cn(
+                "absolute rounded-[3px] mix-blend-multiply transition-opacity",
+                !paper && "dark:mix-blend-screen",
+              )}
               style={{
                 left: r.left - 1,
                 top: r.top,
                 width: r.width + 2,
                 height: r.height,
                 backgroundColor: a.color,
-                opacity: lit ? 0.6 : a.kind === "region" ? 0.28 : 0.42,
+                opacity: lit ? 0.7 : a.kind === "region" ? (paper ? 0.38 : 0.28) : paper ? 0.55 : 0.42,
                 outline: a.kind === "region" ? `1.5px dashed ${a.color}` : undefined,
                 outlineOffset: 1,
               }}
@@ -193,7 +219,7 @@ export function Overlay({
                 left: r.left,
                 top: r.top + r.height - 2,
                 width: r.width,
-                height: hovered === a.id ? 3.5 : 2.5,
+                height: hovered === a.id ? 3.5 : paper ? 3 : 2.5,
                 backgroundColor: a.color,
               }}
             />
@@ -246,17 +272,30 @@ export function Overlay({
       {annotations.map((a) => {
         const g = geom.get(a.id);
         if (!g) return null;
-        if (a.kind === "note")
-          return <NoteBox key={a.id} note={a} style={place(g.box, a.x, a.y)} autoEdit={fresh === a.id} />;
-        if (a.kind === "ai")
+        if (a.kind === "note") {
+          const style = place(g.box, a.x, a.y, a.moved);
+          return (
+            <NoteBox
+              key={a.id}
+              note={a}
+              style={style}
+              autoEdit={fresh === a.id}
+              onDrop={(dx, dy) => dropped(a, style, dx, dy)}
+            />
+          );
+        }
+        if (a.kind === "ai") {
+          const style = place(g.box, a.x, a.y, a.moved);
           return (
             <AiBox
               key={a.id}
               box={a}
-              style={{ ...place(g.box, a.x, a.y), width: BOX_WIDTH }}
+              style={{ ...style, width: BOX_WIDTH }}
               autoFocus={fresh === a.id}
+              onDrop={(dx, dy) => dropped(a, style, dx, dy)}
             />
           );
+        }
         return null;
       })}
 
@@ -271,6 +310,7 @@ export function Overlay({
             <motion.div
               key={c.id}
               className="absolute top-0 left-0 z-50"
+              title={following === c.id ? `Following ${peer.name}` : undefined}
               initial={false}
               animate={{
                 x: box.left + c.anchor.x * box.width,
@@ -300,9 +340,12 @@ export function Overlay({
               </svg>
               <span
                 className="absolute top-4 left-3.5 rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold whitespace-nowrap text-white shadow-md"
-                style={{ backgroundColor: peer.color }}
+                style={{
+                  backgroundColor: peer.color,
+                  boxShadow: following === c.id ? `0 0 0 2px var(--background), 0 0 0 4px ${peer.color}` : undefined,
+                }}
               >
-                {peer.name}
+                {following === c.id ? `Following ${peer.name}` : peer.name}
               </span>
             </motion.div>
           );
