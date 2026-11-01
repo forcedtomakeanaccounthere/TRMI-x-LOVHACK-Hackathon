@@ -17,6 +17,7 @@ import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { AiChat } from "./ai-chat";
 import { Discussion } from "./discussion";
+import { CatchupCard } from "./catchup-card";
 import { DocViewer } from "./doc-viewer";
 import { History } from "./history";
 import { type Identity, saveGuest, savedGuest, signedInIdentity } from "./identity";
@@ -136,6 +137,7 @@ function Shell() {
             aria-hidden
           />
           <DocViewer />
+          <CatchupCard />
         </main>
 
         <AnimatePresence initial={false}>

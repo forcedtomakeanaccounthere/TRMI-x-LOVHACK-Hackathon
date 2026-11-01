@@ -110,7 +110,13 @@ const AiReply = z.object({
 export const ThreadMessage = z.discriminatedUnion("role", [UserMessage, AiReply]);
 export type ThreadMessage = z.infer<typeof ThreadMessage>;
 
-export const ChatMessage = z.object({ id: Id, text: Text(2000).min(1), author: Actor, at: Time });
+export const ChatMessage = z.object({
+  id: Id,
+  text: Text(2000).min(1),
+  author: Actor,
+  at: Time,
+  reply_to: Id.optional(), // the message this answers
+});
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
 // --- Studio artifacts (POST /api/rooms/:id/artifacts answers with an ArtifactBody) ---
@@ -164,6 +170,23 @@ export const Artifact = z.object({
 });
 export type Artifact = z.infer<typeof Artifact>;
 
+// --- Room notes (the notebook panel): a typed note, a passage saved from a source, or an image ---
+
+export const NotebookEntry = z.object({
+  id: Id,
+  kind: z.enum(["text", "quote", "image"]),
+  text: Text(2000),
+  quote: z.object({ doc: Id, block: Text(16), text: Text(2000) }).nullable(),
+  // A JPEG data URL, shrunk in the browser before it's added (MAX_LEDGER_EVENT_BYTES caps the event).
+  image: z
+    .string()
+    .regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/)
+    .nullable(),
+  author: Actor,
+  at: Time,
+});
+export type NotebookEntry = z.infer<typeof NotebookEntry>;
+
 // --- Events ---
 
 const EventBase = { id: Id, at: Time, actor: Actor };
@@ -174,9 +197,16 @@ export const LedgerEvent = z.discriminatedUnion("type", [
   z.object({ ...EventBase, type: z.literal("annot.add"), annotation: Annotation }),
   z.object({ ...EventBase, type: z.literal("annot.remove"), annotation_id: Id }),
   z.object({ ...EventBase, type: z.literal("note.edit"), annotation_id: Id, body: Text(2000) }),
+  // A comment or AI box dragged to a new spot (fractions of its block).
+  z.object({ ...EventBase, type: z.literal("annot.move"), annotation_id: Id, x: Fraction, y: Fraction }),
   z.object({ ...EventBase, type: z.literal("thread.ask"), thread: Id, message: UserMessage }),
   z.object({ ...EventBase, type: z.literal("thread.answer"), thread: Id, message: AiReply }),
   z.object({ ...EventBase, type: z.literal("chat"), message: ChatMessage }),
+  // Toggles the actor's reaction to a message.
+  z.object({ ...EventBase, type: z.literal("chat.react"), message_id: Id, emoji: Text(16).min(1) }),
+  z.object({ ...EventBase, type: z.literal("notebook.add"), entry: NotebookEntry }),
+  z.object({ ...EventBase, type: z.literal("notebook.edit"), entry_id: Id, text: Text(2000) }),
+  z.object({ ...EventBase, type: z.literal("notebook.remove"), entry_id: Id }),
   z.object({ ...EventBase, type: z.literal("artifact.add"), artifact: Artifact }),
   z.object({ ...EventBase, type: z.literal("artifact.remove"), artifact_id: Id }),
   z.object({ ...EventBase, type: z.literal("role.set"), member: Id, name: Text(40), role: Role }),
