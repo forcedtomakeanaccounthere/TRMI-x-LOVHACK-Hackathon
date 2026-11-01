@@ -5,6 +5,7 @@ import { z } from "zod";
 
 const Id = z.string().regex(/^[A-Za-z0-9_:-]{1,64}$/);
 const Text = (max: number) => z.string().max(max);
+const Name = z.string().trim().min(1).max(40);
 
 export const HuddleAudience = z.enum(["all", "private"]);
 export type HuddleAudience = z.infer<typeof HuddleAudience>;
@@ -13,13 +14,22 @@ export const HuddleNotesStatus = z.enum(["none", "generating", "ready", "failed"
 export type HuddleNotesStatus = z.infer<typeof HuddleNotesStatus>;
 
 export const CreateHuddleRequest = z.discriminatedUnion("audience", [
-  z.object({ audience: z.literal("all") }),
+  z.object({
+    audience: z.literal("all"),
+    name: Name.optional(),
+  }),
   z.object({
     audience: z.literal("private"),
     members: z.array(Id).min(1).max(20),
+    name: Name.optional(),
   }),
 ]);
 export type CreateHuddleRequest = z.infer<typeof CreateHuddleRequest>;
+
+export const JoinHuddleRequest = z.object({
+  name: Name.optional(),
+});
+export type JoinHuddleRequest = z.infer<typeof JoinHuddleRequest>;
 
 export const HuddleMemberSummary = z.object({
   member_id: z.string(),

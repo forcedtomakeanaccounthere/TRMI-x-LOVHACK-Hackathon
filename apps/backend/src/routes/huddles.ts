@@ -1,9 +1,15 @@
 import {
   CreateHuddleRequest,
+  HuddleFocusRequest,
+  HuddleTranscriptQuery,
   InviteHuddleRequest,
+  JoinHuddleRequest,
+  PostSegmentsRequest,
   type HuddleJoinResponse,
   type HuddleMemberSummary,
   type HuddleSummary,
+  type HuddleTranscriptResponse,
+  type HuddleTranscriptSegment,
   type ListHuddlesResponse,
 } from "@linkroom/shared";
 import type { Request, RequestHandler, Router } from "express";
@@ -13,6 +19,7 @@ import { env } from "../env";
 import {
   canEndHuddle,
   canInviteToHuddle,
+  canPostSegments,
   canStartHuddle,
   closeIfEmpty,
   huddleAccess,
@@ -21,8 +28,16 @@ import {
   type HuddleMemberRow,
   type HuddleRow,
 } from "../lib/huddles";
-import { assertReader, claimGuest, roomAccess, type Access } from "../lib/ledger";
-import { closeRoom, isLiveKitConfigured, mintToken, participantCount, removeFromRoom } from "../lib/livekit";
+import { assertParticipant, assertReader, claimGuest, roomAccess, type Access } from "../lib/ledger";
+import {
+  closeRoom,
+  getLiveKitConfig,
+  isLiveKitConfigured,
+  mintToken,
+  participantCount,
+  removeFromRoom,
+} from "../lib/livekit";
+import { roomScope } from "../lib/sources";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -38,6 +53,14 @@ const huddlesPerIp = rateLimit({
   message: { error: "Too many huddle requests. Try again in a minute." },
 });
 
+const segmentsPerIp = rateLimit({
+  windowMs: 60_000,
+  limit: env.HUDDLE_SEGMENT_RATE_LIMIT,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many segment requests. Try again in a minute." },
+});
+
 const ensureLiveKit: RequestHandler = (_req, _res, next) => {
   if (!isLiveKitConfigured()) {
     throw new HttpError(503, "Voice huddles aren't set up");
@@ -45,9 +68,14 @@ const ensureLiveKit: RequestHandler = (_req, _res, next) => {
   next();
 };
 
-function getCallerName(access: Access, req: Request): string {
+function getCallerName(access: Access, req: Request, requestedName?: string): string {
+  if (access.member?.name) {
+    return access.member.name;
+  }
+  if (requestedName) {
+    return requestedName;
+  }
   return (
-    access.member?.name ||
     (req.user as { user_metadata?: { name?: string } } | undefined)?.user_metadata?.name ||
     (req.user?.email ? req.user.email.split("@")[0]! : null) ||
     (access.identity?.signedIn ? "Someone" : "Guest")
@@ -108,25 +136,25 @@ export function huddlesRoutes(router: Router) {
       .eq("room_id", id)
       .not("ended_at", "is", null)
       .order("ended_at", { ascending: false })
-      .limit(10);
+      .limit(50);
     if (endedErr) throw endedErr;
 
-    const allHuddles = [
-      ...openHuddles.filter((h) => !h.ended_at),
+    const stillOpen = openHuddles.filter((h) => !h.ended_at);
+    const endedCandidates = [
       ...openHuddles.filter((h) => Boolean(h.ended_at)),
       ...((endedRows ?? []) as HuddleRow[]),
     ];
-    // Deduplicate in case an open huddle was closed above and also returned in endedRows
-    const seen = new Set<string>();
-    const uniqueHuddles: HuddleRow[] = [];
-    for (const h of allHuddles) {
-      if (!seen.has(h.id)) {
-        seen.add(h.id);
-        uniqueHuddles.push(h);
+    const seenEnded = new Set<string>();
+    const uniqueEnded: HuddleRow[] = [];
+    for (const h of endedCandidates) {
+      if (!seenEnded.has(h.id)) {
+        seenEnded.add(h.id);
+        uniqueEnded.push(h);
       }
     }
 
-    const huddleIds = uniqueHuddles.map((h) => h.id);
+    const allHuddles = [...stillOpen, ...uniqueEnded];
+    const huddleIds = allHuddles.map((h) => h.id);
     const membersByHuddle = new Map<string, HuddleMemberRow[]>();
     if (huddleIds.length) {
       const { data: memberRows, error: mErr } = await db
@@ -141,17 +169,16 @@ export function huddlesRoutes(router: Router) {
       }
     }
 
-    const visible: HuddleSummary[] = [];
-    for (const h of uniqueHuddles) {
+    const isVisible = (h: HuddleRow) => {
+      if (h.audience === "all") return true;
       const members = membersByHuddle.get(h.id) ?? [];
-      if (h.audience === "all") {
-        visible.push(toHuddleSummary(h, members));
-      } else if (access.identity && members.some((m) => m.member_id === access.identity!.id)) {
-        visible.push(toHuddleSummary(h, members));
-      }
-    }
+      return Boolean(access.identity && members.some((m) => m.member_id === access.identity!.id));
+    };
 
-    res.json({ huddles: visible } satisfies ListHuddlesResponse);
+    const visibleOpen = stillOpen.filter(isVisible).map((h) => toHuddleSummary(h, membersByHuddle.get(h.id) ?? []));
+    const visibleEnded = uniqueEnded.filter(isVisible).slice(0, 10).map((h) => toHuddleSummary(h, membersByHuddle.get(h.id) ?? []));
+
+    res.json({ huddles: [...visibleOpen, ...visibleEnded] } satisfies ListHuddlesResponse);
   });
 
   // POST /api/rooms/:id/huddles: create huddle (returns existing open for "all").
@@ -162,14 +189,16 @@ export function huddlesRoutes(router: Router) {
     if (!access.identity) {
       throw new HttpError(401, "Sign in, or send your guest id and key (X-Guest-Id, X-Guest-Key).");
     }
+    assertParticipant(access);
     if (!canStartHuddle(access.role, body.audience)) {
       throw new HttpError(403, "Only editors and above can start a private huddle.");
     }
 
-    const callerName = getCallerName(access, req);
+    const callerName = getCallerName(access, req, body.name);
     await claimGuest(access, callerName);
 
     const db = supabaseAdmin();
+    const livekitUrl = getLiveKitConfig().url!;
 
     if (body.audience === "all") {
       const { data: existing, error: existingErr } = await db
@@ -182,7 +211,7 @@ export function huddlesRoutes(router: Router) {
       if (existingErr) throw existingErr;
 
       if (existing) {
-        await db.from("huddle_members").upsert(
+        const { error: upsertErr } = await db.from("huddle_members").upsert(
           {
             huddle_id: existing.id,
             member_id: access.identity.id,
@@ -192,11 +221,15 @@ export function huddlesRoutes(router: Router) {
           },
           { onConflict: "huddle_id,member_id" },
         );
+        if (upsertErr) throw upsertErr;
+
         const token = await mintToken(access.identity, callerName, access.role, existing.livekit_room);
-        const { data: memberRows } = await db.from("huddle_members").select("*").eq("huddle_id", existing.id);
+        const { data: memberRows, error: mErr } = await db.from("huddle_members").select("*").eq("huddle_id", existing.id);
+        if (mErr) throw mErr;
+
         return res.status(201).json({
           huddle: toHuddleSummary(existing as HuddleRow, (memberRows ?? []) as HuddleMemberRow[]),
-          livekit: { url: env.LIVEKIT_URL!, token },
+          livekit: { url: livekitUrl, token },
         } satisfies HuddleJoinResponse);
       }
 
@@ -218,15 +251,17 @@ export function huddlesRoutes(router: Router) {
         .single();
       if (createErr) {
         // Handle race where another user created the open "all" huddle concurrently
-        const { data: raced } = await db
+        const { data: raced, error: racedSelectErr } = await db
           .from("huddles")
           .select("*")
           .eq("room_id", id)
           .eq("audience", "all")
           .is("ended_at", null)
           .maybeSingle();
+        if (racedSelectErr) throw racedSelectErr;
+
         if (raced) {
-          await db.from("huddle_members").upsert(
+          const { error: racedUpsertErr } = await db.from("huddle_members").upsert(
             {
               huddle_id: raced.id,
               member_id: access.identity.id,
@@ -236,11 +271,15 @@ export function huddlesRoutes(router: Router) {
             },
             { onConflict: "huddle_id,member_id" },
           );
+          if (racedUpsertErr) throw racedUpsertErr;
+
           const token = await mintToken(access.identity, callerName, access.role, raced.livekit_room);
-          const { data: memberRows } = await db.from("huddle_members").select("*").eq("huddle_id", raced.id);
+          const { data: memberRows, error: mErr } = await db.from("huddle_members").select("*").eq("huddle_id", raced.id);
+          if (mErr) throw mErr;
+
           return res.status(201).json({
             huddle: toHuddleSummary(raced as HuddleRow, (memberRows ?? []) as HuddleMemberRow[]),
-            livekit: { url: env.LIVEKIT_URL!, token },
+            livekit: { url: livekitUrl, token },
           } satisfies HuddleJoinResponse);
         }
         throw createErr;
@@ -255,13 +294,15 @@ export function huddlesRoutes(router: Router) {
         joined_at: new Date().toISOString(),
         left_at: null,
       };
-      await db.from("huddle_members").insert(memberRow);
+      const { error: mInsertErr } = await db.from("huddle_members").insert(memberRow);
+      if (mInsertErr) throw mInsertErr;
+
       const token = await mintToken(access.identity, callerName, access.role, livekitRoom);
       await pingHuddles(id);
 
       return res.status(201).json({
         huddle: toHuddleSummary(created as HuddleRow, [memberRow]),
-        livekit: { url: env.LIVEKIT_URL!, token },
+        livekit: { url: livekitUrl, token },
       } satisfies HuddleJoinResponse);
     }
 
@@ -322,13 +363,15 @@ export function huddlesRoutes(router: Router) {
         left_at: null,
       }));
 
-    await db.from("huddle_members").insert([creatorRow, ...inviteRows]);
+    const { error: privInsertErr } = await db.from("huddle_members").insert([creatorRow, ...inviteRows]);
+    if (privInsertErr) throw privInsertErr;
+
     const token = await mintToken(access.identity, callerName, access.role, livekitRoom);
     await pingHuddles(id);
 
     return res.status(201).json({
       huddle: toHuddleSummary(created as HuddleRow, [creatorRow, ...inviteRows]),
-      livekit: { url: env.LIVEKIT_URL!, token },
+      livekit: { url: livekitUrl, token },
     } satisfies HuddleJoinResponse);
   });
 
@@ -336,19 +379,20 @@ export function huddlesRoutes(router: Router) {
   router.post("/:id/huddles/:hid/join", ensureLiveKit, huddlesPerIp, optionalAuth, async (req, res) => {
     const id = req.params.id as string;
     const hid = req.params.hid as string;
+    const body = JoinHuddleRequest.parse(req.body ?? {});
     const { access, huddle } = await huddleAccess(id, hid, req);
     if (huddle.ended_at) {
       throw new HttpError(400, "Huddle has already ended.");
     }
 
-    const callerName = getCallerName(access, req);
+    const callerName = getCallerName(access, req, body.name);
     await claimGuest(access, callerName);
 
     const db = supabaseAdmin();
     const nowIso = new Date().toISOString();
 
     if (huddle.audience === "all") {
-      await db.from("huddle_members").upsert(
+      const { error: joinUpsertErr } = await db.from("huddle_members").upsert(
         {
           huddle_id: huddle.id,
           member_id: access.identity!.id,
@@ -358,21 +402,25 @@ export function huddlesRoutes(router: Router) {
         },
         { onConflict: "huddle_id,member_id" },
       );
+      if (joinUpsertErr) throw joinUpsertErr;
     } else {
-      await db
+      const { error: joinUpdateErr } = await db
         .from("huddle_members")
         .update({ joined_at: nowIso, left_at: null })
         .eq("huddle_id", huddle.id)
         .eq("member_id", access.identity!.id);
+      if (joinUpdateErr) throw joinUpdateErr;
     }
 
     const token = await mintToken(access.identity!, callerName, access.role, huddle.livekit_room);
-    const { data: memberRows } = await db.from("huddle_members").select("*").eq("huddle_id", huddle.id);
+    const { data: memberRows, error: mErr } = await db.from("huddle_members").select("*").eq("huddle_id", huddle.id);
+    if (mErr) throw mErr;
+
     await pingHuddles(id);
 
     res.json({
       huddle: toHuddleSummary(huddle, (memberRows ?? []) as HuddleMemberRow[]),
-      livekit: { url: env.LIVEKIT_URL!, token },
+      livekit: { url: getLiveKitConfig().url!, token },
     } satisfies HuddleJoinResponse);
   });
 
@@ -383,19 +431,21 @@ export function huddlesRoutes(router: Router) {
     const { access, huddle } = await huddleAccess(id, hid, req);
 
     const db = supabaseAdmin();
-    await db
+    const { error: leaveErr } = await db
       .from("huddle_members")
       .update({ left_at: new Date().toISOString() })
       .eq("huddle_id", huddle.id)
       .eq("member_id", access.identity!.id);
+    if (leaveErr) throw leaveErr;
 
     const count = await participantCount(huddle.livekit_room);
     if (count === 0 && !huddle.ended_at) {
-      await db
+      const { error: endErr } = await db
         .from("huddles")
         .update({ ended_at: new Date().toISOString() })
         .eq("id", huddle.id)
         .is("ended_at", null);
+      if (endErr) throw endErr;
       await closeRoom(huddle.livekit_room);
     }
 
@@ -446,10 +496,11 @@ export function huddlesRoutes(router: Router) {
       invited_at: nowIso,
     }));
 
-    await db.from("huddle_members").upsert(inviteRows, {
+    const { error: invErr } = await db.from("huddle_members").upsert(inviteRows, {
       onConflict: "huddle_id,member_id",
       ignoreDuplicates: true,
     });
+    if (invErr) throw invErr;
 
     await pingHuddles(id);
     res.json({ ok: true });
@@ -473,11 +524,12 @@ export function huddlesRoutes(router: Router) {
     }
 
     const db = supabaseAdmin();
-    await db
+    const { error: delErr } = await db
       .from("huddle_members")
       .delete()
       .eq("huddle_id", huddle.id)
       .eq("member_id", memberId);
+    if (delErr) throw delErr;
 
     await removeFromRoom(huddle.livekit_room, memberId);
     await pingHuddles(id);
@@ -496,15 +548,167 @@ export function huddlesRoutes(router: Router) {
 
     if (!huddle.ended_at) {
       const db = supabaseAdmin();
-      await db
+      const { error: endErr } = await db
         .from("huddles")
         .update({ ended_at: new Date().toISOString() })
         .eq("id", huddle.id)
         .is("ended_at", null);
+      if (endErr) throw endErr;
       await closeRoom(huddle.livekit_room);
       await pingHuddles(id);
     }
 
     res.json({ ok: true });
+  });
+
+  // POST /api/rooms/:id/huddles/:hid/segments: batch of final captions.
+  router.post("/:id/huddles/:hid/segments", ensureLiveKit, segmentsPerIp, optionalAuth, async (req, res) => {
+    const id = req.params.id as string;
+    const hid = req.params.hid as string;
+    const body = PostSegmentsRequest.parse(req.body ?? {});
+    const { access, huddle, member } = await huddleAccess(id, hid, req);
+
+    if (!canPostSegments(access.role, Boolean(member), huddle.ended_at)) {
+      throw new HttpError(403, "You cannot post captions to this huddle.");
+    }
+
+    const callerName = getCallerName(access, req);
+    const minTime = new Date(huddle.started_at).getTime();
+    const maxTime = Date.now() + 5000;
+
+    const clampTime = (iso: string): string => {
+      const ms = new Date(iso).getTime();
+      const clamped = Math.min(Math.max(ms, minTime), maxTime);
+      return new Date(clamped).toISOString();
+    };
+
+    const allowedDocs = new Set(await roomScope(id, access.identity));
+    const rows = body.segments.map((s) => {
+      let doc: string | null = null;
+      let block: string | null = null;
+      if (s.focus && allowedDocs.has(s.focus.doc) && /^[a-z]\d{1,6}$/.test(s.focus.block)) {
+        doc = s.focus.doc;
+        block = s.focus.block;
+      }
+      const startAt = clampTime(s.start_at);
+      let endAt = clampTime(s.end_at);
+      if (new Date(startAt).getTime() > new Date(endAt).getTime()) {
+        endAt = startAt;
+      }
+      return {
+        huddle_id: hid,
+        id: s.id,
+        speaker_id: access.identity!.id,
+        speaker_name: member?.name || callerName,
+        text: s.text,
+        start_at: startAt,
+        end_at: endAt,
+        doc,
+        block,
+      };
+    });
+
+    const db = supabaseAdmin();
+    const { error: segErr } = await db
+      .from("huddle_segments")
+      .upsert(rows, { onConflict: "huddle_id,id", ignoreDuplicates: true });
+    if (segErr) throw segErr;
+
+    const focusRows = rows
+      .filter((r) => r.doc && r.block)
+      .map((r) => ({
+        huddle_id: hid,
+        member_id: access.identity!.id,
+        doc: r.doc as string,
+        block: r.block as string,
+      }));
+    if (focusRows.length > 0) {
+      const { error: focusErr } = await db.from("huddle_focus").insert(focusRows);
+      if (focusErr) throw focusErr;
+    }
+
+    res.json({ ok: true });
+  });
+
+  // POST /api/rooms/:id/huddles/:hid/focus: updates visible block for notes.
+  router.post("/:id/huddles/:hid/focus", ensureLiveKit, segmentsPerIp, optionalAuth, async (req, res) => {
+    const id = req.params.id as string;
+    const hid = req.params.hid as string;
+    const body = HuddleFocusRequest.parse(req.body ?? {});
+    const { access, huddle } = await huddleAccess(id, hid, req);
+
+    if (huddle.ended_at) {
+      throw new HttpError(400, "Huddle has already ended.");
+    }
+
+    const allowedDocs = new Set(await roomScope(id, access.identity));
+    if (!allowedDocs.has(body.doc) || !/^[a-z]\d{1,6}$/.test(body.block)) {
+      throw new HttpError(400, "Invalid doc or block.");
+    }
+
+    const db = supabaseAdmin();
+    const { error } = await db.from("huddle_focus").insert({
+      huddle_id: hid,
+      member_id: access.identity!.id,
+      doc: body.doc,
+      block: body.block,
+    });
+    if (error) throw error;
+
+    res.json({ ok: true });
+  });
+
+  // GET /api/rooms/:id/huddles/:hid/transcript: paged transcript segments.
+  router.get("/:id/huddles/:hid/transcript", ensureLiveKit, optionalAuth, async (req, res) => {
+    const id = req.params.id as string;
+    const hid = req.params.hid as string;
+    const query = HuddleTranscriptQuery.parse(req.query);
+    const access = await roomAccess(id, req);
+    assertReader(access);
+
+    const db = supabaseAdmin();
+    const { data: huddle, error: huddleErr } = await db
+      .from("huddles")
+      .select("*")
+      .eq("id", hid)
+      .eq("room_id", id)
+      .maybeSingle();
+    if (huddleErr) throw huddleErr;
+    if (!huddle) throw new HttpError(404, "Huddle not found");
+
+    if (huddle.audience === "private") {
+      if (!access.identity) {
+        throw new HttpError(404, "Huddle not found");
+      }
+      const { data: member, error: memberErr } = await db
+        .from("huddle_members")
+        .select("member_id")
+        .eq("huddle_id", hid)
+        .eq("member_id", access.identity.id)
+        .maybeSingle();
+      if (memberErr) throw memberErr;
+      if (!member) {
+        throw new HttpError(404, "Huddle not found");
+      }
+    }
+
+    const { data: rows, error: segErr } = await db
+      .from("huddle_segments")
+      .select("seq, id, speaker_id, speaker_name, text, start_at, end_at, doc, block")
+      .eq("huddle_id", hid)
+      .gt("seq", query.after)
+      .order("seq", { ascending: true })
+      .limit(query.limit);
+    if (segErr) throw segErr;
+
+    const segments = (rows ?? []).map((r) => ({
+      ...r,
+      seq: Number(r.seq),
+    })) as HuddleTranscriptSegment[];
+
+    res.json({
+      segments,
+      next: segments.length === query.limit ? segments.at(-1)!.seq : null,
+    } satisfies HuddleTranscriptResponse);
   });
 }

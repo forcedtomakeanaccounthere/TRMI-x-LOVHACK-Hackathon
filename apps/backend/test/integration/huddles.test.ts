@@ -50,6 +50,7 @@ beforeAll(async () => {
     AUTH_RATE_LIMIT: "1000",
     LEDGER_RATE_LIMIT: "10000",
     HUDDLE_RATE_LIMIT: "1000",
+    HUDDLE_SEGMENT_RATE_LIMIT: "1000",
     AI_SERVICE_URL: ai.url,
     AI_INTERNAL_TOKEN: ai.token,
     LIVEKIT_URL: fakeLiveKit.url,
@@ -287,5 +288,367 @@ describe("voice huddles", () => {
       (c) => c.path.endsWith("RemoveParticipant") && c.body.identity === bob.id && c.body.room === livekitRoom,
     );
     expect(removeCalls).toHaveLength(1);
+  });
+
+  it("story: kicked member and guests-disallowed room cannot create huddle", async () => {
+    const roomId = await newRoom();
+    const alice = asUser(owner, "Alice");
+    const bob = asUser(member, "Bob");
+    const guestUser = asGuest("Grace");
+
+    // Bob writes so he is a known member
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(bob.headers)
+      .send({ events: [event(bob, { type: "chat", message: { id: "m4", text: "Hello", author: actor(bob), at: at() } })] });
+
+    // Alice kicks Bob
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(alice.headers)
+      .send({ events: [event(alice, { type: "member.kick", member: bob.id, name: bob.name })] });
+
+    // Kicked member POST /huddles {audience:"all"} -> 403 "You were removed from this room."
+    const kickedCreate = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(bob.headers)
+      .send({ audience: "all" });
+    expect(kickedCreate.status).toBe(403);
+    expect(kickedCreate.body.error).toBe("You were removed from this room.");
+
+    // Alice disallows guests in room settings
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(alice.headers)
+      .send({ events: [event(alice, { type: "settings.update", patch: { allowGuests: false } })] });
+
+    // Guest POST /huddles -> 403
+    const guestCreate = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(guestUser.headers)
+      .send({ audience: "all" });
+    expect(guestCreate.status).toBe(403);
+  });
+
+  it("story: a new guest joining with name Gita gets a token whose name claim is Gita", async () => {
+    const roomId = await newRoom();
+    const alice = asUser(owner, "Alice");
+
+    const huddleRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(alice.headers)
+      .send({ audience: "all" });
+    const hid = huddleRes.body.huddle.id as string;
+
+    const gita = asGuest("Gita");
+    const joinRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/join`)
+      .set(gita.headers)
+      .send({ name: "Gita" });
+    expect(joinRes.status).toBe(200);
+
+    const decoded = decodeJwt(joinRes.body.livekit.token);
+    expect(decoded.name).toBe("Gita");
+
+    // A known member joining with a requested name retains their stored name
+    const bob = asUser(member, "Bob");
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(bob.headers)
+      .send({ events: [event(bob, { type: "chat", message: { id: "m5", text: "Bob here", author: actor(bob), at: at() } })] });
+
+    const bobJoin = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/join`)
+      .set(bob.headers)
+      .send({ name: "Robert" });
+    expect(bobJoin.status).toBe(200);
+    const bobDecoded = decodeJwt(bobJoin.body.livekit.token);
+    expect(bobDecoded.name).toBe("Bob");
+  });
+
+  it("story: list huddles respects limit(10) after visibility filtering", async () => {
+    const roomId = await newRoom();
+    const alice = asUser(owner, "Alice");
+    const bob = asUser(member, "Bob");
+    const charlie = asGuest("Charlie");
+
+    // Bob writes to become known member
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(bob.headers)
+      .send({ events: [event(bob, { type: "chat", message: { id: "m6", text: "Init", author: actor(bob), at: at() } })] });
+
+    const { supabaseAdmin } = await import("../../src/lib/supabase");
+    const db = supabaseAdmin();
+
+    // Create 15 ended huddles: 12 private (between Alice and Bob) and 3 room-wide
+    const now = Date.now();
+    for (let i = 0; i < 12; i++) {
+      const hid = `h_priv_${i}_${Date.now()}`;
+      await db.from("huddles").insert({
+        id: hid,
+        room_id: roomId,
+        livekit_room: `lr_${roomId}_${hid}`,
+        audience: "private",
+        created_by: alice.id,
+        created_by_name: "Alice",
+        started_at: new Date(now - 100_000 + i * 1000).toISOString(),
+        ended_at: new Date(now - 50_000 + i * 1000).toISOString(),
+        notes_status: "none",
+      });
+      await db.from("huddle_members").insert({
+        huddle_id: hid,
+        member_id: alice.id,
+        name: "Alice",
+      });
+    }
+
+    for (let i = 0; i < 3; i++) {
+      const hid = `h_pub_${i}_${Date.now()}`;
+      await db.from("huddles").insert({
+        id: hid,
+        room_id: roomId,
+        livekit_room: `lr_${roomId}_${hid}`,
+        audience: "all",
+        created_by: alice.id,
+        created_by_name: "Alice",
+        started_at: new Date(now - 200_000 + i * 1000).toISOString(),
+        ended_at: new Date(now - 150_000 + i * 1000).toISOString(),
+        notes_status: "none",
+      });
+    }
+
+    // Charlie (not in the private huddles) queries GET /huddles
+    const listRes = await request(app)
+      .get(`/api/rooms/${roomId}/huddles`)
+      .set(charlie.headers);
+    expect(listRes.status).toBe(200);
+    // Should receive all 3 room-wide huddles, not 0
+    const publicHuddles = listRes.body.huddles.filter((h: { audience: string }) => h.audience === "all");
+    expect(publicHuddles.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("story: caption segments, member focus and transcript user stories", async () => {
+    const roomId = await newRoom();
+    const alice = asUser(owner, "Alice");
+    const bob = asUser(member, "Bob");
+
+    // Alice starts all huddle
+    const huddleRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(alice.headers)
+      .send({ audience: "all" });
+    const hid = huddleRes.body.huddle.id as string;
+    const huddleStartedAt = new Date(huddleRes.body.huddle.started_at).getTime();
+
+    // 1. Editor posts captions and reads them back in order
+    const seg1Time = new Date(huddleStartedAt + 1000).toISOString();
+    const seg2Time = new Date(huddleStartedAt + 2000).toISOString();
+    const seg3Time = new Date(huddleStartedAt + 3000).toISOString();
+
+    const postRes1 = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_1",
+            text: "Hello everyone",
+            start_at: seg1Time,
+            end_at: seg2Time,
+            focus: { doc: roomId, block: "p1" },
+          },
+          {
+            id: "seg_2",
+            text: "Welcome to the meeting",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: { doc: roomId, block: "p2" },
+          },
+        ],
+      });
+    expect(postRes1.status).toBe(200);
+
+    // Read back in order
+    const transcript1 = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${hid}/transcript?after=0`)
+      .set(alice.headers);
+    expect(transcript1.status).toBe(200);
+    expect(transcript1.body.segments).toHaveLength(2);
+    expect(transcript1.body.segments[0].id).toBe("seg_1");
+    expect(transcript1.body.segments[1].id).toBe("seg_2");
+    expect(transcript1.body.segments[0].text).toBe("Hello everyone");
+    expect(transcript1.body.segments[1].text).toBe("Welcome to the meeting");
+    expect(transcript1.body.segments[0].seq).toBeLessThan(transcript1.body.segments[1].seq);
+
+    // Verify huddle_focus has speaker's focus appended
+    const { supabaseAdmin } = await import("../../src/lib/supabase");
+    const db = supabaseAdmin();
+    const { data: focusRows } = await db.from("huddle_focus").select("*").eq("huddle_id", hid);
+    expect(focusRows).toBeDefined();
+    expect(focusRows!.length).toBeGreaterThanOrEqual(2);
+
+    // 2. Speaker_id is the caller even if the body tries to set another
+    const postResSpoof = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_spoof",
+            speaker_id: "bob-spoofed-id",
+            text: "Spoof attempt",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: null,
+          },
+        ],
+      });
+    expect(postResSpoof.status).toBe(200);
+
+    const transcriptSpoof = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${hid}/transcript?after=0`)
+      .set(alice.headers);
+    const spoofedSeg = transcriptSpoof.body.segments.find((s: { id: string }) => s.id === "seg_spoof");
+    expect(spoofedSeg).toBeDefined();
+    expect(spoofedSeg.speaker_id).toBe(alice.id);
+
+    // 3. Viewer posting -> 403
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(alice.headers)
+      .send({ events: [event(alice, { type: "settings.update", patch: { guestRole: "viewer" } })] });
+
+    const victor = asGuest("Victor");
+    await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/join`)
+      .set(victor.headers);
+
+    const viewerPost = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(victor.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_viewer",
+            text: "I am a viewer trying to speak",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: null,
+          },
+        ],
+      });
+    expect(viewerPost.status).toBe(403);
+
+    // 4. A retried segment id is stored once
+    const retryRes1 = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_retry",
+            text: "Original retry text",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: null,
+          },
+        ],
+      });
+    expect(retryRes1.status).toBe(200);
+
+    const retryRes2 = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_retry",
+            text: "Second retry text",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: null,
+          },
+        ],
+      });
+    expect(retryRes2.status).toBe(200);
+
+    const transcriptRetry = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${hid}/transcript?after=0`)
+      .set(alice.headers);
+    const retrySegs = transcriptRetry.body.segments.filter((s: { id: string }) => s.id === "seg_retry");
+    expect(retrySegs).toHaveLength(1);
+    expect(retrySegs[0].text).toBe("Original retry text");
+
+    // 5. Focus on a doc outside the room is dropped (stored as null)
+    const outsideFocusRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_outside",
+            text: "Caption with external doc focus",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: { doc: "other_room_non_existent", block: "p1" },
+          },
+        ],
+      });
+    expect(outsideFocusRes.status).toBe(200);
+
+    const transcriptOutside = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${hid}/transcript?after=0`)
+      .set(alice.headers);
+    const outsideSeg = transcriptOutside.body.segments.find((s: { id: string }) => s.id === "seg_outside");
+    expect(outsideSeg).toBeDefined();
+    expect(outsideSeg.doc).toBeNull();
+    expect(outsideSeg.block).toBeNull();
+
+    // 6. Non-member reading a private huddle's transcript -> 404
+    await request(app)
+      .post(`/api/rooms/${roomId}/events`)
+      .set(bob.headers)
+      .send({ events: [event(bob, { type: "chat", message: { id: "m7", text: "Bob active", author: actor(bob), at: at() } })] });
+
+    const privateRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles`)
+      .set(alice.headers)
+      .send({ audience: "private", members: [bob.id] });
+    expect(privateRes.status).toBe(201);
+    const privHid = privateRes.body.huddle.id as string;
+
+    const charlie = asGuest("Charlie");
+    const nonMemberRead = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${privHid}/transcript?after=0`)
+      .set(charlie.headers);
+    expect(nonMemberRead.status).toBe(404);
+
+    const memberRead = await request(app)
+      .get(`/api/rooms/${roomId}/huddles/${privHid}/transcript?after=0`)
+      .set(bob.headers);
+    expect(memberRead.status).toBe(200);
+
+    // 7. Posting 61 s after end -> 403
+    await db
+      .from("huddles")
+      .update({ ended_at: new Date(Date.now() - 61_000).toISOString() })
+      .eq("id", hid);
+
+    const latePostRes = await request(app)
+      .post(`/api/rooms/${roomId}/huddles/${hid}/segments`)
+      .set(alice.headers)
+      .send({
+        segments: [
+          {
+            id: "seg_too_late",
+            text: "61 seconds after huddle ended",
+            start_at: seg2Time,
+            end_at: seg3Time,
+            focus: null,
+          },
+        ],
+      });
+    expect(latePostRes.status).toBe(403);
   });
 });
