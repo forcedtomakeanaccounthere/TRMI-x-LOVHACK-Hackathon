@@ -10,10 +10,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { Avatar } from "./bits";
 import { AddSourceDialog } from "./add-source-dialog";
 import { docIcon } from "./library";
 import { useRoom } from "./store";
+import type { Peer } from "./use-room-channel";
 
 // Left rail, like NotebookLM's Sources: every document in the room, ticked ones feed the AI and Studio.
 export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
@@ -28,10 +31,40 @@ export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
   const readers = (id: string) => channel.peers.filter((p) => p.doc === id);
   const addedBy = (id: string) => events.find((e) => e.type === "doc.add" && e.doc.id === id)?.actor.id;
 
+  // Mini presence map
+  const [showPresenceMap, setShowPresenceMap] = useState(false);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 px-4 pt-4 pb-3">
         <h2 className="eyebrow flex-1 text-[0.625rem] text-muted-foreground">Sources</h2>
+        <button
+          type="button"
+          onClick={() => setShowPresenceMap(!showPresenceMap)}
+          aria-label={showPresenceMap ? "Hide readers" : "Show readers"}
+          className={cn(
+            "grid size-7 place-items-center rounded-lg text-muted-foreground transition hover:bg-foreground/6 hover:text-foreground",
+            showPresenceMap && "bg-azure/10 text-azure",
+          )}
+        >
+          <motion.svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            animate={{ rotate: showPresenceMap ? 180 : 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <path
+              d="M12 6L8 10L4 6"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </motion.svg>
+        </button>
         {onCollapse && (
           <button
             type="button"
@@ -43,6 +76,39 @@ export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
           </button>
         )}
       </div>
+
+      {showPresenceMap && channel.peers.length > 0 && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: "auto", opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          className="mx-3 mb-3 overflow-hidden rounded-xl bg-card ring-1 ring-(--hairline)"
+        >
+          <div className="p-2.5">
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <span className="text-[0.625rem] font-semibold text-foreground/70">Active Readers</span>
+              <span className="text-[0.625rem] text-muted-foreground">{channel.peers.length}</span>
+            </div>
+            <div className="space-y-1">
+              {docs.map((doc) => {
+                const here = readers(doc.id);
+                if (here.length === 0) return null;
+                const Icon = docIcon(doc);
+                return (
+                  <div key={doc.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-foreground/4">
+                    <span className="grid size-6 shrink-0 place-items-center rounded-md bg-foreground/5 text-muted-foreground">
+                      <Icon className="size-3" />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[0.75rem] font-medium">{doc.title}</span>
+                    {/* Opens their document at the exact spot they are reading (asks them if it isn't known yet). */}
+                    <PresenceAvatars peers={here} onNavigate={actions.goToReader} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       <div className="px-3">
         <button
@@ -161,5 +227,48 @@ export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
       </ul>
       <AddSourceDialog open={adding} onOpenChange={setAdding} />
     </div>
+  );
+}
+
+// Shows avatars for peers on a document with tooltip
+function PresenceAvatars({ peers, onNavigate }: { peers: Peer[]; onNavigate: (peerId: string) => void }) {
+  if (peers.length === 0) return null;
+
+  if (peers.length === 1) {
+    const peer = peers[0]!;
+    return (
+      <button type="button" onClick={() => onNavigate(peer.id)} className="transition hover:scale-110">
+        <Avatar actor={{ name: peer.name, color: peer.color }} size={20} ring />
+      </button>
+    );
+  }
+
+  const [first, ...rest] = peers;
+  return (
+    <Popover>
+      <PopoverTrigger className="flex items-center -space-x-1.5">
+        <Avatar actor={{ name: first!.name, color: first!.color }} size={20} ring />
+        <span className="grid size-5 place-items-center rounded-full bg-foreground/10 text-[0.625rem] font-bold ring-2 ring-background">
+          +{rest.length}
+        </span>
+      </PopoverTrigger>
+      <PopoverContent side="right" align="start" className="w-auto rounded-xl p-2">
+        <div className="space-y-1">
+          {peers.map((peer) => (
+            <button
+              key={peer.id}
+              type="button"
+              onClick={() => {
+                onNavigate(peer.id);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-foreground/6"
+            >
+              <Avatar actor={{ name: peer.name, color: peer.color }} size={20} />
+              <span className="text-[0.75rem] font-medium">{peer.name}</span>
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

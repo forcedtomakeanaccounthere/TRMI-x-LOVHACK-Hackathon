@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { initials } from "@/components/dashboard/primitives";
 import { cn } from "@/lib/utils";
 import { AiText, Avatar, ByLine, PreviewTag, Thinking, timeAgo } from "./bits";
+import { MentionText, useMentionPicker } from "./mention-composer";
 import { useAwaitingAnswer, useRoom } from "./store";
 import type { Actor, Annotation } from "./types";
 
@@ -91,12 +92,14 @@ export function NoteBox({
   autoEdit: boolean;
   onDrop: (dx: number, dy: number) => void;
 }) {
-  const { actions, perms, focusAnnotation, setFocusAnnotation, readOnly } = useRoom();
+  const { actions, perms, focusAnnotation, setFocusAnnotation, readOnly, mentionables, me } = useRoom();
   // Only the author edits a note, and not once the room is read only.
   // Anyone who can annotate edits any comment (History records who changed whose).
   const mine = perms.annotate && !readOnly;
   const [editing, setEditing] = useState(autoEdit && mine && !note.body);
   const [draft, setDraft] = useState(note.body);
+  const picker = useMentionPicker(draft, setDraft, mentionables);
+  const named = [...mentionables, { id: me.id, name: me.name }];
   const [open, setOpen] = useState(autoEdit || !note.body);
   const canRemove = useCanRemove(note);
   const focused = focusAnnotation === note.id;
@@ -173,17 +176,19 @@ export function NoteBox({
           </div>
           {editing ? (
             <form
-              className="mt-2"
+              className="relative mt-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 save();
               }}
             >
+              {picker.menu}
               <textarea
                 autoFocus
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                {...picker.bind}
                 onKeyDown={(e) => {
+                  if (picker.handleKey(e)) return;
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     save();
@@ -192,7 +197,7 @@ export function NoteBox({
                 }}
                 maxLength={2000}
                 rows={3}
-                placeholder="Write a comment…"
+                placeholder="Write a comment… (@ to mention)"
                 className="w-full resize-none rounded-xl bg-background/60 p-2 text-[0.8125rem] ring-1 ring-(--hairline) outline-none focus:ring-azure/50"
               />
               <div className="mt-1.5 flex justify-end gap-1.5">
@@ -209,7 +214,11 @@ export function NoteBox({
               className={cn("mt-2 text-[0.8125rem] leading-relaxed whitespace-pre-wrap", mine && "cursor-text")}
               onDoubleClick={() => mine && setEditing(true)}
             >
-              {note.body || <span className="text-muted-foreground">Empty comment</span>}
+              {note.body ? (
+                <MentionText text={note.body} people={named} meId={me.id} />
+              ) : (
+                <span className="text-muted-foreground">Empty comment</span>
+              )}
             </p>
           )}
         </motion.div>
