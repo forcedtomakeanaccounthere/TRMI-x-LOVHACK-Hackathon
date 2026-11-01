@@ -1,6 +1,9 @@
+import base64
+import binascii
+import re
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, field_validator, model_validator
 
 # RecapData must match packages/shared/src/schemas.ts. Input limits match the database checks
 # (supabase/migrations 0002 and 0004), so anything apps/backend reads from the database fits.
@@ -130,9 +133,50 @@ class AnswerChunk(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
+# An AI box's passage, earlier turns of its conversation, and an AI-lens snapshot (a data URL).
+MAX_QUOTE_CHARS = 1000
+MAX_HISTORY_TURNS = 8
+MAX_HISTORY_CHARS = 1000
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_DATA_URL = re.compile(r"^data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$")
+
+
+class HistoryTurn(BaseModel):
+    role: Literal["user", "ai"]
+    text: str = Field(min_length=1, max_length=MAX_HISTORY_CHARS)
+
+
 class AnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
-    chunks: list[AnswerChunk] = Field(min_length=1, max_length=MAX_ANSWER_CHUNKS)
+    # Empty only when an image is sent: a snapshot question may have no matching text.
+    chunks: list[AnswerChunk] = Field(default=[], max_length=MAX_ANSWER_CHUNKS)
+    quote: str | None = Field(default=None, max_length=MAX_QUOTE_CHARS)
+    history: list[HistoryTurn] = Field(default=[], max_length=MAX_HISTORY_TURNS)
+    image: str | None = None
+
+    @field_validator("image")
+    @classmethod
+    def _image_is_a_small_picture(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        match = IMAGE_DATA_URL.match(value)
+        if not match:
+            raise ValueError("image must be a JPEG, PNG or WebP data URL")
+        try:
+            data = base64.b64decode(match.group(2), validate=False)
+        except (binascii.Error, ValueError) as e:
+            raise ValueError("image is not valid base64") from e
+        if not data:
+            raise ValueError("image is empty")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValueError("image is larger than 5 MB")
+        return value
+
+    @model_validator(mode="after")
+    def _something_to_answer_from(self) -> "AnswerRequest":
+        if not self.chunks and not self.image:
+            raise ValueError("send at least one chunk, or an image")
+        return self
 
 
 class Citation(BaseModel):

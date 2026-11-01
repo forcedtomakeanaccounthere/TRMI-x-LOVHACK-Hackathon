@@ -113,19 +113,36 @@ def _extract_json(text: str) -> str:
     return text[start : end + 1]
 
 
+def split_data_url(url: str) -> tuple[str, str]:
+    """("image/jpeg", "<base64>") from a data URL that app/schemas.py already checked."""
+    head, data = url.split(",", 1)
+    return head.removeprefix("data:").removesuffix(";base64"), "".join(data.split())
+
+
 async def _complete_openai_compatible[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T], timeout: float
+    provider: Provider,
+    system: str,
+    user: str,
+    schema: type[T],
+    timeout: float,
+    images: list[str] | None = None,
 ) -> T:
     system += (
         "\n\nRespond with only a JSON object (no markdown, no extra text) matching this "
         f"JSON Schema:\n{json.dumps(schema.model_json_schema())}"
     )
+    content: str | list[dict] = user
+    if images:
+        content = [
+            {"type": "text", "text": user},
+            *({"type": "image_url", "image_url": {"url": url}} for url in images),
+        ]
     client = _openai_client(provider.name, provider.api_key).with_options(timeout=timeout)
     response = await client.chat.completions.create(
         model=provider.model,
         max_tokens=MAX_TOKENS,
         response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
     )
     choice = response.choices[0]
     if not choice.message.content:
@@ -134,8 +151,21 @@ async def _complete_openai_compatible[T: BaseModel](
 
 
 async def _complete_anthropic[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T], timeout: float
+    provider: Provider,
+    system: str,
+    user: str,
+    schema: type[T],
+    timeout: float,
+    images: list[str] | None = None,
 ) -> T:
+    content: str | list[dict] = user
+    if images:
+        blocks = []
+        for url in images:
+            media_type, data = split_data_url(url)
+            source = {"type": "base64", "media_type": media_type, "data": data}
+            blocks.append({"type": "image", "source": source})
+        content = [*blocks, {"type": "text", "text": user}]
     client = _anthropic_client(provider.api_key).with_options(timeout=timeout)
     response = await client.beta.messages.parse(
         model=provider.model,
@@ -146,7 +176,7 @@ async def _complete_anthropic[T: BaseModel](
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
         system=system,
-        messages=[{"role": "user", "content": user}],
+        messages=[{"role": "user", "content": content}],
     )
     if response.stop_reason == "refusal" or response.parsed_output is None:
         raise ProviderError(f"no output (stop_reason={response.stop_reason})")
@@ -154,9 +184,21 @@ async def _complete_anthropic[T: BaseModel](
 
 
 async def complete_json[T: BaseModel](
-    provider: Provider, system: str, user: str, schema: type[T], timeout: float
+    provider: Provider,
+    system: str,
+    user: str,
+    schema: type[T],
+    timeout: float,
+    images: list[str] | None = None,
 ) -> T:
-    """Ask one provider for a JSON answer validated against `schema`, within `timeout` seconds."""
+    """Ask one provider for a JSON answer validated against `schema`, within `timeout` seconds.
+    `images` (data URLs) go with the user message; only send them to a vision model."""
     if provider.name == "anthropic":
-        return await _complete_anthropic(provider, system, user, schema, timeout)
-    return await _complete_openai_compatible(provider, system, user, schema, timeout)
+        return await _complete_anthropic(provider, system, user, schema, timeout, images)
+    return await _complete_openai_compatible(provider, system, user, schema, timeout, images)
+
+
+def vision_providers(providers: list[Provider]) -> list[Provider]:
+    """The providers whose model can read images (VISION_MODELS)."""
+    vision = set(_split(get_settings().vision_models))
+    return [p for p in providers if p.model in vision]

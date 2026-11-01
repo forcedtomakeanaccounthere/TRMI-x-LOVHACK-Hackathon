@@ -17,7 +17,12 @@ beforeEach(() => {
   resetState();
   // Every request reads the room and its AI state; nothing matches, so no AI answer is needed.
   state.results.rooms = Array.from({ length: 10 }, () => ({ data: { status: "running" } }));
-  state.results.room_ai = Array.from({ length: 10 }, () => ({ data: { status: "ready" } }));
+  state.results.room_ai = Array.from({ length: 10 }, () => ({
+    data: [
+      { room_id: "roomAAAA", status: "ready" },
+      { room_id: "roomBBBB", status: "ready" },
+    ],
+  }));
   callAi.mockImplementation(async (path: string) => (path === "/moderate" ? { flagged: [] } : { model: "m", vectors: [[1]] }));
 });
 

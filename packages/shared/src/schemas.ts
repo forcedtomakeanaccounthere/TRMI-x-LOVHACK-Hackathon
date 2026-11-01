@@ -132,7 +132,15 @@ export type RoomSummary = z.infer<typeof RoomSummary>;
 // The answer when the room's document doesn't answer a question (apps/ai/app/services/answer.py).
 export const NOT_IN_DOCUMENT = "I couldn't find that in this document.";
 
-// The name works like RecapRequest's: optional, and a blank one counts as none.
+// The most documents one question can be asked of: the room and its attached sources.
+export const MAX_ASK_SOURCES = 10;
+// An AI-lens snapshot as a data URL, kept under the 1 MB request limit.
+export const MAX_ASK_IMAGE_CHARS = 750_000;
+
+// The name works like RecapRequest's: optional, and a blank one counts as none. The rest is the room
+// workspace's context: which documents to answer from (default: the room itself), the passage an AI
+// box was opened on, the box's earlier turns, and a lens snapshot. Long passages and turns are cut
+// rather than refused, since the browser sends what is on screen.
 export const AskRequest = z.object({
   question: z.string().trim().min(1, "Ask a question first").max(500),
   name: z
@@ -141,6 +149,21 @@ export const AskRequest = z.object({
     .max(40)
     .optional()
     .transform((name) => name || undefined),
+  sources: z.array(z.string().min(1).max(64)).min(1).max(MAX_ASK_SOURCES).optional(),
+  quote: z
+    .string()
+    .nullish()
+    .transform((quote) => quote?.replace(/\s+/g, " ").trim().slice(0, 1000) || undefined),
+  history: z
+    .array(z.object({ role: z.enum(["user", "ai"]), text: z.string().trim().min(1).transform((t) => t.slice(0, 1000)) }))
+    .optional()
+    .transform((turns) => (turns?.length ? turns.slice(-8) : undefined)),
+  image: z
+    .string()
+    .max(MAX_ASK_IMAGE_CHARS, "The snapshot is too large")
+    .regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/, "The snapshot must be a JPEG, PNG or WebP image")
+    .nullish()
+    .transform((image) => image ?? undefined),
 });
 export type AskRequest = z.infer<typeof AskRequest>;
 
@@ -163,6 +186,7 @@ export const ANSWER_WITHHELD = "This answer was withheld because it may break th
 // A checked citation as saved and shown: where in the room the quote is. Page and times come from
 // the chunk, never from the model.
 export const AiCitation = z.object({
+  room_id: z.string().optional(), // which document, when a question was asked of several
   quote: z.string(),
   block_ids: z.array(z.string()),
   page: z.number().int().nullable(),
