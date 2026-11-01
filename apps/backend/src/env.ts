@@ -42,6 +42,14 @@ const Env = z
     VAPID_PRIVATE_KEY: optional(z.string()),
     // Contact for push services, e.g. `mailto:you@example.com`.
     VAPID_SUBJECT: optional(z.string()),
+    // LiveKit Cloud / self-hosted LiveKit server for voice huddles. Optional.
+    LIVEKIT_URL: optional(z.string()),
+    LIVEKIT_API_KEY: optional(z.string()),
+    LIVEKIT_API_SECRET: optional(z.string()),
+    // Joins and creates per IP per minute.
+    HUDDLE_RATE_LIMIT: z.coerce.number().int().positive().default(20),
+    // Caption segment posts per IP per minute.
+    HUDDLE_SEGMENT_RATE_LIMIT: z.coerce.number().int().positive().default(120),
   })
   .superRefine((env, ctx) => {
     // In dev the server boots without Supabase so /health works; in production fail fast.

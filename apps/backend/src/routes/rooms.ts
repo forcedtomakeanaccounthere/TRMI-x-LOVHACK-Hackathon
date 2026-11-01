@@ -60,6 +60,7 @@ import { ledgerRoutes } from "./ledger";
 import { sourcesRoutes } from "./sources";
 import { artifactsRoutes } from "./artifacts";
 import { notebookRoutes } from "./notebook";
+import { huddlesRoutes } from "./huddles";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -1344,3 +1345,5 @@ sourcesRoutes(roomsRouter);
 artifactsRoutes(roomsRouter, [askPerIp, askPerRoom]);
 // Shared notebook: GET/POST /:id/notebook (routes/notebook.ts).
 notebookRoutes(roomsRouter);
+// Voice huddles: /:id/huddles (routes/huddles.ts).
+huddlesRoutes(roomsRouter);
