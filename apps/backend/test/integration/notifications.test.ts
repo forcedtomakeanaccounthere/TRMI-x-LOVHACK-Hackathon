@@ -142,27 +142,30 @@ describe("mentioning someone whose tab is closed", () => {
 });
 
 describe("mentioning someone who is in the room", () => {
-  it("Ben gets a realtime toast meant for him and no email", async () => {
-    // The fault proxy forwards HTTP only, so the listener's websocket goes to Supabase directly.
-    const listener = createClient(supabase.directUrl, supabase.anonKey, { auth: { persistSession: false } });
-    const received: unknown[] = [];
-    const channel = listener.channel(`room:${roomId}`, { config: { broadcast: { self: false } } });
-    channel.on("broadcast", { event: "notify" }, ({ payload }) => received.push(payload));
-    await new Promise<void>((resolve) => channel.subscribe((s) => s === "SUBSCRIBED" && resolve()));
-
+  it("Ben gets it in his bell and no email", async () => {
     const before = (await supabase.inbox(online.email)).length;
     const res = await mention(owner, [online], "@Ben look here");
     expect(res.body).toEqual({ notified: 1 });
 
-    await waitFor(async () => received.length, (len) => len > 0);
-    expect(received).toEqual([
-      { user_id: online.id, room_id: roomId, title: "Chapter 3", body: "@Ben look here", actor_name: "Ana" },
-    ]);
-    await listener.removeChannel(channel);
-
-    expect((await supabase.inbox(online.email)).length).toBe(before);
     const inbox = await request(app).get("/api/notifications").set(auth(online));
     expect(inbox.body.notifications[0]).toMatchObject({ body: "@Ben look here", actor_name: "Ana" });
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await supabase.inbox(online.email)).length).toBe(before);
+  });
+
+  it("the toast for Ben reaches the room's realtime channel", async (ctx) => {
+    const listener = await supabase.listenForToasts(roomId);
+    if (!listener) return ctx.skip("Realtime isn't running (supabase start -x realtime)");
+    try {
+      const res = await mention(owner, [online], "@Ben over here");
+      expect(res.body).toEqual({ notified: 1 });
+      await waitFor(async () => listener.received.length, (len) => len > 0);
+      expect(listener.received).toEqual([
+        { user_id: online.id, room_id: roomId, title: "Chapter 3", body: "@Ben over here", actor_name: "Ana" },
+      ]);
+    } finally {
+      await listener.close();
+    }
   });
 });
 

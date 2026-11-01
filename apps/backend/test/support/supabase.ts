@@ -70,6 +70,35 @@ export async function connectSupabase() {
     async expireVerificationLink(email: string) {
       await sql`update auth.users set confirmation_sent_at = now() - interval '1 day' where email = ${email}`;
     },
+    // Listens to a room's realtime channel for the backend's `notify` toasts. Null when Realtime
+    // isn't running (CI starts Supabase with `-x realtime`), so tests can skip just that check.
+    async listenForToasts(roomId: string, timeoutMs = 5_000) {
+      // The fault proxy forwards HTTP only, so the websocket goes to Supabase directly.
+      const client = createClient(local.url, local.anonKey, { auth: { persistSession: false } });
+      const received: Record<string, unknown>[] = [];
+      const channel = client.channel(`room:${roomId}`, { config: { broadcast: { self: false } } });
+      channel.on("broadcast", { event: "notify" }, ({ payload }) => received.push(payload));
+      const subscribed = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), timeoutMs);
+        channel.subscribe((state) => {
+          if (state === "SUBSCRIBED") {
+            clearTimeout(timer);
+            resolve(true);
+          } else if (state === "CHANNEL_ERROR" || state === "TIMED_OUT" || state === "CLOSED") {
+            clearTimeout(timer);
+            resolve(false);
+          }
+        });
+      });
+      const close = async () => {
+        await client.removeAllChannels();
+      };
+      if (!subscribed) {
+        await close();
+        return null;
+      }
+      return { received, close };
+    },
     // Emails to `email` (subject and plain text), oldest first: for mails other than verification.
     async inbox(email: string) {
       const query = encodeURIComponent(`to:"${email}"`);

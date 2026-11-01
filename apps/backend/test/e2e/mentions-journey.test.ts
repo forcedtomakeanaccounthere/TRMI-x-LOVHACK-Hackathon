@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startBackend, WEB, type Backend } from "../support/backend-process";
 import { startFakeAi, type FakeAi } from "../support/fake-ai";
@@ -83,23 +82,25 @@ describe("Mentions E2E journey", () => {
     // He follows the link back: the room page heartbeats, which makes him present.
     expect((await be.post(`/api/rooms/${roomId}/heartbeat`, {}, max.access_token)).status).toBe(200);
 
-    // Her next mention is a toast in the room, not another email.
-    const listener = createClient(be.supabase.directUrl, be.supabase.anonKey, { auth: { persistSession: false } });
-    const toasts: { user_id: string; body: string; actor_name: string }[] = [];
-    const channel = listener.channel(`room:${roomId}`, { config: { broadcast: { self: false } } });
-    channel.on("broadcast", { event: "notify" }, ({ payload }) => toasts.push(payload as (typeof toasts)[number]));
-    await new Promise<void>((resolve) => channel.subscribe((s) => s === "SUBSCRIBED" && resolve()));
+    // Her next mention is a toast in the room, not another email. The toast itself is checked
+    // where Realtime runs (CI starts Supabase without it).
+    const listener = await be.supabase.listenForToasts(roomId);
+    const toasts = (listener?.received ?? []) as { user_id: string; body: string; actor_name: string }[];
 
     const second = await tag({ id: olivia.user.id, name: "Olivia" }, "chat-e2e-2", "@Max welcome back", olivia.access_token);
     expect(await second.json()).toEqual({ notified: 1 });
-    await until(async () => toasts.length, (n) => n > 0);
-    expect(toasts).toEqual([expect.objectContaining({ user_id: max.user.id, body: "@Max welcome back", actor_name: "Olivia" })]);
+    if (listener) {
+      await until(async () => toasts.length, (n) => n > 0);
+      expect(toasts).toEqual([expect.objectContaining({ user_id: max.user.id, body: "@Max welcome back", actor_name: "Olivia" })]);
+    }
 
     // A guest in the room tags him too (guests announce without an account).
     const guest = await tag({ id: `guest-${randomBytes(4).toString("hex")}`, name: "Gus" }, "chat-e2e-3", "@Max hi from Gus");
     expect(await guest.json()).toEqual({ notified: 1 });
-    await until(async () => toasts.length, (n) => n > 1);
-    await listener.removeChannel(channel);
+    if (listener) {
+      await until(async () => toasts.length, (n) => n > 1);
+      await listener.close();
+    }
 
     // Only the first mention was emailed.
     await new Promise((r) => setTimeout(r, 500));
