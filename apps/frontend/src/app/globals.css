@@ -441,3 +441,63 @@
 .textLayer ::selection {
   background: color-mix(in oklab, var(--azure) 35%, transparent);
 }
+
+/* ---------- 404: the lost thread (components/fx/lost-thread.tsx) ---------- */
+
+@keyframes thread-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes thread-appear {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes thread-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* pathLength="1" on the path makes one dash the whole thread, drawn by moving its offset. */
+@utility animate-thread-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: thread-draw 2.4s var(--ease-out-expo) 0.15s forwards;
+}
+
+@utility animate-thread-fray {
+  animation: thread-fade 0.6s ease-out 1.9s both;
+}
+
+@utility animate-thread-ghost {
+  animation: thread-fade 1.2s ease-out 2.3s both;
+}
+
+@utility animate-thread-rise {
+  animation: thread-appear 1s var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-thread-draw {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .animate-thread-fray,
+  .animate-thread-ghost,
+  .animate-thread-rise {
+    animation: thread-fade 0.3s ease-out both;
+  }
+}
