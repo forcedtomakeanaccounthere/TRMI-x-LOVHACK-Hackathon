@@ -36,6 +36,12 @@ const Env = z
     SMTP_PASS: optional(z.string()),
     // Sender, e.g. `LinkRoom <you@gmail.com>`. Defaults to SMTP_USER.
     MAIL_FROM: optional(z.string()),
+    // VAPID keys for Web Push (notifications for @mentions to readers whose room tab is closed).
+    // Generate with: npx web-push generate-vapid-keys. Optional — push is off without them.
+    VAPID_PUBLIC_KEY: optional(z.string()),
+    VAPID_PRIVATE_KEY: optional(z.string()),
+    // Contact for push services, e.g. `mailto:you@example.com`.
+    VAPID_SUBJECT: optional(z.string()),
   })
   .superRefine((env, ctx) => {
     // In dev the server boots without Supabase so /health works; in production fail fast.
