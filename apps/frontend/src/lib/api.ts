@@ -33,7 +33,20 @@ export type AskRequest = {
   name?: string; // shown as "asked by"
 };
 
-const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+// The public URL of the backend, e.g. https://link-room-api.onrender.com. NEXT_PUBLIC_ vars are
+// inlined into the browser bundle when `next build` runs, so this must be set in the deploy
+// environment *before* the build (docs/LOCAL_SETUP.md "Deploying"). Errors here show up in the
+// browser as requests to localhost — the fallback below — with a CORS / net::ERR_FAILED message.
+export function resolveApiUrl(raw: string | undefined): string {
+  const value = raw?.trim().replace(/\/+$/, "");
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[api] NEXT_PUBLIC_API_URL is not set; falling back to http://localhost:4000");
+  }
+  return "http://localhost:4000";
+}
+
+export const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
