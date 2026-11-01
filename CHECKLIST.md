@@ -480,15 +480,17 @@ How state is shared until the backend has tables for it: every change is an even
 Seven features that make a room work for groups beyond reading side by side. `[*]` means built (frontend or backend) but not yet checked on the deployed URL.
 
 1. Voice huddle with live captions
-   - [ ] Pick the transport: LiveKit (hosted SFU, simplest at more than 3 people) or plain WebRTC through the room's realtime channel for signalling (fine for 2–4)
-   - [ ] **BE:** `POST /api/rooms/:id/huddle/token` → a LiveKit access token for this room (identity = member or guest id, name, colour); only members who aren't kicked
-   - [ ] **FE:** a huddle bar in the room: join with everyone, or pick who to talk to (a private huddle with chosen people); mute, leave, speaking rings on avatars; works for guests
-   - [ ] **FE / AI:** live captions under the speaker's avatar (LiveKit transcription agent, or the browser's speech recognition as a fallback), with a captions on / off switch
+   - [*] Transport: LiveKit (`livekit-client` in the browser; the backend mints the tokens)
+   - [*] **BE:** `GET/POST /api/rooms/:id/huddles` (everyone, or private with chosen members), `/:hid/join`, `/leave`, `/invite`, `/end`; each join returns `{ livekit: { url, token } }`; viewers get listen-only tokens; `huddles.changed` broadcast on `room:{id}`
+   - [*] **FE:** a huddle corner at the foot of the Sources rail: **Start** (everyone in the room, or **Pick people**: search and multi-select who's in), running huddles with who's in and **Join**, past huddles; the call keeps going when the rail is collapsed
+   - [*] **FE:** in the call: avatars with speaking rings and muted badges, mic (hidden for viewers, who see "Listening"), captions on / off, **Transcript**, **Invite people** (private huddles), **Leave**, **End all** (creator or admin); a "Tap to hear the others" prompt when the browser blocks audio; works for guests
+   - [*] **FE:** live captions from the browser's speech recognition (Chrome, Edge): interim words go to the others over the LiveKit data channel and show as subtitles over the reading; a "Transcribing" badge while yours are recorded
 2. Huddle notes (builds on the huddle)
-   - [ ] **BE:** keep the live transcript per room (`huddle_transcripts`: speaker, text, start time), written as captions finish
-   - [ ] **FE:** with each transcript line, record the block each speaker had on screen at that moment (from the scroll updates already sent), so a line knows what text people were looking at
-   - [ ] **AI:** turn a finished huddle into meeting notes (decisions, action items, open questions); every point links to the passage being discussed when it was said
-   - [ ] **FE:** notes appear in the Library and can be dropped into the shared notebook; clicking a point opens the source at that passage
+   - [*] **BE:** keeps the transcript (`POST /:hid/segments`, `GET /:hid/transcript`) and the paragraph each speaker is on (`POST /:hid/focus`)
+   - [*] **FE:** finished sentences go to the backend in batches with the paragraph you were reading; your visible paragraph is sent when it changes, at most every 2 s
+   - [*] **AI:** `GET/POST /:hid/notes` turns the transcript into a summary, decisions, action items (with owners), open questions and key points, each linked to the passage on screen when it was said
+   - [*] **FE:** a transcript and notes window (from the call or from a past huddle): the transcript by speaker with links to the passage, download as .txt or .md; **Summarize conversation** / **Refresh notes**, a progress state while the AI writes, clicking a point opens the source at that passage, download the notes as Markdown; "Huddle ended. See the notes" after a call
+   - [ ] **FE:** drop huddle notes into the shared notebook
 3. Laser focus: "everyone look here"
    - [*] **Everyone look here** in the top bar (editors and up, in a live room): everyone else is taken to your document and scroll position, follow mode locked, until you press **Stop focus**
    - [*] Your pointer becomes a laser that stays on screen for the others, labelled "Name · look here"
@@ -503,8 +505,10 @@ Seven features that make a room work for groups beyond reading side by side. `[*
    - [ ] **BE:** keep notebook entries in the stored ledger (`notebook.add` / `notebook.edit` / `notebook.remove` in `LedgerEvent`), so the notebook is there for people who join while nobody else is in the room
 5. "While you were away" catch-up
    - [*] **BE + AI:** `POST /api/rooms/:id/catchup { since }` summarises the highlights and comments made since then (apps/ai `/catchup`; nothing is saved, and the AI isn't called when there's nothing new)
-   - [ ] **FE:** remember when you last left each room; when you come back, show a short "While you were away" card with what changed (new highlights, comments being discussed, new sources and artifacts from the ledger)
-   - [ ] **FE:** "waiting on you": questions and comments that @mention you (needs feature 6)
+   - [*] **FE:** remembers when you last had each room open (kept up to date while it's open); the room's history loads from the server ledger, so changes made while you were away arrive even when nobody else is online
+   - [*] **FE:** a modal right after you join, once the room's history has loaded: "While you were away" since your last visit, or "Here's what you missed" when you join late for the first time; nothing opens when nothing changed
+   - [*] **FE:** who was active, counts (highlights, comments, messages, room notes, new sources, artifacts), an AI "In short" summary when the backend has one, new highlights and the comments being discussed (click to jump there), new sources and artifacts
+   - [*] **FE:** "Waiting on you": messages that @mention you or answer you and that you haven't replied to; **Open the discussion** and **Continue to the room** close it
 6. Mentions and notifications
    - [*] **FE:** `@name` in Discussion messages and comment boxes, with a picker (↑ ↓, Enter / Tab) of people who have joined the room or whom you follow; mentions show as chips, and messages that mention you are highlighted
    - [*] **BE:** `notifications` and `push_subscriptions` (migration `0025_notifications.sql`); `GET /api/notifications/rooms/:id/people`, `POST /api/notifications/rooms/:id/mentions`, `GET /api/notifications`, `POST /api/notifications/read`

@@ -128,6 +128,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       // the choice lasts for this page only
     }
   };
+  // Bumped when the backend says the room's huddles changed, so the huddle list refetches.
+  const [huddleTick, setHuddleTick] = useState(0);
   // Laser focus: leading one pulls everyone to where you are until you stop.
   const [focusing, setFocusing] = useState(false);
 
@@ -216,6 +218,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       allEvents: () => eventsRef.current,
       onKicked: () => setKickedOut(true),
       onPresenceChange: (change) => setPresenceFeed((prev) => [...prev.slice(-80), change]),
+      onHuddlesChanged: () => setHuddleTick((t) => t + 1),
       onNotify: (n) =>
         toast(`${n.actor_name} mentioned you`, {
           description: n.body.length > 140 ? `${n.body.slice(0, 140)}…` : n.body,
@@ -767,6 +770,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     },
     channel,
     mentionables,
+    huddleTick,
+    // The room auth for backend routes (a signed-in token, or the guest id and key).
+    roomAuth: async () =>
+      authFor(me, me.signedIn ? ((await getFreshSession().catch(() => null))?.access_token ?? null) : null, guestKey),
+    // The paragraph you're reading now (from the viewer), for huddle captions.
+    currentView: () => viewPos.current,
     catchup: catchupDismissed ? null : catchup,
     dismissCatchup: () => setCatchupDismissed(true),
     presenceFeed,

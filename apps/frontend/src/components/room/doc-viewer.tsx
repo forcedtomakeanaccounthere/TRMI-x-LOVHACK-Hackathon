@@ -416,12 +416,15 @@ function Scroller({
       const box = blockBox(article, g.start.block);
       const x0 = Math.min(g.start.x, end.x);
       const y0 = Math.min(g.start.y, end.y);
-      const rect = {
-        x: (x0 - box.left) / box.width,
-        y: (y0 - box.top) / box.height,
-        w: Math.abs(end.x - g.start.x) / box.width,
-        h: Math.abs(end.y - g.start.y) / box.height,
+      // The ledger only takes fractions a little past the block (-0.5 to 1.5), so a long drag that
+      // started in a short block is clipped to that.
+      const clip = (from: number, size: number) => {
+        const a = Math.max(-0.5, Math.min(1.5, from));
+        return [a, Math.max(0, Math.min(1.5, from + size) - a)] as const;
       };
+      const [x, w] = clip((x0 - box.left) / box.width, Math.abs(end.x - g.start.x) / box.width);
+      const [y, h] = clip((y0 - box.top) / box.height, Math.abs(end.y - g.start.y) / box.height);
+      const rect = { x, y, w, h };
       if (rect.w * box.width > 6 && rect.h * box.height > 6) {
         actions.annotate({
           kind: "region",

@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { Avatar } from "./bits";
 import { AddSourceDialog } from "./add-source-dialog";
+import { HuddleDock } from "./huddle";
 import { docIcon } from "./library";
 import { useRoom } from "./store";
 import type { Peer } from "./use-room-channel";
@@ -225,6 +226,7 @@ export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
           );
         })}
       </ul>
+      <HuddleDock />
       <AddSourceDialog open={adding} onOpenChange={setAdding} />
     </div>
   );

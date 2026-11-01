@@ -20,6 +20,7 @@ import { Discussion } from "./discussion";
 import { CatchupCard } from "./catchup-card";
 import { DocViewer } from "./doc-viewer";
 import { History } from "./history";
+import { HuddleCaptions } from "./huddle";
 import { type Identity, saveGuest, savedGuest, signedInIdentity } from "./identity";
 import { GateShell, JoinGate } from "./join-gate";
 import { Library } from "./library";
@@ -28,6 +29,7 @@ import { SourcesPanel } from "./sources-panel";
 import { type PanelTab, RoomProvider, useRoom } from "./store";
 import { ArtifactDialog, Studio } from "./studio";
 import { TopBar } from "./top-bar";
+import { HuddleProvider } from "./use-huddle";
 import type { DocContent } from "./types";
 
 const noop = () => () => {};
@@ -93,7 +95,11 @@ function Gatekeeper({ path }: { path: string }) {
       </GateShell>
     );
   }
-  return <Shell />;
+  return (
+    <HuddleProvider>
+      <Shell />
+    </HuddleProvider>
+  );
 }
 
 const TABS: { id: PanelTab; label: string; icon: Icon }[] = [
@@ -137,6 +143,7 @@ function Shell() {
             aria-hidden
           />
           <DocViewer />
+          <HuddleCaptions />
           <CatchupCard />
         </main>
 

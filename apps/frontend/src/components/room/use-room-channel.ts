@@ -50,6 +50,8 @@ type Handlers = {
   onPresenceChange: (change: PresenceChange) => void;
   // apps/backend broadcasts `notify` when someone is @mentioned; each browser shows only its own.
   onNotify: (notification: RoomNotification) => void;
+  // apps/backend broadcasts `huddles.changed` (no payload) when a huddle starts, ends or changes.
+  onHuddlesChanged: () => void;
   // Where you're reading now, for someone who asks to go there.
   position: () => { doc: string; block: string; ratio: number } | null;
 };
@@ -97,13 +99,24 @@ function throttle<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
   };
 }
 
+// Broadcasts go over the socket only while the channel is joined. Otherwise (still joining, or
+// reconnecting after a drop) supabase-js would quietly fall back to its REST API, which is deprecated:
+// what must arrive (a kick) goes over HTTP explicitly, and the rest is dropped. Cursors and scrolls are
+// stale a moment later, and ledger events are saved on the server and re-synced when the channel rejoins.
+const MUST_ARRIVE = new Set(["kick"]);
+function post(channel: RealtimeChannel | null, event: string, payload: unknown) {
+  if (!channel) return;
+  if (channel.state === "joined") void channel.send({ type: "broadcast", event, payload });
+  else if (MUST_ARRIVE.has(event)) void channel.httpSend(event, payload).catch(() => {});
+}
+
 // Outgoing messages. Created once per hook, so the functions stay stable; the live channel and your id
 // are attached once subscribed.
 function createSender() {
   let channel: RealtimeChannel | null = null;
   let id: string | null = null;
   const broadcast = (event: string, payload: unknown) => {
-    void channel?.send({ type: "broadcast", event, payload });
+    post(channel, event, payload);
   };
   return {
     attach(next: RealtimeChannel | null, me: string | null) {
@@ -179,11 +192,7 @@ export function useRoomChannel(
 
       const sendEvents = (events: LedgerEvent[], to?: string) => {
         for (const batch of chunkEvents(events)) {
-          void channel.send({
-            type: "broadcast",
-            event: to ? "sync" : "ledger",
-            payload: { to, events: batch },
-          });
+          post(channel, to ? "sync" : "ledger", { to, events: batch });
         }
       };
 
@@ -247,11 +256,7 @@ export function useRoomChannel(
           if (p.reply) return;
           const have = new Set(mine.map((e) => e.id));
           if (!p.ids || p.ids.some((id) => !have.has(id))) {
-            void channel.send({
-              type: "broadcast",
-              event: "sync-req",
-              payload: syncRequest(meId, mine, { to: p.from, reply: true }),
-            });
+            post(channel, "sync-req", syncRequest(meId, mine, { to: p.from, reply: true }));
           }
         })
         .on("broadcast", { event: "status" }, ({ payload }) => {
@@ -260,6 +265,7 @@ export function useRoomChannel(
         .on("broadcast", { event: "kick" }, ({ payload }) => {
           if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
         })
+        .on("broadcast", { event: "huddles.changed" }, () => handlersRef.current.onHuddlesChanged())
         .on("broadcast", { event: "notify" }, ({ payload }) => {
           const n = payload as RoomNotification;
           if (n?.user_id === meId) handlersRef.current.onNotify(n);
@@ -267,7 +273,7 @@ export function useRoomChannel(
         .on("broadcast", { event: "pos-req" }, ({ payload }) => {
           if ((payload as { to?: string }).to !== meId) return;
           const pos = handlersRef.current.position();
-          if (pos) void channel.send({ type: "broadcast", event: "scroll", payload: { id: meId, ...pos } });
+          if (pos) post(channel, "scroll", { id: meId, ...pos });
         })
         .subscribe(async (s) => {
           if (s === "SUBSCRIBED") {
@@ -282,11 +288,7 @@ export function useRoomChannel(
               focusing: viewRef.current.focusing,
               artifact: viewRef.current.artifact,
             } satisfies Peer);
-            void channel.send({
-              type: "broadcast",
-              event: "sync-req",
-              payload: syncRequest(meId, handlersRef.current.allEvents()),
-            });
+            post(channel, "sync-req", syncRequest(meId, handlersRef.current.allEvents()));
           } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
             setStatus("solo");
           }

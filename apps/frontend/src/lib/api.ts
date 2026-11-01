@@ -31,6 +31,12 @@ import type {
   PushKeyResponse,
   PushSubscribeRequest,
   UpdateRoomRequest,
+  HuddleFocus,
+  HuddleJoinResponse,
+  HuddleNotesResponse,
+  HuddleSegmentIn,
+  HuddleSummary,
+  HuddleTranscriptResponse,
 } from "@linkroom/shared";
 
 // What the room workspace asks the AI: the question plus the documents, passage, snapshot and recent
@@ -159,6 +165,42 @@ export const api = {
   // With the signed-in person's token, so sources only members can read are in scope.
   // The room's ledger on the server (GET/POST /api/rooms/:id/events). `auth` is the signed-in token
   // or a guest's id and key.
+  // Voice huddles: room-wide or private calls (LiveKit), their transcript and AI meeting notes.
+  // Every route takes the room auth (a signed-in token, or the guest id and key).
+  huddles: (() => {
+    const base = (roomId: string) => `/api/rooms/${encodeURIComponent(roomId)}/huddles`;
+    const call = <T>(path: string, auth: LedgerAuth, init: RequestInit = { method: "GET" }) =>
+      request<T>(path, { ...init, headers: { ...(init.headers as Record<string, string>), ...guestHeaders(auth) } }, "token" in auth ? auth.token : undefined);
+    const post = <T>(path: string, auth: LedgerAuth, body: unknown = {}) => call<T>(path, auth, json(body));
+    return {
+      // Open huddles plus the last ten ended ones you can see.
+      list: (roomId: string, auth: LedgerAuth) => call<{ huddles: HuddleSummary[] }>(base(roomId), auth),
+      start: (
+        roomId: string,
+        body: { audience: "all"; name?: string } | { audience: "private"; members: string[]; name?: string },
+        auth: LedgerAuth,
+      ) => post<HuddleJoinResponse>(base(roomId), auth, body),
+      join: (roomId: string, hid: string, auth: LedgerAuth, name?: string) =>
+        post<HuddleJoinResponse>(`${base(roomId)}/${hid}/join`, auth, name ? { name } : {}),
+      leave: (roomId: string, hid: string, auth: LedgerAuth) => post<unknown>(`${base(roomId)}/${hid}/leave`, auth),
+      // The creator or an admin ends it for everyone.
+      end: (roomId: string, hid: string, auth: LedgerAuth) => post<unknown>(`${base(roomId)}/${hid}/end`, auth),
+      invite: (roomId: string, hid: string, members: string[], auth: LedgerAuth) =>
+        post<unknown>(`${base(roomId)}/${hid}/invite`, auth, { members }),
+      // Finished caption sentences, at most 20 at a time.
+      segments: (roomId: string, hid: string, segments: HuddleSegmentIn[], auth: LedgerAuth) =>
+        post<unknown>(`${base(roomId)}/${hid}/segments`, auth, { segments }),
+      // The paragraph you're looking at (at most every 2 s), so notes can link talk to text.
+      focus: (roomId: string, hid: string, focus: HuddleFocus, auth: LedgerAuth) =>
+        post<unknown>(`${base(roomId)}/${hid}/focus`, auth, focus),
+      transcript: (roomId: string, hid: string, after: number, auth: LedgerAuth) =>
+        call<HuddleTranscriptResponse>(`${base(roomId)}/${hid}/transcript?after=${after}&limit=500`, auth),
+      notes: (roomId: string, hid: string, auth: LedgerAuth) => call<HuddleNotesResponse>(`${base(roomId)}/${hid}/notes`, auth),
+      // (Re)writes the AI notes from the transcript.
+      summarize: (roomId: string, hid: string, auth: LedgerAuth) => post<HuddleNotesResponse>(`${base(roomId)}/${hid}/notes`, auth),
+    };
+  })(),
+
   listEvents: (roomId: string, after: number, auth: LedgerAuth) =>
     request<ListEventsResponse>(
       `/api/rooms/${encodeURIComponent(roomId)}/events?after=${after}`,

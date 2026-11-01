@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   reactCompiler: true,
+  // Dev only: keep Next's badge off the huddle corner at the bottom left of rooms.
+  devIndicators: { position: "bottom-right" },
   turbopack: {
     rules: {
       "*.css": {
