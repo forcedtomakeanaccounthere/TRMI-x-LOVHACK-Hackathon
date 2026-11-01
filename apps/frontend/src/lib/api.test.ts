@@ -185,11 +185,15 @@ describe("api dashboard", () => {
 });
 
 describe("resolveApiUrl", () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    warn.mockClear();
+    warn.mockRestore();
   });
 
   it("keeps a deployed URL and trims whitespace and trailing slashes", () => {

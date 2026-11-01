@@ -162,7 +162,7 @@ The frontend and backend talk across origins, so four `NEXT_PUBLIC_`/host env va
 | Var | Where it is read | Set it on | Notes |
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | `apps/frontend/src/lib/api.ts` | The frontend build environment (Vercel) **before the build runs** | Inlined into the browser bundle at `next build` time; changing it afterwards has no effect until the next deploy. No trailing slash, e.g. `https://link-room-api.onrender.com`. |
-| `WEB_ORIGIN` | `apps/backend/src/env.ts` | The backend host | Comma-separated allowlist of frontend origins for CORS, e.g. `https://link-room.vercel.app,https://link-room-git-main.vercel.app`. |
+| `WEB_ORIGIN` | `apps/backend/src/env.ts` | The backend host | Comma-separated allowlist of frontend origins for CORS. **Put the main frontend first**: email verification redirects users to the first entry, so a preview URL first sends verified users to the preview instead of the main site. Example: `https://link-room.vercel.app,https://link-room-git-main.vercel.app`. |
 | `API_PUBLIC_URL` | The backend | The backend host | Public URL of the backend; email verification links point here. |
 | `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `apps/frontend/src/lib/supabase.ts` | The frontend build environment | Public keys are fine to ship; use the cloud project's here, not the local demo keys. |
 
