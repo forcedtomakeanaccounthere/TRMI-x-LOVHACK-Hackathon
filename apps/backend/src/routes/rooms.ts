@@ -170,17 +170,24 @@ roomsRouter.post("/youtube", requireAuth, async (req, res) => {
   res.status(201).json({ id } satisfies CreateRoomResponse);
 });
 
-// apps/ai gives YouTube 20 s.
-const TRANSCRIPT_TIMEOUT_MS = 30_000;
+// apps/ai gives YouTube 20 s, then 20 s more to its yt-dlp fallback.
+const TRANSCRIPT_TIMEOUT_MS = 50_000;
 const PASTE_INSTEAD = "Paste the transcript instead (on YouTube: ⋯ under the video → Show transcript).";
 
 async function transcriptFor(videoId: string, pasted: string | undefined) {
   if (pasted?.trim()) {
     return { segments: parsePastedTranscript(pasted), language: null, transcript: "pasted" as const };
   }
+  // Any other failure (YouTube down or slow, apps/ai unreachable) still leaves pasting, which needs
+  // no AI call, so the creator is told that rather than "try again".
   const fetched = await callAi("/transcript", { video_id: videoId }, TranscriptResponse, TRANSCRIPT_TIMEOUT_MS, {
     404: new HttpError(422, `This video has no captions we can read. ${PASTE_INSTEAD}`),
     403: new HttpError(422, `YouTube didn't let us fetch this transcript right now. ${PASTE_INSTEAD}`),
+  }).catch((err: unknown) => {
+    if (err instanceof HttpError && (err.status === 502 || err.status === 503)) {
+      throw new HttpError(422, `We couldn't fetch this video's transcript right now. ${PASTE_INSTEAD}`);
+    }
+    throw err;
   });
   return {
     segments: fetched.segments,

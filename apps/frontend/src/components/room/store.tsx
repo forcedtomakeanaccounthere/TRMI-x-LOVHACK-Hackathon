@@ -111,6 +111,17 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     },
   );
 
+  // Follow mode: open the document the leader has open (from presence, so it works before they
+  // scroll), and stop following someone who left.
+  const leader = following ? channel.peers.find((p) => p.id === following) : undefined;
+  const leaderDoc = leader?.doc ?? null;
+  const leaderGone = !!following && channel.status === "live" && !leader;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the leader's presence
+    if (leaderGone) setFollowing(null);
+    else if (leaderDoc) setActiveDoc(leaderDoc);
+  }, [leaderGone, leaderDoc]);
+
   // A kick also lands in the ledger, so it holds after a reload or a missed broadcast.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- derived from the synced ledger

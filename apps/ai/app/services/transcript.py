@@ -221,34 +221,43 @@ def _fetch(video_id: str, languages: list[str]) -> TranscriptResponse:
     )
 
 
+async def _with_ytdlp(video_id: str, languages: list[str], timeout: float) -> TranscriptResponse:
+    if timeout <= 0:
+        raise TimeoutError
+    return await asyncio.wait_for(
+        asyncio.to_thread(_fetch_with_ytdlp, video_id, languages), timeout
+    )
+
+
 async def fetch_transcript(video_id: str, languages: list[str]) -> TranscriptResponse:
+    """Tries youtube-transcript-api, then yt-dlp whenever that fails for a reason other than the
+    video itself (unplayable, invalid id). Both share one deadline of twice
+    TRANSCRIPT_TIMEOUT_SECONDS, so apps/backend always gets an answer before it gives up."""
     timeout = get_settings().transcript_timeout_seconds
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 2 * timeout
     try:
         return await asyncio.wait_for(asyncio.to_thread(_fetch, video_id, languages), timeout)
-    except (TranscriptsDisabled, NoTranscriptFound) as e:
-        # Fallback to yt-dlp to extract auto-generated or manual subtitles
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_fetch_with_ytdlp, video_id, languages), timeout
-            )
-        except Exception:
-            raise NoTranscript("This video has no captions") from e
     except (VideoUnavailable, VideoUnplayable, InvalidVideoId, AgeRestricted) as e:
         raise NoTranscript("This video can't be played, so its captions can't be read") from e
-    except (RequestBlocked, IpBlocked) as e:
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_fetch_with_ytdlp, video_id, languages), timeout
-            )
-        except Exception:
-            log.warning(
-                "YouTube blocked a transcript request (set YT_PROXY_URL): %s", type(e).__name__
-            )
-            raise TranscriptBlocked("YouTube blocked the request from this server") from e
-    except TranscriptError:
+    except NoTranscript:
         raise
-    except TimeoutError as e:
-        raise TranscriptError("Fetching the transcript timed out") from e
-    except Exception as e:
-        log.warning("Transcript fetch failed: %r", e)
-        raise TranscriptError("Fetching the transcript failed") from e
+    except Exception as first:
+        log.info("Transcript API failed (%s), trying yt-dlp", type(first).__name__)
+        # When yt-dlp fails too, the first failure says what went wrong.
+        try:
+            return await _with_ytdlp(video_id, languages, deadline - loop.time())
+        except Exception as e:
+            fallback = e
+        if isinstance(first, (TranscriptsDisabled, NoTranscriptFound)):
+            raise NoTranscript("This video has no captions") from first
+        if isinstance(first, (RequestBlocked, IpBlocked)):
+            log.warning(
+                "YouTube blocked a transcript request (set YT_PROXY_URL): %s",
+                type(first).__name__,
+            )
+            raise TranscriptBlocked("YouTube blocked the request from this server") from first
+        log.warning("Transcript fetch failed: %r; yt-dlp: %r", first, fallback)
+        if isinstance(first, TimeoutError):
+            raise TranscriptError("Fetching the transcript timed out") from first
+        raise TranscriptError("Fetching the transcript failed") from first
