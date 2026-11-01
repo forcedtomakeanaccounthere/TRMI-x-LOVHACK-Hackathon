@@ -101,8 +101,9 @@ export const api = {
   },
 
   // Proposed (CHECKLIST.md "Link rooms workspace"): turns a video's transcript into t{n} blocks.
-  createYoutubeRoom: (url: string, token: string) =>
-    request<CreateRoomResponse>("/api/rooms/youtube", json({ url }), token),
+  // `transcript`: pasted by the creator when the captions can't be fetched (a 422 says so).
+  createYoutubeRoom: (url: string, token: string, transcript?: string) =>
+    request<CreateRoomResponse>("/api/rooms/youtube", json(transcript ? { url, transcript } : { url }), token),
 
   // Answers a question about one room's document, with citations into its blocks.
   ask: (roomId: string, body: { question: string; name?: string }) =>
