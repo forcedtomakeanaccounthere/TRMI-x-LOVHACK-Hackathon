@@ -716,3 +716,17 @@ export type StudySetSummary = z.infer<typeof StudySetSummary>;
 
 export const StudySetsResponse = z.object({ sets: z.array(StudySetSummary) });
 export type StudySetsResponse = z.infer<typeof StudySetsResponse>;
+
+// The room's shared notebook (supabase/migrations/0024_room_notebooks.sql): a Yjs document, as base64.
+// GET /api/rooms/:id/notebook → NotebookResponse; POST /api/rooms/:id/notebook takes one update.
+export const MAX_NOTEBOOK_UPDATE_CHARS = 1_000_000;
+export const NotebookUpdateRequest = z.object({
+  update: z
+    .string()
+    .min(1)
+    .max(MAX_NOTEBOOK_UPDATE_CHARS, "That change is too large")
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "The change must be base64"),
+});
+export type NotebookUpdateRequest = z.infer<typeof NotebookUpdateRequest>;
+export const NotebookResponse = z.object({ state: z.string().nullable() });
+export type NotebookResponse = z.infer<typeof NotebookResponse>;

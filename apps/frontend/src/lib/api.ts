@@ -17,6 +17,7 @@ import type {
   SignupRequest,
   StudySet,
   StudySetsResponse,
+  NotebookResponse,
   StudySourcesResponse,
   UpdateRoomRequest,
 } from "@linkroom/shared";
@@ -125,6 +126,13 @@ export const api = {
     request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
 
   // With the signed-in person's token, so sources only members can read are in scope.
+  // The room's shared notebook: the merged Yjs document (base64), or null before anyone wrote.
+  getNotebook: (roomId: string) =>
+    request<NotebookResponse>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, { method: "GET" }),
+  // Merges a batch of local edits (one Yjs update, base64) into the saved notebook.
+  saveNotebook: (roomId: string, update: string, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, json({ update }), token),
+
   generateArtifact: (roomId: string, body: { kind: string; sources: string[] }, token?: string) =>
     request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body), token),
 

@@ -30,7 +30,7 @@ export type NewAnnotation = Annotation extends infer A
     ? Omit<A, "id" | "author" | "at"> & { id?: string }
     : never
   : never;
-export type PanelTab = "chat" | "discussion" | "studio" | "library" | "history";
+export type PanelTab = "chat" | "notebook" | "discussion" | "studio" | "library" | "history";
 
 type Props = {
   roomId: string;
