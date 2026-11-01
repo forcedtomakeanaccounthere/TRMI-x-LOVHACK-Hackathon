@@ -392,6 +392,9 @@ function Scroller({
     if (!anchor) return;
     const p = local(e.clientX, e.clientY);
     if (tool === "note") {
+      // The new comment's text box takes focus during this event; without this the mousedown that
+      // follows would move focus back to the page, and typing would trigger tool shortcuts instead.
+      e.preventDefault();
       const note = actions.annotate({
         kind: "note",
         doc: docId,
@@ -537,7 +540,14 @@ function Scroller({
   const hovered = hover ? annotations.find((a) => a.id === hover.id) : null;
   const meta = room.contents[docId];
   const content = typeof meta === "object" ? meta : null;
-  const cursors = Object.values(channel.cursors).filter((c) => c.doc === docId);
+  // Hidden cursors stay hidden, except the person you follow: that cursor is what you're following.
+  const cursors = Object.values(channel.cursors).filter(
+    (c) => c.doc === docId && (room.showCursors || c.id === following),
+  );
+  // Comment and AI boxes can be dragged by their author, or by anyone who manages the room.
+  const moveBox = (a: Annotation, x: number, y: number) => {
+    if (canRemove(a.author.id)) room.actions.moveAnnotation(a.id, x, y);
+  };
 
   return (
     <ReactLenis
@@ -547,8 +557,15 @@ function Scroller({
       onWheel={() => following && setFollowing(null)}
       onTouchMove={() => following && setFollowing(null)}
     >
-      <div className="mx-auto w-full max-w-[min(100%,62rem)] px-5 pt-10 pb-40 md:px-10 xl:pr-[21rem]">
-        <header className="mb-10 max-w-[68ch]">
+      {/* Text documents keep a margin on the right for comment and AI boxes beside their 68ch column.
+          PDF pages and slides are as wide as the column, so they get a centred column of their own. */}
+      <div
+        className={cn(
+          "mx-auto w-full px-5 pt-10 pb-40 md:px-10",
+          content?.pdf_url ? "max-w-[56rem]" : "max-w-[min(100%,62rem)] xl:pr-84",
+        )}
+      >
+        <header className={cn("mb-10", !content?.pdf_url && "max-w-[68ch]")}>
           <div className="eyebrow flex items-center gap-2 text-[0.625rem] text-muted-foreground">
             <span>{labelFor(docRef)}</span>
             {readOnly && (
@@ -653,7 +670,10 @@ function Scroller({
               draft={draft}
               cursors={cursors}
               peers={channel.peers}
+              following={following}
+              paper={!!content?.pdf_url}
               onGeometry={onGeometry}
+              onMove={moveBox}
             />
           )}
 
