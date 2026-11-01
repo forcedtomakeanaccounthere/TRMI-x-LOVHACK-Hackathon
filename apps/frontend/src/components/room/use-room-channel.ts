@@ -1,6 +1,6 @@
 "use client";
 
-import { roomChannel, THROTTLE_MS } from "@linkroom/shared";
+import { roomChannel, type RoomNotification, THROTTLE_MS } from "@linkroom/shared";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { useEffect, useRef, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
@@ -48,6 +48,10 @@ type Handlers = {
   allEvents: () => LedgerEvent[];
   onKicked: () => void;
   onPresenceChange: (change: PresenceChange) => void;
+  // apps/backend broadcasts `notify` when someone is @mentioned; each browser shows only its own.
+  onNotify: (notification: RoomNotification) => void;
+  // Where you're reading now, for someone who asks to go there.
+  position: () => { doc: string; block: string; ratio: number } | null;
 };
 
 export type ChannelStatus = "solo" | "connecting" | "live";
@@ -116,6 +120,8 @@ function createSender() {
       for (const batch of chunkEvents(events)) broadcast("ledger", { events: batch });
     },
     kick: (member: string) => broadcast("kick", { member }),
+    // Asks one reader to send their current position (they answer with a `scroll` message).
+    requestPosition: (member: string) => broadcast("pos-req", { to: member }),
   };
 }
 
@@ -253,6 +259,15 @@ export function useRoomChannel(
         })
         .on("broadcast", { event: "kick" }, ({ payload }) => {
           if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
+        })
+        .on("broadcast", { event: "notify" }, ({ payload }) => {
+          const n = payload as RoomNotification;
+          if (n?.user_id === meId) handlersRef.current.onNotify(n);
+        })
+        .on("broadcast", { event: "pos-req" }, ({ payload }) => {
+          if ((payload as { to?: string }).to !== meId) return;
+          const pos = handlersRef.current.position();
+          if (pos) void channel.send({ type: "broadcast", event: "scroll", payload: { id: meId, ...pos } });
         })
         .subscribe(async (s) => {
           if (s === "SUBSCRIBED") {

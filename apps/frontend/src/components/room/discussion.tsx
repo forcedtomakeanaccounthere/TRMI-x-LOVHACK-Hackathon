@@ -12,7 +12,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { type MentionPerson, parseMentions } from "@linkroom/shared";
 import { Avatar, timeAgo } from "./bits";
+import { MentionText, useMentionPicker } from "./mention-composer";
 import { useRoom } from "./store";
 import type { ChatMessage } from "./types";
 
@@ -31,7 +33,7 @@ const snippet = (text: string) => (text.length > 80 ? `${text.slice(0, 80)}…` 
 
 // The room's group chat: replies, emoji reactions, quick emoji, and "joined" / "left" lines.
 export function Discussion() {
-  const { state, presenceFeed, actions, me, readOnly } = useRoom();
+  const { state, presenceFeed, actions, me, readOnly, mentionables } = useRoom();
   const [draft, setDraft] = useState("");
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [tray, setTray] = useState(false);
@@ -39,6 +41,10 @@ export function Discussion() {
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const byId = useMemo(() => new Map(state.chat.map((m) => [m.id, m])), [state.chat]);
+  // Type "@" to mention someone who has joined the room or whom you follow.
+  const picker = useMentionPicker(draft, setDraft, mentionables);
+  // Messages render mentions of anyone, you included.
+  const named = useMemo(() => [...mentionables, { id: me.id, name: me.name }], [mentionables, me.id, me.name]);
 
   const items = useMemo<Item[]>(() => {
     const msgs: Item[] = state.chat.map((m) => ({ kind: "msg", id: m.id, at: m.at, message: m }));
@@ -120,6 +126,7 @@ export function Discussion() {
                 grouped={grouped}
                 mine={m.author.id === me.id}
                 meId={me.id}
+                people={named}
                 quoted={m.reply_to ? (byId.get(m.reply_to) ?? null) : null}
                 reactions={state.reactions[m.id] ?? {}}
                 flashing={flash === m.id}
@@ -190,7 +197,8 @@ export function Discussion() {
             </motion.div>
           )}
         </AnimatePresence>
-        <div className="liquid-glass flex items-center gap-1 rounded-full p-1 pl-1.5">
+        <div className="liquid-glass relative flex items-center gap-1 rounded-full p-1 pl-1.5">
+          {picker.menu}
           <button
             type="button"
             onClick={() => setTray((t) => !t)}
@@ -207,11 +215,16 @@ export function Discussion() {
           <input
             ref={input}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setReplyTo(null)}
+            {...picker.bind}
+            onKeyDown={(e) => {
+              if (picker.handleKey(e)) return;
+              if (e.key === "Escape") setReplyTo(null);
+            }}
             maxLength={2000}
             disabled={readOnly}
-            placeholder={readOnly ? "This room is read only" : replyTo ? "Write a reply…" : "Message the room…"}
+            placeholder={
+              readOnly ? "This room is read only" : replyTo ? "Write a reply…" : "Message the room… (@ to mention)"
+            }
             className="h-9 min-w-0 flex-1 bg-transparent px-1 text-[0.8125rem] outline-none"
           />
           <button
@@ -233,6 +246,7 @@ type RowProps = {
   grouped: boolean;
   mine: boolean;
   meId: string;
+  people: MentionPerson[];
   quoted: ChatMessage | null;
   reactions: Record<string, { id: string; name: string }[]>;
   flashing: boolean;
@@ -247,6 +261,7 @@ function MessageRow({
   grouped,
   mine,
   meId,
+  people,
   quoted,
   reactions,
   flashing,
@@ -258,6 +273,7 @@ function MessageRow({
   const [picker, setPicker] = useState(false);
   const emojiOnly = EMOJI_ONLY.test(m.text.trim());
   const chips = Object.entries(reactions);
+  const mentionsMe = !mine && parseMentions(m.text, people).some((p) => p.id === meId);
 
   return (
     <motion.li
@@ -307,10 +323,11 @@ function MessageRow({
                 mine
                   ? "rounded-tr-md bg-ink text-pearl dark:bg-azure dark:text-white"
                   : "rounded-tl-md bg-card ring-1 ring-(--hairline)",
+                mentionsMe && "ring-2 ring-amber-400/60",
                 flashing && "shadow-[0_0_0_3px_var(--azure)]",
               )}
             >
-              {m.text}
+              <MentionText text={m.text} people={people} meId={meId} />
             </p>
           )}
 

@@ -3,6 +3,9 @@
 import { nanoid } from "nanoid";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { type MentionPerson, parseMentions } from "@linkroom/shared";
+import { api, ApiError } from "@/lib/api";
+import { getFreshSession } from "@/lib/session";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
 import {
@@ -137,8 +140,94 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       allEvents: () => eventsRef.current,
       onKicked: () => setKickedOut(true),
       onPresenceChange: (change) => setPresenceFeed((prev) => [...prev.slice(-80), change]),
+      onNotify: (n) =>
+        toast(`${n.actor_name} mentioned you`, {
+          description: n.body.length > 140 ? `${n.body.slice(0, 140)}…` : n.body,
+          action: { label: "Discussion", onClick: () => setTab("discussion") },
+        }),
+      position: () => viewPos.current,
     },
   );
+
+  // A "go to reader" waiting for that reader to say where they are (see actions.goToReader).
+  const [pendingReader, setPendingReader] = useState<{ id: string; asked: number } | null>(null);
+  const answer = pendingReader ? channel.scrolls[pendingReader.id] : undefined;
+  useEffect(() => {
+    if (!pendingReader || !answer) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one jump per request
+    setPendingReader(null);
+    jumpTo(answer.doc, answer.block, answer.ratio);
+    // Only when their answer arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answer]);
+  useEffect(() => {
+    if (!pendingReader) return;
+    const timer = setTimeout(() => setPendingReader(null), 3000); // no answer: the document is open at least
+    return () => clearTimeout(timer);
+  }, [pendingReader]);
+
+  // --- Mentions ---
+  // Who can be @mentioned: people who have joined this room at some point (the backend's list),
+  // people you follow, and signed-in readers here now. Guests can't receive notifications, and you
+  // can't mention yourself.
+  const [roomPeople, setRoomPeople] = useState<MentionPerson[]>([]);
+  const [followed, setFollowed] = useState<MentionPerson[]>([]);
+  useEffect(() => {
+    if (isDemo) return;
+    let cancelled = false;
+    void api.notifications
+      .people(roomId)
+      .then((r) => !cancelled && setRoomPeople(r.people))
+      .catch(() => {}); // an older backend without the route: present readers still work
+    if (me.signedIn) {
+      void getFreshSession().then((session) => {
+        if (!session || cancelled) return;
+        void api.me
+          .following(session.access_token)
+          .then((r) => !cancelled && setFollowed(r.users.map((u) => ({ id: u.id, name: u.display_name }))))
+          .catch(() => {});
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isDemo, roomId, me.signedIn]);
+  const mentionables: MentionPerson[] = [
+    ...new Map(
+      [...roomPeople, ...followed, ...channel.peers.filter((p) => p.signedIn).map((p) => ({ id: p.id, name: p.name }))]
+        .filter((p) => p.id !== me.id && p.name.trim())
+        .map((p) => [p.id, p]),
+    ).values(),
+  ];
+
+  // Tells the backend about new mentions in a message or comment; it notifies those people.
+  // Best effort: the message is already in the room either way.
+  const announce = (kind: "chat" | "note", eventId: string, body: string, people: MentionPerson[]) => {
+    if (isDemo || people.length === 0) return;
+    void getFreshSession().then((session) =>
+      api.notifications
+        .announce(
+          roomId,
+          {
+            event_id: eventId.slice(0, 64),
+            kind,
+            body: body.slice(0, 2000),
+            author: { id: me.id, name: me.name.slice(0, 40) },
+            mentions: people.slice(0, 20).map((p) => ({ id: p.id, name: p.name.slice(0, 40) })),
+          },
+          session?.access_token,
+        )
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 404) {
+            console.warn("[room] mention notifications need the backend's /api/notifications routes");
+          } else {
+            toast.error("Couldn't notify the people you mentioned", {
+              description: err instanceof Error ? err.message : undefined,
+            });
+          }
+        }),
+    );
+  };
 
   // Follow mode: open the document the leader has open (from presence, so it works before they
   // scroll) and the artifact they're viewing, and stop following someone who left.
@@ -396,23 +485,46 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       }
     },
     editNote(id: string, body: string) {
-      emit({ type: "note.edit", annotation_id: id, body });
+      const before = state.annotations.find((a) => a.id === id);
+      const earlier = new Set(before?.kind === "note" ? parseMentions(before.body, mentionables).map((m) => m.id) : []);
+      const [made] = emit({ type: "note.edit", annotation_id: id, body });
+      // Only people newly mentioned in this edit are notified.
+      if (made) {
+        const fresh = parseMentions(body, mentionables).filter((m) => !earlier.has(m.id));
+        announce("note", made.id, body, fresh);
+      }
     },
     moveAnnotation(id: string, x: number, y: number) {
       const round = (n: number) => Math.round(n * 10000) / 10000;
       emit({ type: "annot.move", annotation_id: id, x: round(x), y: round(y) });
     },
     chat(text: string, replyTo?: string) {
-      emit({
+      const id = nanoid(10);
+      const made = emit({
         type: "chat",
         message: {
-          id: nanoid(10),
+          id,
           text,
           author: actor,
           at: new Date().toISOString(),
           ...(replyTo ? { reply_to: replyTo } : {}),
         },
       });
+      if (made.length) announce("chat", id, text, parseMentions(text, mentionables));
+    },
+    // Opens the document a reader is on, at their exact spot. Uses their latest scroll update, or
+    // asks them for it when there's none yet (they joined before you, or haven't scrolled).
+    goToReader(peerId: string) {
+      const peer = channel.peers.find((p) => p.id === peerId);
+      if (!peer) return;
+      const known = channel.scrolls[peerId];
+      if (known && (!peer.doc || known.doc === peer.doc)) {
+        jumpTo(known.doc, known.block, known.ratio);
+        return;
+      }
+      if (peer.doc) setActiveDoc(peer.doc);
+      setPendingReader({ id: peerId, asked: Date.now() });
+      channel.send.requestPosition(peerId);
     },
     react(messageId: string, emoji: string) {
       emit({ type: "chat.react", message_id: messageId, emoji });
@@ -577,6 +689,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       leave: () => activeFocus && setLeftFocus(activeFocus.id),
     },
     channel,
+    mentionables,
     presenceFeed,
     kickedOut,
     actions,

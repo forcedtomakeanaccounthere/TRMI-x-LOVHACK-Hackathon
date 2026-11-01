@@ -495,27 +495,28 @@ Seven features that make a room work for groups beyond reading side by side. `[*
    - [*] When the focus ends (or someone leaves it), each person goes back to the document and spot they were reading before
    - [*] One focus at a time: others see "Name is focusing", and anyone can step out of it; a new focus by the same person can be joined again
    - Built on presence (`focusing`) and the follow feature; nothing is stored, so there is no backend part
-4. Shared notebook
-   - [*] **Notebook** tab: one live document next to the sources that everyone writes in at once (Tiptap + Yjs; edits travel over the room channel)
-   - [*] **BE:** the merged notebook is saved and loaded (`GET` / `POST /api/rooms/:id/notebook`, migration `0024_room_notebooks.sql`), so it's there for people who join later
-   - [*] Drag a highlight into the notebook: it becomes a quote that stays linked to its source; clicking it opens that document at that line
-   - [*] **AI:** draft a first version from the group's highlights (from the room recap); quotes that match a highlight become linked quotes
-   - [ ] Export the notebook (Markdown / PDF) so people leave with what they wrote together
+4. Room notebook
+   - [*] **Notebook** button in the top bar (with a count) opens a drawer; the side panel keeps five tabs
+   - [*] Notes people leave for the room: typed notes, passages saved from a source (Selection toolbar → **Save to notebook**, linking back to that line) and images (attach, paste or drop; shrunk before they're shared), each with who added it and when
+   - [*] Filter by Notes / Passages / Images; anyone who can annotate edits an entry ("edited by" shows on it), the author or an admin deletes it; every change is in History
+   - [*] Download the notebook as Markdown
+   - [ ] **BE:** keep notebook entries in the stored ledger (`notebook.add` / `notebook.edit` / `notebook.remove` in `LedgerEvent`), so the notebook is there for people who join while nobody else is in the room
 5. "While you were away" catch-up
    - [*] **BE + AI:** `POST /api/rooms/:id/catchup { since }` summarises the highlights and comments made since then (apps/ai `/catchup`; nothing is saved, and the AI isn't called when there's nothing new)
    - [ ] **FE:** remember when you last left each room; when you come back, show a short "While you were away" card with what changed (new highlights, comments being discussed, new sources and artifacts from the ledger)
    - [ ] **FE:** "waiting on you": questions and comments that @mention you (needs feature 6)
 6. Mentions and notifications
-   - [ ] **FE:** `@name` in comments, discussion messages and AI boxes, with a picker of the room's members
-   - [ ] **BE:** `notifications` table (user, room, kind, actor, snippet, read_at) and `GET /api/me/notifications`, `POST /api/me/notifications/read`; written when someone is mentioned
-   - [ ] **BE:** an email for mentions when the person is offline (the existing SMTP mailer), at most one per room every few minutes
-   - [ ] **FE:** the dashboard bell lists mentions (unread count, click to jump to the comment); in-room toast when you're mentioned while there
-   - [ ] **FE + BE:** browser push notifications (service worker + Web Push with VAPID keys, `POST /api/me/push-subscriptions`)
+   - [*] **FE:** `@name` in Discussion messages and comment boxes, with a picker (↑ ↓, Enter / Tab) of people who have joined the room or whom you follow; mentions show as chips, and messages that mention you are highlighted
+   - [*] **BE:** `notifications` and `push_subscriptions` (migration `0025_notifications.sql`); `GET /api/notifications/rooms/:id/people`, `POST /api/notifications/rooms/:id/mentions`, `GET /api/notifications`, `POST /api/notifications/read`
+   - [*] **BE:** an email for a mention when the person is away (the SMTP mailer), and a realtime `notify` broadcast when they're in the room
+   - [*] **FE:** in-room toast when you're mentioned; the dashboard lists your mentions (unread count, mark read, click to open the room), refreshed every 30 s and when you come back to the tab
+   - [*] **FE + BE:** browser push notifications (service worker `public/sw.js`, Web Push with VAPID keys, `/api/notifications/key`, `/subscribe`, `/unsubscribe`), turned on from the dashboard
+   - [ ] **BE:** mentioning someone you follow who has never opened the room notifies them too (the backend only notifies people who have joined it)
 7. Who's-where minimap
-   - [ ] **FE:** a slim bar beside the document with each reader's avatar at their spot (from the `scroll` updates already broadcast), click an avatar to jump there
+   - [*] **FE:** Active Readers in the Sources rail: who is on which document; clicking someone (or **Go to where they're reading** on their avatar) opens that document at their exact spot, asking their browser for it when no scroll update has arrived yet
+   - [ ] **FE:** a slim bar beside the document with each reader's avatar at their spot, click an avatar to jump there
    - [ ] **FE:** "race to finish": how far each person has read (furthest block reached / blocks in the document), as a small progress view
-
-**Done when:** a group can talk while they read with captions on, leave with notes tied to the text, pull everyone to one spot, write a shared notebook together, and catch up on what they missed.
+**Done when:** a group can talk while they read with captions on, leave with notes tied to the text, pull everyone to one spot, keep a shared notebook of what mattered, and catch up on what they missed.
 
 ---
 

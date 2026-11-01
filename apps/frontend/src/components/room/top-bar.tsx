@@ -2,6 +2,7 @@
 
 import {
   ArrowLeftIcon,
+  MapPinIcon,
   CopyIcon,
   CrosshairIcon,
   CursorIcon,
@@ -154,6 +155,13 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
                     )}
                   </div>
                 )}
+                <button
+                  type="button"
+                  onClick={() => actions.goToReader(p.id)}
+                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[0.8125rem] hover:bg-foreground/5"
+                >
+                  <MapPinIcon className="size-4 shrink-0" /> Go to where they&apos;re reading
+                </button>
                 <button
                   type="button"
                   onClick={() => setFollowing(following === p.id ? null : p.id)}

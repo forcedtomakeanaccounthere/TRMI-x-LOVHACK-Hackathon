@@ -22,6 +22,12 @@ import type {
   StudySetsResponse,
   StudySourcesResponse,
   UsersResponse,
+  MentionAck,
+  MentionablesResponse,
+  MentionNotifyRequest,
+  NotificationsResponse,
+  PushKeyResponse,
+  PushSubscribeRequest,
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
@@ -194,6 +200,28 @@ export const api = {
     following: (token: string) => request<UsersResponse>("/api/me/following", { method: "GET" }, token),
     followers: (token: string) => request<UsersResponse>("/api/me/followers", { method: "GET" }, token),
     participants: (token: string) => request<ParticipantsResponse>("/api/me/participants", { method: "GET" }, token),
+  },
+
+  // Mentions and notifications (apps/backend routes/notifications.ts).
+  notifications: {
+    // Who can be @mentioned in a room: its owner and every signed-in reader who has opened it.
+    people: (roomId: string) =>
+      request<MentionablesResponse>(`/api/notifications/rooms/${encodeURIComponent(roomId)}/people`, {
+        method: "GET",
+      }),
+    // Announces the mentions in a message just written to the ledger, so the backend notifies
+    // those people (a toast if they're in the room, the bell, email if they're away, push).
+    announce: (roomId: string, body: MentionNotifyRequest, token?: string) =>
+      request<MentionAck>(`/api/notifications/rooms/${encodeURIComponent(roomId)}/mentions`, json(body), token),
+    list: (token: string) => request<NotificationsResponse>("/api/notifications", { method: "GET" }, token),
+    // No ids marks everything read.
+    markRead: (token: string, ids?: string[]) =>
+      request<unknown>("/api/notifications/read", json(ids ? { ids } : {}), token),
+    pushKey: (token: string) => request<PushKeyResponse>("/api/notifications/key", { method: "GET" }, token),
+    subscribe: (subscription: PushSubscribeRequest, token: string) =>
+      request<unknown>("/api/notifications/subscribe", json(subscription), token),
+    unsubscribe: (endpoint: string, token: string) =>
+      request<unknown>("/api/notifications/unsubscribe", json({ endpoint }), token),
   },
 
   users: {

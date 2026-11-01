@@ -15,6 +15,7 @@ import { foldSources, readRoomLedgers } from "./room-sources";
 import { getProfileOverride, getRoomMeta, getSavedGroups } from "./local-prefs";
 import { GroupsSection } from "./groups-section";
 import { InviteDialog, type InviteTarget } from "./invite-dialog";
+import { NotificationsPanel } from "./notifications-panel";
 import { PausedRooms } from "./paused-rooms";
 import { PeoplePanel } from "./people-panel";
 import { ProfileCard } from "./profile-card";
@@ -191,6 +192,8 @@ function DashboardView({ loaded, signedIn }: { loaded: Loaded; signedIn: boolean
   const [newOpen, setNewOpen] = useState(false);
   const [invite, setInvite] = useState<InviteTarget>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const session = useSession();
+  const token = session?.access_token;
 
   return (
     <DashboardProvider initial={initial} source={loaded.source}>
@@ -224,6 +227,11 @@ function DashboardView({ loaded, signedIn }: { loaded: Loaded; signedIn: boolean
               </div>
               <div className="space-y-5">
                 <ProfileCard onEdit={() => setProfileOpen(true)} />
+                {signedIn && (
+                  <section className="liquid-glass rounded-[1.75rem] p-5">
+                    <NotificationsPanel roomHref={(id) => `/r/${id}`} token={token} />
+                  </section>
+                )}
                 <PausedRooms />
                 <PeoplePanel onAddToRoom={(person: Person) => setInvite({ person })} />
               </div>
