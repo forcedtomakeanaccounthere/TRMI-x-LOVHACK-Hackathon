@@ -340,10 +340,11 @@ async function attachSources(roomId: string, ids: string[], token: string) {
   if (failed) throw failed.reason;
 }
 
-// `remote`: the documents are backend rooms (not the demo room's). Only the demo room gets an
-// artifact built in the browser (marked preview): for a real room that one is just cut-up text, and
-// it hid why the backend wasn't answering. Any failure, a refusal, an AI error or the server being
-// unreachable, is passed on so its reason is shown.
+// `remote`: every chosen document is a backend room. When one isn't (the demo room's bundled
+// documents, a `yt:` video not yet processed) the artifact is built in the browser and marked
+// preview. Backend rooms never fall back to that cut-up text, which hid why the backend wasn't
+// answering: any failure, a refusal, an AI error or the server being unreachable, is passed on so
+// its reason is shown.
 export async function generate(
   roomId: string,
   kind: ArtifactKind,
