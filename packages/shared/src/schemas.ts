@@ -77,9 +77,11 @@ export const Highlight = HighlightFields.extend({
 });
 export type Highlight = z.infer<typeof Highlight>;
 
+// A comment on a highlight, or a note on the room (highlight_id null), e.g. a comment box placed on the
+// page. Both reach the recap.
 export const NewComment = Author.extend({
   room_id: z.string(),
-  highlight_id: z.string().uuid(),
+  highlight_id: z.string().uuid().nullable(),
   body: z.string().min(1).max(2000).refine(notBlank, "Comment can't be blank"),
 });
 export type NewComment = z.infer<typeof NewComment>;

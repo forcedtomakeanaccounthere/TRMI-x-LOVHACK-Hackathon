@@ -198,6 +198,15 @@ describe("room contracts", () => {
     it("rejects a body of only whitespace", () => {
       expect(NewComment.safeParse({ ...comment, body: " \n\t " }).success).toBe(false);
     });
+
+    it("accepts a note with no highlight (highlight_id null)", () => {
+      expect(NewComment.safeParse({ ...comment, highlight_id: null }).success).toBe(true);
+    });
+
+    it("still rejects a highlight_id that isn't a uuid, or a missing one", () => {
+      expect(NewComment.safeParse({ ...comment, highlight_id: "h1" }).success).toBe(false);
+      expect(NewComment.safeParse({ ...comment, highlight_id: undefined }).success).toBe(false);
+    });
   });
 });
 
