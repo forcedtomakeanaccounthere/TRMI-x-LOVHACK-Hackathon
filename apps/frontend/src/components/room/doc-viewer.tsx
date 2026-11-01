@@ -244,6 +244,17 @@ function Scroller({
     return () => lenis.off("scroll", onScroll);
   }, [scroller, docId, channel.send]);
 
+  // Someone who starts following you is sent where you are now, without waiting for you to scroll.
+  const followers = channel.peers
+    .filter((p) => p.following === me.id)
+    .map((p) => p.id)
+    .join(" ");
+  useEffect(() => {
+    if (!followers || !scroller) return;
+    const top = topBlock(scroller);
+    if (top) channel.send.scroll(docId, top.block, top.ratio);
+  }, [followers, scroller, docId, channel.send]);
+
   // Keyboard: tool shortcuts, Escape to put tools down.
   useEffect(() => {
     if (!interactive) return;

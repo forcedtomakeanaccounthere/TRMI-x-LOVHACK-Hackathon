@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
 import type { Identity } from "./identity";
 import { chunkEvents } from "./ledger";
+import { emitRoomStatus, type RoomStatusMessage } from "./room-status-bus";
 import type { LedgerEvent } from "./types";
 
 // One realtime channel per room (CHECKLIST Phase 3): presence for who's here, broadcast for cursors,
@@ -230,6 +231,9 @@ export function useRoomChannel(
             payload: syncRequest(meId, mine, { to: p.from, reply: true }),
           });
         }
+      })
+      .on("broadcast", { event: "status" }, ({ payload }) => {
+        emitRoomStatus((payload ?? {}) as RoomStatusMessage);
       })
       .on("broadcast", { event: "kick" }, ({ payload }) => {
         if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
