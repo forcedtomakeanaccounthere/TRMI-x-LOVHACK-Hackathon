@@ -6,6 +6,7 @@ model in its own untrusted tag with its id, so each generated item can point bac
 
 import asyncio
 import logging
+import re
 import time
 
 from app.config import get_settings
@@ -302,6 +303,20 @@ def sanitize_mindmap(result: StudyMindMapData, title: str, clean, source) -> lis
     return ordered
 
 
+def appears_whole(value: str, text: str) -> bool:
+    """True when `value` is in `text` as a whole value: "1969" doesn't vouch for "969" or "19",
+    nor "3" for "3.5". A side that starts or ends with a letter or digit must not run on into
+    one."""
+    if not value:
+        return False
+    pattern = re.escape(value)
+    if value[0].isalnum():
+        pattern = r"(?<!\w)(?<!\d[.,])" + pattern
+    if value[-1].isalnum():
+        pattern += r"(?!\w)(?![.,]\d)"
+    return re.search(pattern, text) is not None
+
+
 def sanitize_infographic(
     result: StudyInfographicData, title: str, texts: list[str], clean, source
 ) -> StudyInfographicData:
@@ -310,7 +325,7 @@ def sanitize_infographic(
     stats = []
     for s in result.stats:
         label, value = clean(s.label, MAX_LABEL_CHARS), clean(s.value, 40)
-        if label and value and normalize(value) in haystack:
+        if label and value and appears_whole(normalize(value), haystack):
             stats.append(
                 StudyInfographicStat(label=label, value=value, source_id=source(s.source_id))
             )

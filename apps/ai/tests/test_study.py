@@ -13,7 +13,7 @@ from app.schemas import (
     StudyQuizQuestion,
     StudyRequest,
 )
-from app.services.study import share_budget
+from app.services.study import appears_whole, share_budget
 
 DOCS = [
     {"id": "room0001", "title": "Moon", "text": "Apollo 11 landed in 1969. It carried 3 crew."},
@@ -168,3 +168,34 @@ def test_share_budget_is_fair():
 def test_request_model_limits():
     with pytest.raises(ValueError):
         StudyRequest(kind="quiz", documents=[DOCS[0]] * 21)
+
+
+@pytest.mark.parametrize(
+    ("value", "text", "found"),
+    [
+        ("1969", "landed in 1969.", True),
+        ("969", "landed in 1969.", False),
+        ("19", "landed in 1969.", False),
+        ("3", "it weighs 3.5 tons", False),
+        ("3.5", "it weighs 3.5 tons", True),
+        ("$5", "costs $50", False),
+        ("$5", "costs $5, more later", True),
+        ("40%", "about 40% of it", True),
+        ("0%", "about 40% of it", False),
+        ("two moons", "mars has two moons, phobos", True),
+        ("", "anything", False),
+    ],
+)
+def test_appears_whole(value, text, found):
+    assert appears_whole(value, text) is found
+
+
+def test_infographic_drops_a_stat_that_is_only_part_of_a_number(client, auth, study_ai):
+    study_ai.answer = StudyInfographicData(
+        title="Space",
+        subtitle="s",
+        stats=[StudyInfographicStat(label="Year", value="969")],
+        sections=[StudyInfographicSection(heading="Moon", points=["Landed"])],
+        key_takeaway="k",
+    )
+    assert post(client, auth, "infographic").json()["stats"] == []
