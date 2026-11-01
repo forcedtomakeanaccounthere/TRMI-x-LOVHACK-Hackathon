@@ -27,7 +27,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./bits";
 import { useRoom } from "./store";
-import { type CallPerson, useHuddle } from "./use-huddle";
+import { CAPTION_LANGS, type CallPerson, useHuddle } from "./use-huddle";
 
 // The huddle corner at the foot of the Sources rail: start a voice huddle with everyone or a few
 // people, join running ones, talk with live captions, then read the transcript and the AI notes.
@@ -321,9 +321,16 @@ function InCall({ onTranscript }: { onTranscript: () => void }) {
           </p>
         </div>
         {h.transcribing && (
-          <span className="flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-rose-600 uppercase dark:text-rose-400">
-            <span className="size-1.5 animate-pulse rounded-full bg-rose-500" />
-            Transcribing
+          <span
+            className={cn(
+              "flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase transition-colors",
+              h.hearing ? "bg-rose-500/12 text-rose-600 dark:text-rose-400" : "bg-foreground/6 text-muted-foreground",
+            )}
+          >
+            <span
+              className={cn("size-1.5 rounded-full", h.hearing ? "animate-pulse bg-rose-500" : "bg-foreground/30")}
+            />
+            {h.hearing ? "Hearing you" : "Listening"}
           </span>
         )}
       </div>
@@ -334,6 +341,43 @@ function InCall({ onTranscript }: { onTranscript: () => void }) {
         ))}
       </ul>
 
+      {/* Your voice: the live level of the mic you're sending, and the words captions made out. */}
+      {h.canSpeak && h.micOn && (
+        <div className="mx-3 mb-2 rounded-xl bg-foreground/4 px-2.5 py-2">
+          <div className="flex items-center gap-2">
+            <MicMeter level={h.micLevel} />
+            <span className="min-w-0 flex-1 truncate text-[0.625rem] text-muted-foreground">
+              {h.micLevel > 0.08 ? "Your mic is picking you up" : "Mic on, say something"}
+            </span>
+            {h.captionsSupported && (
+              <select
+                aria-label="Caption language"
+                value={h.captionLang}
+                onChange={(e) => h.setCaptionLang(e.target.value)}
+                className="max-w-24 cursor-pointer rounded-md bg-transparent text-[0.625rem] text-muted-foreground outline-none hover:text-foreground"
+              >
+                {CAPTION_LANGS.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          {h.captionsSupported && (
+            <p className="mt-1 line-clamp-2 text-[0.6875rem] leading-snug text-foreground/80">
+              {h.heard ? (
+                <>“{h.heard}”</>
+              ) : (
+                <span className="text-muted-foreground">
+                  {h.transcribing ? "Captions are listening. Your words show here." : "Starting captions…"}
+                </span>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+
       {h.needsAudioClick && (
         <button
           type="button"
@@ -343,8 +387,10 @@ function InCall({ onTranscript }: { onTranscript: () => void }) {
           <SpeakerHighIcon className="size-3.5" /> Tap to hear the others
         </button>
       )}
-      {h.canSpeak && h.micOn && !h.captionsSupported && (
-        <p className="px-3 pb-2 text-[0.625rem] text-muted-foreground">Your captions need Chrome or Edge.</p>
+      {h.canSpeak && h.micOn && (!h.captionsSupported || h.captionIssue) && (
+        <p className="mx-3 mb-2 rounded-xl bg-amber-500/10 px-2.5 py-1.5 text-[0.6875rem] leading-snug text-amber-800 dark:text-amber-200">
+          {h.captionIssue ?? "Captions and the transcript need Chrome or Edge. You can still talk."}
+        </p>
       )}
 
       <div className="flex items-center gap-1.5 border-t border-(--hairline) px-3 py-2">
@@ -728,7 +774,7 @@ function HuddleRecord({
       }
     };
     void load();
-    const t = live ? setInterval(load, 5000) : undefined;
+    const t = live ? setInterval(load, 2500) : undefined;
     return () => {
       cancelled = true;
       clearInterval(t);
@@ -803,6 +849,16 @@ function HuddleRecord({
   const fileBase = `huddle-${huddle.started_at.slice(0, 10)}-${huddle.id.slice(-6)}`;
   const generating = summarizing || notes?.status === "generating";
 
+  // In a live call, what's being said shows straight away from the caption stream, until the server
+  // has the line (a caption and its saved line share an id).
+  const savedIds = new Set((segments ?? []).map((s) => s.id));
+  const unsavedLive = live ? h.captionLog.filter((c) => !savedIds.has(c.id)) : [];
+  const lineCount = (segments?.length ?? 0) + unsavedLive.length;
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (live && tab === "transcript" && scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  }, [live, tab, scroller, lineCount, h.captionLog]);
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-[1.5rem] p-0 sm:max-w-2xl">
@@ -823,23 +879,23 @@ function HuddleRecord({
                   tab === t ? "border-foreground text-foreground" : "border-transparent text-muted-foreground",
                 )}
               >
-                {t === "notes" ? "AI notes" : `Transcript${segments ? ` · ${segments.length}` : ""}`}
+                {t === "notes" ? "AI notes" : `Transcript${segments ? ` · ${lineCount}` : ""}`}
               </button>
             ))}
           </div>
         </div>
 
-        <div data-lenis-prevent className="min-h-64 flex-1 overflow-y-auto p-5">
+        <div ref={setScroller} data-lenis-prevent className="min-h-64 flex-1 overflow-y-auto p-5">
           {tab === "transcript" ? (
             segments === null ? (
               <Skeleton />
-            ) : segments.length === 0 ? (
+            ) : lineCount === 0 ? (
               <Empty
                 icon={<ScrollIcon weight="duotone" className="size-7" />}
                 text={
                   live
-                    ? "Nothing said yet. Captions land here as people talk."
-                    : "No captions were recorded in this huddle."
+                    ? "Start talking. Your words show here as you speak (captions need Chrome or Edge, with your mic on)."
+                    : "No captions were recorded in this huddle, so there's nothing to summarize."
                 }
               />
             ) : (
@@ -864,7 +920,7 @@ function HuddleRecord({
                             <button
                               type="button"
                               onClick={() => go(s.doc, s.block)}
-                              className="ml-1.5 inline-flex translate-y-[-1px] items-center gap-0.5 rounded-full bg-foreground/6 px-1.5 text-[0.625rem] text-muted-foreground hover:text-azure"
+                              className="ml-1.5 inline-flex -translate-y-px items-center gap-0.5 rounded-full bg-foreground/6 px-1.5 text-[0.625rem] text-muted-foreground hover:text-azure"
                               title={`Reading ${docTitle(s.doc)}`}
                             >
                               <ArrowSquareOutIcon className="size-2.5" />
@@ -876,6 +932,25 @@ function HuddleRecord({
                     </li>
                   );
                 })}
+                {unsavedLive.map((c) => (
+                  <li key={`live-${c.id}`} className="grid grid-cols-[2rem_1fr] gap-x-3">
+                    <span>
+                      <Avatar actor={{ name: c.name === "You" ? "You" : c.name, color: hashColor(c.who) }} size={28} />
+                    </span>
+                    <div>
+                      <p className="flex items-center gap-1.5 text-[0.75rem]">
+                        <span className="font-semibold">{c.name}</span>
+                        <span className="flex items-center gap-1 rounded-full bg-rose-500/10 px-1.5 text-[0.5625rem] font-semibold tracking-wide text-rose-600 uppercase dark:text-rose-400">
+                          <span className="size-1 animate-pulse rounded-full bg-rose-500" />
+                          {c.final ? "Saving" : "Live"}
+                        </span>
+                      </p>
+                      <p className={cn("text-[0.875rem] leading-relaxed", !c.final && "text-foreground/60 italic")}>
+                        {c.text}
+                      </p>
+                    </div>
+                  </li>
+                ))}
               </ol>
             )
           ) : generating ? (
@@ -967,6 +1042,7 @@ function HuddleRecord({
             type="button"
             onClick={summarize}
             disabled={generating || segments?.length === 0}
+            title={segments?.length === 0 ? "Nothing said yet to summarize" : undefined}
             className="flex h-9 items-center gap-1.5 rounded-full bg-ink px-4 text-[0.8125rem] font-medium text-pearl transition hover:opacity-90 disabled:opacity-40 dark:bg-azure"
           >
             <SparkleIcon weight="fill" className="size-3.5" />
@@ -1047,5 +1123,23 @@ export function HuddleCaptions() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// Five bars that follow your microphone's real level.
+function MicMeter({ level }: { level: number }) {
+  return (
+    <span className="flex h-3.5 items-end gap-0.5" aria-hidden>
+      {[0.15, 0.3, 0.45, 0.6, 0.75].map((at, i) => (
+        <span
+          key={i}
+          className={cn(
+            "w-0.75 rounded-full transition-all duration-100",
+            level > at ? "bg-emerald-500" : "bg-foreground/15",
+          )}
+          style={{ height: `${40 + i * 15}%` }}
+        />
+      ))}
+    </span>
   );
 }

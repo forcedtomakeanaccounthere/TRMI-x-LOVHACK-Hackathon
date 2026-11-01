@@ -1,6 +1,6 @@
 "use client";
 
-import type { HuddleSegmentIn, HuddleSummary } from "@linkroom/shared";
+import type { HuddleFocus, HuddleSegmentIn, HuddleSummary } from "@linkroom/shared";
 import { type Participant, type RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 import { createContext, type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -28,7 +28,12 @@ type Recognition = {
   onresult: ((e: SpeechEvent) => void) | null;
   onend: (() => void) | null;
   onerror: ((e: { error: string }) => void) | null;
-  start: () => void;
+  onstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onspeechend: (() => void) | null;
+  abort: () => void;
+  // Chrome 135+ takes the audio track to listen to; older browsers ignore it and use the default mic.
+  start: (track?: MediaStreamTrack) => void;
   stop: () => void;
 };
 const SpeechRecognition = (): (new () => Recognition) | null => {
@@ -38,8 +43,37 @@ const SpeechRecognition = (): (new () => Recognition) | null => {
 };
 
 const CAPTION_TOPIC = "caption";
+
+// The language captions listen for. Recognising Indian English or Hindi as US English gets little back.
+export const CAPTION_LANGS = [
+  { id: "en-US", label: "English (US)" },
+  { id: "en-IN", label: "English (India)" },
+  { id: "en-GB", label: "English (UK)" },
+  { id: "hi-IN", label: "Hindi" },
+];
+const CAPTION_LANG_KEY = "linkroom-caption-lang";
+function defaultCaptionLang() {
+  try {
+    const saved = localStorage.getItem(CAPTION_LANG_KEY);
+    if (saved && CAPTION_LANGS.some((l) => l.id === saved)) return saved;
+  } catch {
+    /* private window */
+  }
+  const nav = typeof navigator === "undefined" ? "en-US" : navigator.language;
+  // Chrome in India usually says en-US, so the time zone decides between the Englishes.
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (nav.startsWith("en") && (zone === "Asia/Calcutta" || zone === "Asia/Kolkata")) return "en-IN";
+  if (CAPTION_LANGS.some((l) => l.id === nav)) return nav;
+  if (nav.startsWith("hi")) return "hi-IN";
+  return "en-US";
+}
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+// The backend only links talk to text for its own ids: a room or link id and a block like "p12".
+const focusOf = (view: { doc: string; block: string } | null): HuddleFocus | null =>
+  view && /^[A-Za-z0-9_:-]{1,64}$/.test(view.doc) && /^[a-z]d{1,6}$/.test(view.block)
+    ? { doc: view.doc, block: view.block }
+    : null;
 const segmentId = () => `s_${crypto.randomUUID().replace(/-/g, "")}`;
 
 function people(room: Room): CallPerson[] {
@@ -100,7 +134,12 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
     callRef.current = call;
   }, [call]);
 
-  const putCaption = (c: Caption) => setCaptions((list) => [...list.filter((x) => x.id !== c.id), c].slice(-6));
+  // Everything said in this call, for the live transcript until the server has saved it (captions fade).
+  const [captionLog, setCaptionLog] = useState<Caption[]>([]);
+  const putCaption = (c: Caption) => {
+    setCaptions((list) => [...list.filter((x) => x.id !== c.id), c].slice(-6));
+    setCaptionLog((list) => [...list.filter((x) => x.id !== c.id), c].slice(-60));
+  };
 
   const connect = async (join: () => Promise<{ huddle: HuddleSummary; livekit: { url: string; token: string } }>) => {
     if (callRef.current) await leave();
@@ -164,6 +203,8 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
     setInCall([]);
     setMicOn(false);
     setCaptions([]);
+    setCaptionLog([]);
+    setCaptionIssue(null);
     setNeedsAudioClick(false);
     audioBox.current?.replaceChildren();
     return c;
@@ -271,16 +312,43 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
   );
 
   // --- Captions and the transcript ---
+  // What's wrong with your captions, shown in the call card (null when they're fine).
+  const [captionIssue, setCaptionIssue] = useState<string | null>(null);
+  const [listening, setListening] = useState(false); // speech recognition is running
+  const [hearing, setHearing] = useState(false); // and hears speech right now
+  const [heard, setHeard] = useState(""); // the last words it made out
+  const [captionLang, setCaptionLangState] = useState(defaultCaptionLang);
+  const setCaptionLang = (lang: string) => {
+    setCaptionLangState(lang);
+    try {
+      localStorage.setItem(CAPTION_LANG_KEY, lang);
+    } catch {
+      /* private window */
+    }
+  };
+
   // Finished sentences wait here and go to the backend in batches (at most 20 per call).
   const pending = useRef<HuddleSegmentIn[]>([]);
   async function flushSegments(c: Call | null = callRef.current) {
     if (!c || pending.current.length === 0) return;
     const batch = pending.current.splice(0, 20);
     const auth = await roomAuth();
-    if (!auth) return;
-    await api.huddles.segments(roomId, c.huddle.id, batch, auth).catch(() => {
-      pending.current.unshift(...batch); // try again with the next batch
-    });
+    if (!auth) {
+      pending.current.unshift(...batch);
+      return;
+    }
+    try {
+      await api.huddles.segments(roomId, c.huddle.id, batch, auth);
+    } catch (err) {
+      // Refused (bad input, no permission): retrying won't help, so say why. Otherwise try again later.
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
+        setCaptionIssue(`Your words weren't saved to the transcript: ${err.message}`);
+        return;
+      }
+      pending.current.unshift(...batch);
+      return;
+    }
+    setCaptionIssue(null);
     if (pending.current.length > 0) await flushSegments(c);
   }
 
@@ -292,9 +360,28 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
     const rec = new Ctor();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = navigator.language || "en-US";
+    rec.lang = captionLang;
     let alive = true;
+    let networkFails = 0;
     let utterance = { id: segmentId(), startedAt: 0 };
+    let latest = ""; // the words of the utterance in progress, not yet saved
+    let saved = ""; // the start of the current result, already saved while Chrome sat on it
+    // The words of a result after the ones already saved. By whole words, since Chrome may revise the
+    // earlier ones as it goes.
+    const unsaved = (text: string) => (saved ? text.split(/\s+/).slice(saved.split(/\s+/).length).join(" ") : text);
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    // Listen to the very track LiveKit sends (echo-cancelled, the same mic the others hear) rather
+    // than letting the browser open the default microphone a second time.
+    const track = room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+    const listen = () => {
+      if (!alive) return;
+      try {
+        if (track && track.readyState === "live") rec.start(track);
+        else rec.start();
+      } catch {
+        /* already listening */
+      }
+    };
     const send = (text: string, final: boolean) => {
       putCaption({ id: utterance.id, who: me.id, name: "You", text, final, at: Date.now() });
       void room.localParticipant
@@ -304,44 +391,135 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
         })
         .catch(() => {});
     };
+    // Saves the utterance in progress as a transcript line.
+    const commit = (text: string) => {
+      clearTimeout(stall);
+      latest = "";
+      if (!text) return;
+      pending.current.push({
+        id: utterance.id,
+        text: text.slice(0, 1000),
+        start_at: new Date(utterance.startedAt || Date.now()).toISOString(),
+        end_at: new Date().toISOString(),
+        focus: focusOf(currentView()),
+      });
+      if (pending.current.length >= 20) void flushSegments();
+      utterance = { id: segmentId(), startedAt: 0 };
+    };
+    rec.onstart = () => setListening(true);
+    rec.onspeechstart = () => setHearing(true);
+    rec.onspeechend = () => setHearing(false);
     rec.onresult = (e) => {
+      networkFails = 0;
+      setCaptionIssue(null);
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]!;
         const text = r[0].transcript.trim();
         if (!text) continue;
         if (!utterance.startedAt) utterance.startedAt = Date.now();
-        send(text, r.isFinal);
+        // Only the words not saved yet: the rest is already a transcript line.
+        const fresh = unsaved(text);
+        if (fresh) send(fresh, r.isFinal);
+        setHeard(fresh || text);
         if (r.isFinal) {
-          const view = currentView();
-          pending.current.push({
-            id: utterance.id,
-            text: text.slice(0, 1000),
-            start_at: new Date(utterance.startedAt).toISOString(),
-            end_at: new Date().toISOString(),
-            focus: view ? { doc: view.doc, block: view.block.slice(0, 16) } : null,
-          });
-          if (pending.current.length >= 20) void flushSegments();
-          utterance = { id: segmentId(), startedAt: 0 };
+          commit(fresh);
+          saved = "";
+          continue;
         }
+        // Chrome can sit on an interim result for a long time in a noisy room, or keep one going
+        // through nonstop talk. Words that stop changing for a few seconds, or a long run of them, are
+        // saved anyway; when the result is finished, only the words after them are added.
+        latest = text;
+        clearTimeout(stall);
+        const saveSoFar = () => {
+          const words = unsaved(latest);
+          saved = latest;
+          commit(words);
+        };
+        if (fresh.split(/\s+/).length >= 20 || Date.now() - utterance.startedAt > 10_000) saveSoFar();
+        else stall = setTimeout(saveSoFar, 4000);
       }
     };
     // Chrome stops listening after a pause or a minute; keep it going while the mic is on.
     rec.onend = () => {
-      if (alive) setTimeout(() => alive && rec.start(), 250);
+      commit(unsaved(latest)); // words it hadn't finished with
+      saved = "";
+      setListening(false);
+      setHearing(false);
+      if (alive) setTimeout(listen, 250);
     };
     rec.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") alive = false;
+      switch (e.error) {
+        case "no-speech":
+        case "aborted":
+          return; // a quiet moment; onend starts it again
+        case "network":
+          // The browser's speech service (Google's, in Chrome) couldn't be reached.
+          if (++networkFails < 3) return;
+          setCaptionIssue("Captions can't reach your browser's speech service. Use Chrome or Edge (Brave blocks it).");
+          break;
+        case "not-allowed":
+        case "service-not-allowed":
+          setCaptionIssue("Captions are blocked. Allow the microphone for this site, then turn your mic off and on.");
+          break;
+        case "audio-capture":
+          setCaptionIssue("Captions can't hear a microphone. Check your input device.");
+          break;
+        case "language-not-supported":
+          setCaptionIssue("Your browser can't caption this language. Pick another one.");
+          break;
+        default:
+          return;
+      }
+      alive = false;
     };
-    rec.start();
-    const flusher = setInterval(() => void flushSegments(), 4000);
+    listen();
+    const flusher = setInterval(() => void flushSegments(), 3000);
     return () => {
       alive = false;
       clearInterval(flusher);
       rec.onend = null;
-      rec.stop();
+      rec.onstart = null;
+      rec.onspeechstart = null;
+      rec.onspeechend = null;
+      commit(unsaved(latest));
+      try {
+        rec.abort();
+      } catch {
+        /* never started */
+      }
+      setListening(false);
+      setHearing(false);
+      setHeard("");
       void flushSegments();
     };
-  }, [transcribing, call]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [transcribing, call, captionLang]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // How loud your microphone is, from the very track LiveKit sends, so you can see it's picking you up.
+  const [micLevel, setMicLevel] = useState(0);
+  useEffect(() => {
+    const track = call?.room.localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack;
+    if (!micOn || !track) return;
+    const ctx = new AudioContext();
+    void ctx.resume();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    ctx.createMediaStreamSource(new MediaStream([track])).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    let last = 0;
+    const tick = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      const level = Math.min(1, Math.sqrt(sum / buf.length) * 6);
+      if (Math.abs(level - last) > 0.04) setMicLevel((last = level));
+    }, 100);
+    return () => {
+      clearInterval(tick);
+      void ctx.close();
+      setMicLevel(0);
+    };
+  }, [call, micOn]);
 
   // The paragraph you're reading, at most every 2 s while you're in a call, so the notes can tie
   // what was said to the text on screen.
@@ -349,18 +527,12 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
     if (!call || !canSpeak) return;
     let last = "";
     const tick = setInterval(() => {
-      const view = currentView();
+      const view = focusOf(currentView());
       if (!view) return;
       const key = `${view.doc}#${view.block}`;
       if (key === last) return;
       last = key;
-      void roomAuth().then(
-        (auth) =>
-          auth &&
-          api.huddles
-            .focus(roomId, call.huddle.id, { doc: view.doc, block: view.block.slice(0, 16) }, auth)
-            .catch(() => {}),
-      );
+      void roomAuth().then((auth) => auth && api.huddles.focus(roomId, call.huddle.id, view, auth).catch(() => {}));
     }, 2000);
     return () => clearInterval(tick);
   }, [call, canSpeak]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -387,11 +559,18 @@ function useHuddleValue(audioBox: RefObject<HTMLDivElement | null>) {
     canSpeak,
     micOn,
     toggleMic: () => void setMic(!micOn),
-    transcribing,
+    transcribing: transcribing && listening,
+    hearing,
+    heard,
+    micLevel,
+    captionLang,
+    setCaptionLang,
+    captionIssue,
     captionsSupported,
     showCaptions,
     setShowCaptions,
     captions,
+    captionLog,
     needsAudioClick,
     enableAudio,
     start,
