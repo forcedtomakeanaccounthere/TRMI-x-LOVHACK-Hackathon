@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import CFB from "cfb";
 import { makeDocx, makePptx } from "../support/files";
 import { makePdf } from "../support/pdf";
 import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
@@ -424,46 +425,51 @@ describe("DELETE /api/rooms/:id and POST /api/rooms/:id/restore", () => {
 });
 
 describe("POST /api/rooms/file", () => {
-  const browser = () => createClient(supabase.url, supabase.anonKey, { auth: { persistSession: false } });
   const uploadFile = (file: Buffer, filename: string) =>
     request(app).post("/api/rooms/file").set(auth(owner)).attach("file", file, { filename });
 
-  it("makes a DOCX room people can highlight, and keeps the original out of public reach", async () => {
+  it("makes a DOCX room converted to PDF for the viewer, and keeps the original out of public reach", async () => {
     const res = await uploadFile(await makeDocx(["Hello from Word"]), "notes.docx");
     expect(res.status).toBe(201);
     const { id } = res.body as { id: string };
 
     expect(await supabase.room(id)).toMatchObject({
-      kind: "file",
+      kind: "pdf",
       title: "notes.docx",
-      content_html: '<p data-block="b0">Hello from Word</p>',
+      pdf_path: `${id}.pdf`,
       source_meta: { format: "docx", file_name: "notes.docx" },
     });
     expect((await fetch(`${supabase.url}/storage/v1/object/public/files/${id}.docx`)).ok).toBe(false);
-
-    const { error } = await browser().from("highlights").insert({
-      room_id: id,
-      author_name: "Guest",
-      author_color: "#00ff00",
-      block_id: "b0",
-      start_offset: 0,
-      end_offset: 5,
-      quote: "Hello",
-    });
-    expect(error).toBeNull();
+    expect(await supabase.pdf(`${id}.pdf`)).not.toBeNull();
   });
 
   it.each([
-    ["deck.pptx", async () => makePptx([["Slide text"]]), "pptx"],
-    ["readme.md", async () => Buffer.from("# Title\n\nBody"), "md"],
-    ["notes.txt", async () => Buffer.from("Plain text"), "txt"],
-  ])("makes a room from %s", async (filename, make, format) => {
+    ["deck.pptx", async () => makePptx([["Slide text"]]), "pptx", "pdf"],
+    ["readme.md", async () => Buffer.from("# Title\n\nBody"), "md", "file"],
+    ["notes.txt", async () => Buffer.from("Plain text"), "txt", "file"],
+  ])("makes a room from %s", async (filename, make, format, expectedKind) => {
     const res = await uploadFile(await make(), filename);
     expect(res.status).toBe(201);
     expect(await supabase.room((res.body as { id: string }).id)).toMatchObject({
-      kind: "file",
+      kind: expectedKind,
       source_meta: { format, file_name: filename },
     });
+  });
+
+  it("makes a PDF room from a legacy .ppt file", async () => {
+    const cfb = CFB.utils.cfb_new();
+    CFB.utils.cfb_add(cfb, "PowerPoint Document", Buffer.from("test"));
+    const pptBuffer = Buffer.from(CFB.write(cfb, { type: "buffer" }) as Uint8Array);
+
+    const res = await uploadFile(pptBuffer, "presentation.ppt");
+    expect(res.status).toBe(201);
+    const { id } = res.body as { id: string };
+    expect(await supabase.room(id)).toMatchObject({
+      kind: "pdf",
+      pdf_path: `${id}.pdf`,
+      source_meta: { format: "ppt", file_name: "presentation.ppt" },
+    });
+    expect(await supabase.pdf(`${id}.pdf`)).not.toBeNull();
   });
 
   it("sends a PDF to the PDF viewer", async () => {

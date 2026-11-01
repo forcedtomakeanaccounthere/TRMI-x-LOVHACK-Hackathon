@@ -2,8 +2,9 @@ import { randomBytes } from "node:crypto";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import CFB from "cfb";
 import { startFakeAi, type FakeAi } from "../support/fake-ai";
-import { makeDocx } from "../support/files";
+import { makeDocx, makePptx } from "../support/files";
 import { makePdf } from "../support/pdf";
 import { connectSupabase, uniqueEmail, type TestSupabase } from "../support/supabase";
 
@@ -125,5 +126,36 @@ describe("downloading a room's original file", () => {
     expect((await fetch(res.body.url as string)).status).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, (TTL_SECONDS + 1.5) * 1000));
     expect((await fetch(res.body.url as string)).ok).toBe(false);
+  });
+
+  it("user uploads a PPTX; gets a link that downloads the original PPTX bytes", async () => {
+    const pptx = await makePptx([["Slide One"]]);
+    const created = await upload(pptx, "Presentation.pptx");
+    expect(created.status).toBe(201);
+
+    const res = await original(created.body.id as string);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ file_name: "Presentation.pptx", expires_in: TTL_SECONDS });
+
+    const download = await fetch(res.body.url as string);
+    expect(download.status).toBe(200);
+    expect(Buffer.from(await download.arrayBuffer()).equals(pptx)).toBe(true);
+  });
+
+  it("user uploads a legacy PPT; gets a link that downloads the original PPT bytes", async () => {
+    const cfb = CFB.utils.cfb_new();
+    CFB.utils.cfb_add(cfb, "PowerPoint Document", Buffer.from("ppt-binary-data"));
+    const ppt = Buffer.from(CFB.write(cfb, { type: "buffer" }) as Uint8Array);
+
+    const created = await upload(ppt, "Legacy.ppt");
+    expect(created.status).toBe(201);
+
+    const res = await original(created.body.id as string);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ file_name: "Legacy.ppt", expires_in: TTL_SECONDS });
+
+    const download = await fetch(res.body.url as string);
+    expect(download.status).toBe(200);
+    expect(Buffer.from(await download.arrayBuffer()).equals(ppt)).toBe(true);
   });
 });

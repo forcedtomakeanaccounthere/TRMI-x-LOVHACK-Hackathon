@@ -30,6 +30,7 @@ export async function startBackend(extraEnv: Record<string, string> = {}) {
     env: {
       PATH: process.env.PATH,
       NODE_ENV: "production",
+      ALLOW_OFFICE_MOCK: "1",
       SERVER_PORT: String(port),
       WEB_ORIGIN: WEB,
       API_PUBLIC_URL: api,

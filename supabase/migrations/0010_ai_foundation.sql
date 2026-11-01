@@ -59,6 +59,6 @@ values (
   'files',
   false,
   20971520,
-  '{application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/markdown,text/plain}'
+  '{application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint,text/markdown,text/plain}'
 )
 on conflict (id) do nothing;

@@ -95,7 +95,7 @@ describe("chunkRoom for HTML rooms", () => {
   it("finds a table in an uploaded Markdown file", async () => {
     const { parseFile } = await import("../../src/lib/files");
     const parsed = await parseFile(Buffer.from("| Plan | Cost |\n| --- | --- |\n| Pro | $9 |\n"), "prices.md");
-    if (parsed.format === "pdf") throw new Error("expected HTML");
+    if (!("html" in parsed)) throw new Error("expected HTML");
     const chunks = chunkRoom({ kind: "file", content_html: parsed.html, content_text: null });
     expect(chunks).toEqual([expect.objectContaining({ content: "Plan Cost Pro $9", block_ids: ["b0"] })]);
   });

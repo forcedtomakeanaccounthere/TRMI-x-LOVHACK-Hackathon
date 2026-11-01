@@ -5,6 +5,7 @@ import {
   CloudArrowUpIcon,
   GoogleDriveLogoIcon,
   LinkSimpleIcon,
+  SparkleIcon,
   TextAlignLeftIcon,
   WarningCircleIcon,
   YoutubeLogoIcon,
@@ -38,7 +39,7 @@ const SITES = ["Wikipedia", "Notion", "Medium", "Substack", "arXiv", "Blogs", "W
 const formatOf = (name: string): FileFormat | null => {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   if (ext === "markdown") return "md";
-  return (["pdf", "docx", "pptx", "md", "txt"] as const).find((f) => f === ext) ?? null;
+  return (["pdf", "docx", "pptx", "ppt", "md", "txt"] as const).find((f) => f === ext) ?? null;
 };
 
 async function token() {
@@ -157,17 +158,18 @@ function UploadTab({ onDone }: { onDone: () => void }) {
       files.map(async (file) => {
         if (file.size > MAX_BYTES) return set(file.name, { status: "error", error: "Over 20 MB" });
         const ext = file.name.toLowerCase().split(".").pop();
-        if (ext === "ppt" || ext === "doc")
+        if (ext === "doc")
           return set(file.name, {
             status: "error",
-            error: `Save it as .${ext}x first, then upload that`,
+            error: "Save it as .docx first, then upload that",
           });
         try {
           const { id } = await api.createFileRoom(file, await token());
           const format = formatOf(file.name);
+          const isPdfRoom = format === "pdf" || format === "docx" || format === "pptx" || format === "ppt";
           actions.addDoc({
             id,
-            kind: format === "pdf" ? "pdf" : "file",
+            kind: isPdfRoom ? "pdf" : "file",
             title: file.name,
             source_url: null,
             format,
@@ -212,10 +214,10 @@ function UploadTab({ onDone }: { onDone: () => void }) {
         </span>
         <span className="mt-4 text-[0.9375rem] font-medium">Drop files here, or browse</span>
         <span className="mt-1 text-[0.75rem] text-muted-foreground">
-          PDF · DOCX · PPTX · MD · TXT, up to 20 MB each
+          PDF · DOCX · PPTX · PPT · MD · TXT, up to 20 MB each
         </span>
         <div className="mt-4 flex flex-wrap justify-center gap-1.5">
-          {["PDF", "DOCX", "PPTX", "MD", "TXT"].map((f) => (
+          {["PDF", "DOCX", "PPTX", "PPT", "MD", "TXT"].map((f) => (
             <span
               key={f}
               className="rounded-md bg-foreground/5 px-1.5 py-0.5 font-mono text-[0.625rem] text-muted-foreground"
@@ -373,6 +375,8 @@ function YoutubeTab({ onDone }: { onDone: () => void }) {
     title: string;
   } | null>(null);
   const [busy, setBusy] = useState<"look" | "process" | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
 
   const look = async () => {
     const id = youtubeId(url);
@@ -402,11 +406,11 @@ function YoutubeTab({ onDone }: { onDone: () => void }) {
     onDone();
   };
 
-  const process = async () => {
+  const process = async (transcript?: string) => {
     if (!video) return;
     setBusy("process");
     try {
-      const { id } = await api.createYoutubeRoom(video.url, await token());
+      const { id } = await api.createYoutubeRoom(video.url, await token(), transcript);
       actions.addDoc({
         id,
         kind: "youtube",
@@ -415,8 +419,10 @@ function YoutubeTab({ onDone }: { onDone: () => void }) {
         format: null,
       });
       toast.success("Transcript ready");
+      setPasting(false);
       onDone();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 422 && !transcript) setPasting(true);
       if (err instanceof ApiError && err.status === 404) {
         toast.message("Transcripts aren't on the backend yet, so the video is attached to watch.", {
           description: "POST /api/rooms/youtube",
@@ -444,6 +450,8 @@ function YoutubeTab({ onDone }: { onDone: () => void }) {
           onChange={(e) => {
             setUrl(e.target.value);
             setVideo(null);
+            setPasting(false);
+            setPasted("");
           }}
           placeholder="https://youtube.com/watch?v=…"
           className="h-10 min-w-0 flex-1 bg-transparent text-[0.9375rem] outline-none"
@@ -488,13 +496,36 @@ function YoutubeTab({ onDone }: { onDone: () => void }) {
               </button>
               <button
                 type="button"
-                onClick={process}
+                onClick={() => process()}
                 disabled={busy !== null}
                 className="flex h-10 flex-1 items-center justify-center gap-2 rounded-full bg-[linear-gradient(120deg,#2f5bff,#8b5cf6)] text-[0.8125rem] font-semibold text-white shadow-[0_10px_24px_-10px_rgb(47_91_255/0.9)]"
               >
                 {busy === "process" && <Spinner />} Process into document
               </button>
             </div>
+            {pasting && (
+              <div className="liquid-glass mt-3 space-y-3 rounded-2xl p-4">
+                <div className="text-[0.8125rem] text-muted-foreground">
+                  Paste the transcript instead. On YouTube: ⋯ under the video → Show transcript, then copy it.
+                </div>
+                <textarea
+                  value={pasted}
+                  onChange={(e) => setPasted(e.target.value)}
+                  rows={5}
+                  placeholder={"0:00\nFirst line…\n0:07\nNext line…"}
+                  className="w-full resize-y rounded-xl border border-border bg-transparent p-3 text-[0.8125rem] outline-none focus:border-azure"
+                />
+                <button
+                  type="button"
+                  onClick={() => process(pasted)}
+                  disabled={busy !== null || !pasted.trim()}
+                  className="flex h-10 items-center gap-2 rounded-full bg-ink px-5 text-[0.8125rem] font-medium text-pearl active:scale-[0.98] disabled:opacity-60 dark:bg-azure"
+                >
+                  {busy === "process" ? <Spinner /> : <SparkleIcon weight="fill" className="size-4" />}
+                  Use pasted transcript
+                </button>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

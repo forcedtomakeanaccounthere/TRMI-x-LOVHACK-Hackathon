@@ -97,6 +97,14 @@ export const DEFAULT_HANDLERS: Record<string, FakeAiHandler> = {
         };
     }
   },
+  "/transcript": () => ({
+    language: "en",
+    is_generated: true,
+    segments: [
+      { start: 0, duration: 4, text: "Fake transcript intro" },
+      { start: 4, duration: 5, text: "Fake transcript second segment" },
+    ],
+  }),
 };
 
 async function readJson(req: IncomingMessage): Promise<Body> {

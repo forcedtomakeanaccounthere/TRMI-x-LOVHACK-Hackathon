@@ -24,8 +24,9 @@ ENV NODE_ENV=production \
 WORKDIR /app
 
 # uv (from PyPI) installs Python 3.12 and apps/ai's locked dependencies.
+# libreoffice-nogui and fonts convert uploaded DOCX/PPTX/PPT documents to PDF.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-pip \
+    && apt-get install -y --no-install-recommends python3-pip libreoffice-nogui fonts-dejavu-core fonts-liberation \
     && pip3 install --no-cache-dir --break-system-packages uv==0.9.5 \
     && rm -rf /var/lib/apt/lists/*
 
