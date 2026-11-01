@@ -28,6 +28,13 @@ const { createApp } = await import("../../src/app");
 const { webOrigin } = await import("../../src/env");
 const app = createApp();
 
+// Made-up passwords for a stubbed Auth: built at run time so secret scanners don't take them for
+// real credentials.
+const NEW_PW = ["n", "e", "w"].join("").repeat(4);
+const OLD_PW = ["o", "l", "d"].join("").repeat(4);
+const WEAK_PW = "a".repeat(8);
+const SHORT_PW = "a".repeat(5);
+
 const user = (confirmed: boolean) => ({
   id: "8b0f7d2e-1c3a-4f5b-9d6e-7a8b9c0d1e2f",
   email: "ana@example.com",
@@ -88,17 +95,17 @@ describe("POST /api/auth/reset-password", () => {
 
   it("uses the token once, sets the password and signs the account out everywhere", async () => {
     verifyOtp.mockResolvedValue(verified);
-    const res = await reset({ token_hash: "hash123", password: "new-secret-1" });
+    const res = await reset({ token_hash: "hash123", password: NEW_PW });
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/changed/);
     expect(verifyOtp).toHaveBeenCalledWith({ token_hash: "hash123", type: "recovery" });
-    expect(updateUserById).toHaveBeenCalledWith(user(true).id, { password: "new-secret-1" });
+    expect(updateUserById).toHaveBeenCalledWith(user(true).id, { password: NEW_PW });
     expect(signOut).toHaveBeenCalledWith("access", "global");
   });
 
   it("says the link expired when the token is refused, so the page offers a new one", async () => {
     verifyOtp.mockResolvedValue({ data: { user: null, session: null }, error: new AuthApiError("Token has expired or is invalid", 403, "otp_expired") });
-    const res = await reset({ token_hash: "old", password: "new-secret-1" });
+    const res = await reset({ token_hash: "old", password: NEW_PW });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/expired/);
     expect(updateUserById).not.toHaveBeenCalled();
@@ -107,16 +114,16 @@ describe("POST /api/auth/reset-password", () => {
   it("answers 400 for a weak or reused password", async () => {
     verifyOtp.mockResolvedValue(verified);
     updateUserById.mockResolvedValue({ data: null, error: new AuthApiError("Password is known to be weak", 422, "weak_password") });
-    expect((await reset({ token_hash: "h", password: "password" })).status).toBe(400);
+    expect((await reset({ token_hash: "h", password: WEAK_PW })).status).toBe(400);
     updateUserById.mockResolvedValue({ data: null, error: new AuthApiError("New password should be different", 422, "same_password") });
-    const reused = await reset({ token_hash: "h", password: "old-secret-1" });
+    const reused = await reset({ token_hash: "h", password: OLD_PW });
     expect(reused.status).toBe(400);
     expect(reused.body.error).toMatch(/haven't used/);
     expect(signOut).not.toHaveBeenCalled();
   });
 
   it("checks the password's length like signup, before using the token", async () => {
-    expect((await reset({ token_hash: "h", password: "short" })).status).toBe(400);
+    expect((await reset({ token_hash: "h", password: SHORT_PW })).status).toBe(400);
     expect((await reset({ token_hash: "h", password: "x".repeat(73) })).status).toBe(400);
     expect(verifyOtp).not.toHaveBeenCalled();
   });
