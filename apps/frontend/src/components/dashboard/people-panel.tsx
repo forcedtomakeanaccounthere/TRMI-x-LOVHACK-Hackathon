@@ -12,7 +12,7 @@ type Tab = "recent" | "following" | "followers";
 
 // Quick-add list: people I've read with, people I follow and people who follow me.
 export function PeoplePanel({ onAddToRoom }: { onAddToRoom: (person: Person) => void }) {
-  const { state, dispatch } = useDashboard();
+  const { state, actions } = useDashboard();
   const [tab, setTab] = useState<Tab>("recent");
   const followingIds = new Set(state.following.map((p) => p.id));
   const followerIds = new Set(state.followers.map((p) => p.id));
@@ -71,7 +71,10 @@ export function PeoplePanel({ onAddToRoom }: { onAddToRoom: (person: Person) => 
         {rows.map(({ person, meta, title }) => {
           const following = followingIds.has(person.id);
           return (
-            <li key={person.id} className="group/row flex items-center gap-3 rounded-2xl px-2 py-2 hover:bg-foreground/4">
+            <li
+              key={person.id}
+              className="group/row flex items-center gap-3 rounded-2xl px-2 py-2 hover:bg-foreground/4"
+            >
               <PersonAvatar person={person} size="md" />
               <div className="min-w-0 flex-1" title={title}>
                 <div className="truncate text-[0.875rem] font-medium">{person.name}</div>
@@ -88,7 +91,7 @@ export function PeoplePanel({ onAddToRoom }: { onAddToRoom: (person: Person) => 
               </button>
               <button
                 type="button"
-                onClick={() => dispatch({ type: "follow-toggle", person })}
+                onClick={() => actions.toggleFollow(person)}
                 aria-pressed={following}
                 className={cn(
                   "h-8 w-22 shrink-0 rounded-full text-[0.75rem] font-medium transition-colors",

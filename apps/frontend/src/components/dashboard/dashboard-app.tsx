@@ -31,7 +31,11 @@ const noop = () => () => {};
 
 // Everything here depends on the clock and the saved session, so it renders after mount only.
 export function DashboardApp() {
-  const mounted = useSyncExternalStore(noop, () => true, () => false);
+  const mounted = useSyncExternalStore(
+    noop,
+    () => true,
+    () => false,
+  );
   return mounted ? <Dashboard /> : <DashboardSkeleton />;
 }
 
@@ -64,6 +68,29 @@ function withLocalPrefs(data: DashboardData): DashboardData {
 
 // Real rooms from GET /api/rooms/mine (active and deleted), on top of preview data for the parts the
 // backend doesn't serve yet (people, groups, profile stats). Falls back to preview if the API fails.
+// A person from the backend (UserSummary) in the dashboard's shape.
+function toPerson(u: { id: string; display_name: string; avatar_color: string | null }): Person {
+  return {
+    id: u.id,
+    name: u.display_name,
+    handle:
+      u.display_name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "")
+        .slice(0, 20) || "reader",
+    color: u.avatar_color ?? colorFor(u.id),
+    avatar_url: null,
+  };
+}
+
+// A stable colour for someone who hasn't picked one.
+const PALETTE = ["#2f5bff", "#8b5cf6", "#14b8a6", "#f97316", "#ec4899", "#eab308"];
+function colorFor(id: string) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return PALETTE[h % PALETTE.length]!;
+}
+
 async function loadLive(user: AuthUser): Promise<Loaded> {
   const base = createDemoDashboard(new Date(), user);
   try {
@@ -74,8 +101,20 @@ async function loadLive(user: AuthUser): Promise<Loaded> {
       api.myRooms({ limit: 100 }, token),
       api.myRooms({ status: "deleted", limit: 100 }, token),
     ]);
+    // People and profile load alongside; one of them failing leaves that part empty, never fake.
+    const [profile, following, followers, participants] = await Promise.allSettled([
+      api.me.profile(token),
+      api.me.following(token),
+      api.me.followers(token),
+      api.me.participants(token),
+    ]);
+    const value = <T,>(r: PromiseSettledResult<T>) => (r.status === "fulfilled" ? r.value : null);
     const rooms = [...active.rooms, ...deleted.rooms].map((r) => fromApiRoom(r));
-    const hosted = rooms.filter((r) => r.role === "owner" && r.status !== "deleted").length;
+    const live = rooms.filter((r) => r.status !== "deleted");
+    const hosted = live.filter((r) => r.role === "owner").length;
+    const p = value(profile);
+    const followingList = (value(following)?.users ?? []).map(toPerson);
+    const followerList = (value(followers)?.users ?? []).map(toPerson);
     return {
       source: "live",
       data: withLocalPrefs({
@@ -83,7 +122,27 @@ async function loadLive(user: AuthUser): Promise<Loaded> {
         // Signed in: start with no groups rather than the demo ones, until the user makes their own.
         groups: [],
         rooms,
-        profile: { ...base.profile, stats: { ...base.profile.stats, rooms_hosted: hosted } },
+        following: followingList,
+        followers: followerList,
+        participants: (value(participants)?.participants ?? []).map((x) => ({
+          ...toPerson({ id: x.user_id, display_name: x.display_name, avatar_color: x.avatar_color }),
+          rooms_together: x.shared_rooms,
+          last_seen_at: x.last_seen_at,
+        })),
+        profile: {
+          ...base.profile,
+          name: p?.display_name || base.profile.name,
+          color: p?.avatar_color ?? base.profile.color,
+          bio: p ? p.bio : null,
+          created_at: p?.created_at ?? base.profile.created_at,
+          stats: {
+            rooms_hosted: hosted,
+            // Highlights made in the rooms you're part of.
+            highlights: live.reduce((n, r) => n + r.counts.highlights, 0),
+            followers: followerList.length,
+            following: followingList.length,
+          },
+        },
       }),
     };
   } catch {
@@ -96,7 +155,10 @@ function Dashboard() {
   const session = useSession();
   const user = session?.user ?? null;
   const userId = user?.id ?? null;
-  const [guest] = useState<Loaded>(() => ({ source: "preview", data: withLocalPrefs(createDemoDashboard(new Date(), GUEST)) }));
+  const [guest] = useState<Loaded>(() => ({
+    source: "preview",
+    data: withLocalPrefs(createDemoDashboard(new Date(), GUEST)),
+  }));
   const [fetched, setFetched] = useState<{ userId: string; result: Loaded } | null>(null);
 
   // Refetch only when the signed-in account changes, not when its token refreshes.
@@ -129,7 +191,10 @@ function DashboardView({ loaded, signedIn }: { loaded: Loaded; signedIn: boolean
     <DashboardProvider initial={initial} source={loaded.source}>
       <Backdrop />
       <div className="relative mx-auto max-w-[100rem] gap-5 px-3 py-3 md:px-5 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)]">
-        <aside className="liquid-glass sticky top-3 hidden h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-[1.75rem] p-4 lg:block" data-lenis-prevent>
+        <aside
+          className="liquid-glass sticky top-3 hidden h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-[1.75rem] p-4 lg:block"
+          data-lenis-prevent
+        >
           <Sidebar />
         </aside>
 
@@ -163,7 +228,11 @@ function DashboardView({ loaded, signedIn }: { loaded: Loaded; signedIn: boolean
       </div>
 
       <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-        <SheetContent side="left" className="liquid-glass liquid-glass-strong w-[18rem] border-0 p-4" data-lenis-prevent>
+        <SheetContent
+          side="left"
+          className="liquid-glass liquid-glass-strong w-[18rem] border-0 p-4"
+          data-lenis-prevent
+        >
           <SheetTitle className="sr-only">Dashboard menu</SheetTitle>
           <Sidebar onNavigate={() => setMenuOpen(false)} />
         </SheetContent>
@@ -240,7 +309,10 @@ function Header({
             {!signedIn && (
               <>
                 {" "}
-                <Link href="/login?next=/dashboard" className="font-medium text-foreground underline-offset-4 hover:underline">
+                <Link
+                  href="/login?next=/dashboard"
+                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                >
                   Sign in
                 </Link>{" "}
                 to see your own name here.
@@ -292,7 +364,11 @@ function Backdrop() {
 
 function DashboardSkeleton() {
   return (
-    <div className="mx-auto max-w-[100rem] animate-pulse gap-5 px-3 py-3 md:px-5 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)]" aria-busy="true" aria-label="Loading dashboard">
+    <div
+      className="mx-auto max-w-[100rem] animate-pulse gap-5 px-3 py-3 md:px-5 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)]"
+      aria-busy="true"
+      aria-label="Loading dashboard"
+    >
       <div className="hidden h-[calc(100dvh-1.5rem)] rounded-[1.75rem] bg-foreground/5 lg:block" />
       <div className="space-y-5">
         <div className="h-14 rounded-full bg-foreground/5" />
