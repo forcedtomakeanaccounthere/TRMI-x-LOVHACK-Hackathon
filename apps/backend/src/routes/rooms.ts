@@ -55,6 +55,7 @@ import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, wa
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { ledgerRoutes } from "./ledger";
 import { sourcesRoutes } from "./sources";
+import { artifactsRoutes } from "./artifacts";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -1160,3 +1161,5 @@ roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) =>
 ledgerRoutes(roomsRouter);
 // Attached documents: GET/POST /:id/sources, DELETE /:id/sources/:sourceId (routes/sources.ts).
 sourcesRoutes(roomsRouter);
+// Studio: POST /:id/artifacts (routes/artifacts.ts), rate-limited like Ask.
+artifactsRoutes(roomsRouter, [askPerIp, askPerRoom]);

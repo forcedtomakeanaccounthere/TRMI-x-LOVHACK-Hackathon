@@ -146,6 +146,13 @@ export const ArtifactBody = z.discriminatedUnion("kind", [
 ]);
 export type ArtifactBody = z.infer<typeof ArtifactBody>;
 
+// POST /api/rooms/:id/artifacts. `sources` are the room and/or its attached sources.
+export const ArtifactRequest = z.object({
+  kind: ArtifactKind,
+  sources: z.array(z.string().min(1).max(64)).min(1).max(21),
+});
+export type ArtifactRequest = z.infer<typeof ArtifactRequest>;
+
 export const Artifact = z.object({
   id: Id,
   title: Text(200),

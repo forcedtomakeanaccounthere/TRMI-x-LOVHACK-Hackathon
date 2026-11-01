@@ -7,7 +7,8 @@ import type { AddressInfo } from "node:net";
 
 export type FakeAiRequest = { path: string; body: unknown; token: string | undefined };
 type Body = Record<string, unknown>;
-export type FakeAiHandler = (body: Body) => unknown | { status: number; body: unknown };
+// A handler may return a promise, to hold a reply back (e.g. to test what happens meanwhile).
+export type FakeAiHandler = (body: Body) => unknown | { status: number; body: unknown } | Promise<unknown>;
 
 const EMBEDDING_DIM = 1024; // the vector column in supabase/migrations/0011_chunks.sql
 
@@ -120,7 +121,7 @@ export async function startFakeAi() {
       let reply: unknown = { detail: "not found" };
       if (!handler) status = 404;
       else {
-        reply = handler(body);
+        reply = await handler(body);
         if (reply && typeof reply === "object" && "status" in reply && "body" in reply) {
           status = (reply as { status: number }).status;
           reply = (reply as { body: unknown }).body;
