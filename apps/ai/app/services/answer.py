@@ -44,6 +44,8 @@ MAX_CITATIONS = 5
 MAX_QUOTE_CHARS = 300
 # Short enough that a fallback still fits in the time an answer gets.
 MIN_ATTEMPT_SECONDS = 3.0
+# Kept back from a snapshot question's time for answering from the text when no vision model can.
+TEXT_FALLBACK_SECONDS = 25.0
 
 # How the answer text reads in the room (apps/frontend AiText renders "- " bullets and **bold**).
 # Quotes belong in the citations, not the text: the room shows those beside the answer.
@@ -126,6 +128,10 @@ async def answer_question(req: AnswerRequest) -> AnswerResult:
         if images
         else (settings.answer_deadline_seconds, settings.answer_attempt_seconds)
     )
+    # A snapshot leaves time for a text-only answer if no vision model reads it; both fit within
+    # answer_image_deadline_seconds (below apps/backend's timeout).
+    end = time.monotonic() + deadline
+    vision_end = end - TEXT_FALLBACK_SECONDS if images and req.chunks else end
     try:
         answer = await complete_with_fallback(
             "Answer",
@@ -134,7 +140,7 @@ async def answer_question(req: AnswerRequest) -> AnswerResult:
             + (IMAGE_PROMPT if images else ""),
             user,
             AnswerData,
-            deadline=time.monotonic() + deadline,
+            deadline=vision_end,
             attempt_seconds=attempt,
             min_attempt_seconds=MIN_ATTEMPT_SECONDS,
             images=images,
@@ -142,7 +148,13 @@ async def answer_question(req: AnswerRequest) -> AnswerResult:
     except NoVisionProvider as e:
         raise NoVisionModel(str(e)) from e
     except AllProvidersFailed as e:
-        raise AnswerError(str(e)) from e
+        # The snapshot's page is usually in the chunks too: rather than no answer at all, answer
+        # from the text with the models that don't read images.
+        if not images or not req.chunks:
+            raise AnswerError(str(e)) from e
+        log.warning("Every vision model failed; answering from the document text: %s", e)
+        answer = await _answer_from_text(req, user, end)
+        images = None
     # A snapshot or a selected passage is part of the document too: an answer about it is kept
     # without a citation of the chunks, marked as not found in their text.
     checked = verify_answer(answer, req.chunks, from_image=bool(images) or bool(req.quote))
@@ -151,6 +163,22 @@ async def answer_question(req: AnswerRequest) -> AnswerResult:
     if checked.answer != NOT_FOUND and await flagged_categories(checked.answer):
         return AnswerResult(answer=WITHHELD, found_in_document=False, citations=[], withheld=True)
     return AnswerResult(**checked.model_dump())
+
+
+async def _answer_from_text(req: AnswerRequest, user: str, end: float) -> AnswerData:
+    """The question answered from the chunks alone, when the snapshot couldn't be read."""
+    try:
+        return await complete_with_fallback(
+            "Answer (text only)",
+            SYSTEM_PROMPT + (PASSAGE_PROMPT if req.quote else ""),
+            user,
+            AnswerData,
+            deadline=end,
+            attempt_seconds=get_settings().answer_attempt_seconds,
+            min_attempt_seconds=MIN_ATTEMPT_SECONDS,
+        )
+    except AllProvidersFailed as e:
+        raise AnswerError(str(e)) from e
 
 
 def format_history(history: list[HistoryTurn]) -> str:

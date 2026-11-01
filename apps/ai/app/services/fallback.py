@@ -70,12 +70,13 @@ async def complete_with_fallback[T: BaseModel](
         except Exception as e:
             record_failure(provider)
             log.warning(
-                "%s via %s (%s) failed after %.1f s: %s",
+                "%s via %s (%s) failed after %.1f s: %s: %s",
                 label,
                 provider.name,
                 provider.model,
                 time.monotonic() - started,
                 type(e).__name__,
+                str(e)[:300],
             )
             failures.append(f"{provider.name}: {type(e).__name__}")
             continue
