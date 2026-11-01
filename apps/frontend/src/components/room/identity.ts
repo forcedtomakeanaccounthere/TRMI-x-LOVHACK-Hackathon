@@ -62,6 +62,18 @@ export function saveGuest(name: string, color: string): Identity {
   return { ...guest, signedIn: false };
 }
 
+// A guest's secret for the backend ledger: the first event it saves claims its guest id, and later
+// requests must send the same key (apps/backend lib/ledger.ts). Made once per browser.
+const GUEST_SECRET = "linkroom-guest-key";
+export function guestKey(): string {
+  let key = read<string>(GUEST_SECRET);
+  if (!key || key.length < 16) {
+    key = nanoid(32);
+    write(GUEST_SECRET, key);
+  }
+  return key;
+}
+
 export function saveColor(color: string) {
   write(COLOR_KEY, color);
 }

@@ -10,9 +10,11 @@ import type {
   DashboardResponse,
   FollowStateResponse,
   ExportSummaryQuery,
+  ListEventsResponse,
   LoginRequest,
   MessageResponse,
   ParticipantsResponse,
+  PostEventsResponse,
   Profile,
   RecapData,
   RoomDetail,
@@ -51,6 +53,10 @@ export function resolveApiUrl(raw: string | undefined): string {
 }
 
 export const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
+
+export type LedgerAuth = { token: string } | { guestId: string; guestKey: string };
+const guestHeaders = (auth: LedgerAuth): Record<string, string> =>
+  "guestId" in auth ? { "X-Guest-Id": auth.guestId, "X-Guest-Key": auth.guestKey } : {};
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
@@ -145,6 +151,21 @@ export const api = {
     request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
 
   // With the signed-in person's token, so sources only members can read are in scope.
+  // The room's ledger on the server (GET/POST /api/rooms/:id/events). `auth` is the signed-in token
+  // or a guest's id and key.
+  listEvents: (roomId: string, after: number, auth: LedgerAuth) =>
+    request<ListEventsResponse>(
+      `/api/rooms/${encodeURIComponent(roomId)}/events?after=${after}`,
+      { method: "GET", headers: guestHeaders(auth) },
+      "token" in auth ? auth.token : undefined,
+    ),
+  postEvents: (roomId: string, events: unknown[], auth: LedgerAuth) =>
+    request<PostEventsResponse>(
+      `/api/rooms/${encodeURIComponent(roomId)}/events`,
+      { ...json({ events }), headers: { "Content-Type": "application/json", ...guestHeaders(auth) } },
+      "token" in auth ? auth.token : undefined,
+    ),
+
   generateArtifact: (roomId: string, body: { kind: string; sources: string[] }, token?: string) =>
     request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body), token),
 
