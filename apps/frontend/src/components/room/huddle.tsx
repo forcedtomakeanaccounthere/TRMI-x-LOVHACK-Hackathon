@@ -1004,7 +1004,8 @@ function HuddleRecord({
               icon={<SparkleIcon weight="duotone" className="size-7" />}
               text={
                 notes?.status === "failed"
-                  ? "The notes couldn't be written. Try again."
+                  ? // The backend's reason, from the latest copy of this huddle in the list.
+                    `The notes couldn't be written. ${h.huddles.find((x) => x.id === huddle.id)?.notes_error ?? huddle.notes_error ?? "Try again."}`
                   : live
                     ? "Notes are written when the huddle ends, or summarize what's been said so far."
                     : "No notes yet. Summarize the conversation to get decisions, action items and open questions."
