@@ -886,8 +886,10 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   });
   if (moderation.flagged.length) throw new HttpError(422, "That question can't be asked here. Try rephrasing it.");
 
-  // The passage an AI box is about helps find the right chunks too.
-  const searchText = quote ? `${question}\n${quote}` : question;
+  // The passage an AI box is about helps find the right chunks too, and so does the previous
+  // question: a follow-up such as "Why?" has no words of its own to search with.
+  const earlier = history?.filter((turn) => turn.role === "user").at(-1)?.text;
+  const searchText = [question, quote, earlier !== question ? earlier : undefined].filter(Boolean).join("\n");
   // Without an embedding the search is by keyword only.
   let embedding: number[] | null = null;
   if (ready.length) {
