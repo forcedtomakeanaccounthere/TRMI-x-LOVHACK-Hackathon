@@ -1,5 +1,5 @@
 import type { AiMessage } from "@linkroom/shared";
-import { api, ApiError, type AskRequest } from "@/lib/api";
+import { api, API_URL, ApiError, type AskRequest } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
 import type { ArtifactBody, ArtifactKind, Citation, DocContent, MindNode } from "./types";
 
@@ -340,9 +340,11 @@ async function attachSources(roomId: string, ids: string[], token: string) {
   if (failed) throw failed.reason;
 }
 
-// `remote`: the documents are backend rooms (not the demo room's). An artifact the backend can't
-// be reached for is built in the browser and marked preview; any answer it gives, a refusal or an
-// AI failure, is passed on so the reason is shown.
+// `remote`: every chosen document is a backend room. When one isn't (the demo room's bundled
+// documents, a `yt:` video not yet processed) the artifact is built in the browser and marked
+// preview. Backend rooms never fall back to that cut-up text, which hid why the backend wasn't
+// answering: any failure, a refusal, an AI error or the server being unreachable, is passed on so
+// its reason is shown.
 export async function generate(
   roomId: string,
   kind: ArtifactKind,
@@ -359,7 +361,12 @@ export async function generate(
       if (looksLike(kind, body)) return { body, preview: false };
       throw new Error("The AI's answer couldn't be shown. Try again.");
     } catch (err) {
-      if (err instanceof ApiError || !(err instanceof TypeError)) throw err;
+      if (err instanceof TypeError) {
+        // fetch failed: the server is down or asleep, the address is wrong, or it refused this site
+        // (CORS: WEB_ORIGIN on the backend must list the frontend's address).
+        throw new Error(`Couldn't reach the server at ${API_URL}. Check that the backend is running and allows this site.`);
+      }
+      throw err;
     }
   }
   return { body: buildLocally(kind, docs), preview: true };

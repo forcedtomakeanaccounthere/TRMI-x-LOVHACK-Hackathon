@@ -33,7 +33,7 @@ export type AskRequest = {
   name?: string; // shown as "asked by"
 };
 
-const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
