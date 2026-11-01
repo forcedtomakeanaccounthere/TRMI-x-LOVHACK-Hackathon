@@ -228,7 +228,7 @@ describe("interleaveChunks", () => {
 });
 
 describe("POST /api/rooms/:id/ask with the workspace's context", () => {
-  it("passes the passage and earlier turns to apps/ai, and searches with the passage too", async () => {
+  it("passes the passage and earlier turns to apps/ai, and searches with the passage and previous question too", async () => {
     state.matches = CHUNKS;
     const res = await ask({
       question: "Explain this",
@@ -239,13 +239,25 @@ describe("POST /api/rooms/:id/ask with the workspace's context", () => {
       ],
     });
     expect(res.status).toBe(201);
-    expect(state.rpc[0]![1]).toMatchObject({ p_query: "Explain this\nsunlight into energy" });
+    expect(state.rpc[0]![1]).toMatchObject({ p_query: "Explain this\nsunlight into energy\nWhat is photosynthesis?" });
     const sent = callAi.mock.calls.find(([path]) => path === "/answer")![1] as Record<string, unknown>;
     expect(sent.quote).toBe("sunlight into energy");
     expect(sent.history).toEqual([
       { role: "user", text: "What is photosynthesis?" },
       { role: "ai", text: "x".repeat(1000) }, // long turns are cut, not refused
     ]);
+  });
+
+  it("searches a short follow-up with the question before it", async () => {
+    state.matches = CHUNKS;
+    await ask({
+      question: "Why?",
+      history: [
+        { role: "user", text: "How do plants get energy?" },
+        { role: "ai", text: "From sunlight." },
+      ],
+    });
+    expect(state.rpc[0]![1]).toMatchObject({ p_query: "Why?\nHow do plants get energy?" });
   });
 
   it("refuses a snapshot that isn't an image data URL before calling the AI", async () => {
