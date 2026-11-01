@@ -37,14 +37,23 @@ import {
   FollowStateResponse as FollowStateResponseSchema,
   GroupsResponse as GroupsResponseSchema,
   InvitesResponse as InvitesResponseSchema,
+  ForgotPasswordRequest,
   LoginRequest,
   MessageResponse as MessageResponseSchema,
+  MentionAck as MentionAckSchema,
+  MentionNotifyRequest,
+  MarkReadRequest,
+  MentionablesResponse as MentionablesResponseSchema,
+  NotificationsResponse as NotificationsResponseSchema,
+  PushSubscribeRequest,
+  PushKeyResponse as PushKeyResponseSchema,
   ParticipantsResponse as ParticipantsResponseSchema,
   Profile as ProfileSchema,
   RecapData as RecapDataSchema,
   RecapRequest,
   RefreshRequest,
   ResendVerificationRequest,
+  ResetPasswordRequest,
   RoomDetail as RoomDetailSchema,
   RoomGroup as RoomGroupSchema,
   RoomInvite as RoomInviteSchema,
@@ -77,6 +86,11 @@ const FollowStateResponse = FollowStateResponseSchema.meta({ id: "FollowStateRes
 const GroupsResponse = GroupsResponseSchema.meta({ id: "GroupsResponse" });
 const InvitesResponse = InvitesResponseSchema.meta({ id: "InvitesResponse" });
 const MessageResponse = MessageResponseSchema.meta({ id: "MessageResponse" });
+const NotificationsResponse = NotificationsResponseSchema.meta({ id: "NotificationsResponse" });
+const PushKeyResponse = PushKeyResponseSchema.meta({ id: "PushKeyResponse" });
+const MentionAck = MentionAckSchema.meta({ id: "MentionAck" });
+const MentionablesResponse = MentionablesResponseSchema.meta({ id: "MentionablesResponse" });
+const UnsubscribeRequest = z.object({ endpoint: z.string().url().max(2048) });
 const ParticipantsResponse = ParticipantsResponseSchema.meta({ id: "ParticipantsResponse" });
 const Profile = ProfileSchema.meta({ id: "Profile" });
 const RoomDetail = RoomDetailSchema.meta({ id: "RoomDetail" });
@@ -125,7 +139,7 @@ export const openApiDocument = createDocument({
     version: "0.1.0",
     description: "Backend API. Use the access token from `POST /api/auth/login` to authorize.",
   },
-  tags: [{ name: "Health" }, { name: "Auth" }, { name: "Me" }, { name: "Rooms" }, { name: "Groups" }, { name: "Users" }],
+  tags: [{ name: "Health" }, { name: "Auth" }, { name: "Me" }, { name: "Rooms" }, { name: "Notifications" }, { name: "Groups" }, { name: "Users" }],
   components: {
     securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } },
   },
@@ -173,6 +187,31 @@ export const openApiDocument = createDocument({
           ...invalidInput,
           ...tooManyAttempts,
           "502": failure("The verification email could not be sent"),
+        },
+      },
+    },
+    "/api/auth/forgot-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Email a password reset link (to /forgot-password) to a verified account",
+        requestBody: body(ForgotPasswordRequest),
+        responses: {
+          "200": reply("Sent, if the email has a verified account (the same reply either way)", MessageResponse),
+          ...invalidInput,
+          ...tooManyAttempts,
+          "502": failure("The reset email could not be sent"),
+        },
+      },
+    },
+    "/api/auth/reset-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Set a new password with the reset link's token, and sign the account out everywhere",
+        requestBody: body(ResetPasswordRequest),
+        responses: {
+          "200": reply("Password changed", MessageResponse),
+          "400": failure("Invalid input, an expired or used link (the message says \"expired\"), or a weak or reused password"),
+          ...tooManyAttempts,
         },
       },
     },
@@ -281,6 +320,95 @@ export const openApiDocument = createDocument({
         summary: "List invites received and sent",
         security: bearer,
         responses: { "200": reply("Invites in both directions", InvitesResponse), ...needsVerifiedUser },
+      },
+    },
+    "/api/notifications": {
+      get: {
+        tags: ["Notifications"],
+        summary: "My notification inbox (mentions)",
+        security: bearer,
+        responses: {
+          "200": reply("Up to 50 newest, unread counted", NotificationsResponse),
+          ...needsVerifiedUser,
+        },
+      },
+    },
+    "/api/notifications/read": {
+      post: {
+        tags: ["Notifications"],
+        summary: "Mark notifications read",
+        description: "With no ids, everything unread is marked read.",
+        security: bearer,
+        requestBody: { required: false, ...json(MarkReadRequest.optional()) },
+        responses: { "200": reply("Marked", MessageResponse), ...invalidInput, ...needsVerifiedUser },
+      },
+    },
+    "/api/notifications/key": {
+      get: {
+        tags: ["Notifications"],
+        summary: "The VAPID public key for Web Push",
+        description: "Null until the server has the VAPID key pair configured.",
+        security: bearer,
+        responses: { "200": reply("Public key, or null when push is off", PushKeyResponse), ...needsVerifiedUser },
+      },
+    },
+    "/api/notifications/subscribe": {
+      post: {
+        tags: ["Notifications"],
+        summary: "Subscribe this browser to Web Push",
+        security: bearer,
+        requestBody: body(PushSubscribeRequest),
+        responses: {
+          "200": reply("Subscription stored", MessageResponse),
+          ...invalidInput,
+          ...needsVerifiedUser,
+        },
+      },
+    },
+    "/api/notifications/unsubscribe": {
+      post: {
+        tags: ["Notifications"],
+        summary: "Unsubscribe this browser from Web Push",
+        security: bearer,
+        requestBody: body(UnsubscribeRequest),
+        responses: {
+          "200": reply("Removed", MessageResponse),
+          ...invalidInput,
+          ...needsVerifiedUser,
+          "404": failure("Not subscribed"),
+        },
+      },
+    },
+    "/api/notifications/rooms/{roomId}/people": {
+      get: {
+        tags: ["Notifications"],
+        summary: "People who can be @mentioned in a room",
+        description: "The owner and every signed-in reader who has opened the room and was not removed, present or not.",
+        requestParams: { path: z.object({ roomId: z.string() }) },
+        responses: { "200": reply("People by name", MentionablesResponse), "404": failure("Room not found") },
+      },
+    },
+    "/api/notifications/rooms/{roomId}/mentions": {
+      post: {
+        tags: ["Notifications"],
+        summary: "Announce @mentions of a message just written",
+        description:
+          "The browser calls this after writing a chat message or note that tags people. Every " +
+          "mentioned room member gets a notification in their bell; members online in the room " +
+          "(a heartbeat in the last two minutes) get a toast there, everyone else an email and a " +
+          "Web Push where they subscribed. Each event notifies a person once. Guests can announce; " +
+          "a signed-in caller must be the author.",
+        requestParams: { path: z.object({ roomId: z.string() }) },
+        requestBody: body(MentionNotifyRequest),
+        responses: {
+          "200": reply("How many people were notified", MentionAck),
+          ...invalidInput,
+          ...tooManyAttempts,
+          "401": failure("Guests must send a guest- author id"),
+          "403": failure("Author must be the signed-in user"),
+          "404": failure("Room not found"),
+          "409": failure("Room is not running"),
+        },
       },
     },
     "/api/groups": {
