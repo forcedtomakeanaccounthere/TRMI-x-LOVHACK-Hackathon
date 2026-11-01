@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, ApiError } from "./api";
+import { api, ApiError, resolveApiUrl } from "./api";
 
 const fetchMock = vi.fn();
 
@@ -181,5 +181,33 @@ describe("api dashboard", () => {
     const { url, init } = lastCall();
     expect(url).toBe("http://localhost:4000/api/rooms/x7Kp2qLm/restore");
     expect(init.method).toBe("POST");
+  });
+});
+
+describe("resolveApiUrl", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    warn.mockClear();
+  });
+
+  it("keeps a deployed URL and trims whitespace and trailing slashes", () => {
+    expect(resolveApiUrl("https://api.example.com")).toBe("https://api.example.com");
+    expect(resolveApiUrl(" https://api.example.com/ ")).toBe("https://api.example.com");
+    expect(resolveApiUrl("https://api.example.com///")).toBe("https://api.example.com");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to localhost and warns only in production", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(resolveApiUrl(undefined)).toBe("http://localhost:4000");
+    expect(warn).not.toHaveBeenCalled();
+
+    vi.stubEnv("NODE_ENV", "production");
+    expect(resolveApiUrl(undefined)).toBe("http://localhost:4000");
+    expect(warn).toHaveBeenCalledWith(
+      "[api] NEXT_PUBLIC_API_URL is not set; falling back to http://localhost:4000",
+    );
   });
 });
