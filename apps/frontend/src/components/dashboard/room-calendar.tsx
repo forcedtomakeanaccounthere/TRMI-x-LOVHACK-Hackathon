@@ -94,7 +94,7 @@ function segmentColor(s: Segment) {
 }
 
 export function RoomCalendar() {
-  const { state, groupById } = useDashboard();
+  const { state, groupById, roomHref } = useDashboard();
   const today = useMemo(() => dayStart(new Date()), []);
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selected, setSelected] = useState<Date>(today);
@@ -256,7 +256,7 @@ export function RoomCalendar() {
           {onSelected.map((r) => (
             <li key={r.id}>
               <Link
-                href={`/r/${r.id}`}
+                href={roomHref(r.id)}
                 className="flex items-center gap-3 rounded-2xl px-3 py-2.5 ring-1 ring-(--hairline) transition-colors hover:bg-foreground/5"
               >
                 <span className="h-8 w-1 shrink-0 rounded-full" style={{ backgroundColor: barColor(r, groupById) }} />
@@ -279,6 +279,7 @@ function barColor(r: RoomView, groups: Map<string, { color: string }>) {
 }
 
 function StatusBar({ segment: s }: { segment: Segment }) {
+  const { roomHref } = useDashboard();
   const titles = s.rooms.slice(0, MAX_TITLES).map((x) => x.room.title);
   const extra = s.rooms.length - titles.length;
   const label = ROWS[s.row]!.label;
@@ -318,7 +319,7 @@ function StatusBar({ segment: s }: { segment: Segment }) {
           {s.rooms.map((x) => (
             <li key={x.room.id}>
               <Link
-                href={`/r/${x.room.id}`}
+                href={roomHref(x.room.id)}
                 className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-[0.8125rem] hover:bg-foreground/5"
               >
                 <span

@@ -93,7 +93,7 @@ export function Topbar({ onMenu, onProfile }: { onMenu: () => void; onProfile: (
 
 // Demo activity built from the newest room events; becomes GET /api/me/invites + activity later.
 function Notifications() {
-  const { state } = useDashboard();
+  const { state, roomHref } = useDashboard();
   const items = state.rooms
     .filter((r) => r.status === "running" && r.participants.length)
     .slice(0, 4)
@@ -118,7 +118,7 @@ function Notifications() {
         <ul>
           {items.map(({ room, who }) => (
             <li key={room.id}>
-              <Link href={`/r/${room.id}`} className="flex gap-3 rounded-2xl p-3 hover:bg-foreground/5">
+              <Link href={roomHref(room.id)} className="flex gap-3 rounded-2xl p-3 hover:bg-foreground/5">
                 <PersonAvatar person={who} size="sm" />
                 <span className="min-w-0 text-[0.8125rem] leading-snug">
                   <span className="font-semibold">{who.name.split(" ")[0]}</span> is reading{" "}

@@ -194,7 +194,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 // Groups as a tree: a hairline trunk with a curved branch into each group, and each group's rooms
 // nested one level deeper. Groups start expanded; the chevron folds one away.
 function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => void; onNavigate?: () => void }) {
-  const { state } = useDashboard();
+  const { state, roomHref } = useDashboard();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggle = (id: string) =>
@@ -246,7 +246,7 @@ function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => v
                   <li key={r.id} className="relative">
                     <span className="absolute top-0 -left-px h-3.5 w-3 rounded-bl-[8px] border-b border-l border-(--hairline)" aria-hidden />
                     <Link
-                      href={`/r/${r.id}`}
+                      href={roomHref(r.id)}
                       onClick={onNavigate}
                       title={`${r.title} · ${STATUS_META[r.status].label}`}
                       className="ml-3.5 flex h-7 items-center gap-2 rounded-md pr-2 pl-1 text-[0.75rem] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"

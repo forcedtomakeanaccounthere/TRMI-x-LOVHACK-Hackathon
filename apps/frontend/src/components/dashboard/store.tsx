@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
 import type { DashboardData } from "./demo-data";
 import { saveGroups, saveProfileOverride, saveRoomMeta } from "./local-prefs";
+import { DEMO_ROOM_ID } from "@/components/room/demo";
 import type { GroupView, Person, RoomView, ViewStatus } from "./types";
 
 export type StatusFilter = ViewStatus | "all";
@@ -128,6 +129,8 @@ type DashboardContextValue = {
   source: DataSource;
   // The backend has no paused status yet, so pause and resume exist only in preview data.
   canPause: boolean;
+  // Where a room card opens: preview rooms are made up, so they open the demo room instead of a 404.
+  roomHref: (id: string) => string;
   visibleRooms: RoomView[];
   groupById: Map<string, GroupView>;
 };
@@ -224,10 +227,12 @@ export function DashboardProvider({
     };
   }, [source, profileId]);
 
+  const roomHref = (id: string) => (source === "live" ? `/r/${id}` : `/r/${DEMO_ROOM_ID}`);
+
 
   return (
     <DashboardContext
-      value={{ state, dispatch, actions, source, canPause: source === "preview", visibleRooms, groupById }}
+      value={{ state, dispatch, actions, source, canPause: source === "preview", roomHref, visibleRooms, groupById }}
     >
       {children}
     </DashboardContext>
