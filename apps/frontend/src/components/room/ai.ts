@@ -80,6 +80,13 @@ function unavailable(err: unknown) {
   return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
 }
 
+// A question falls back to the browser preview only when the backend can't be reached (a network
+// error) or has no /ask (404). Any answer it does give, a 502/503 from the AI service included, is
+// shown as the reason, so "AI features aren't set up" isn't hidden behind "not connected yet".
+function unreachable(err: unknown) {
+  return !(err instanceof ApiError) || err.status === 404;
+}
+
 // What POST /api/rooms/:id/ask gets: the question (up to 500 characters), plus the passage an AI box
 // is about, its earlier turns and a lens snapshot as their own fields, so follow-ups and "explain
 // this" keep their context and a snapshot reaches a vision model.
@@ -135,7 +142,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
         preview: false,
       };
     }
-    if (!failed.every(unavailable)) throw failed.find((e) => !unavailable(e));
+    if (!failed.every(unreachable)) throw failed.find((e) => !unreachable(e));
   }
 
   if (req.image) {
@@ -145,11 +152,13 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
       preview: true,
     };
   }
+  // Documents the backend doesn't have (the demo room's) were never sent; for the rest, it failed.
+  const why = targets.length ? "Couldn't reach the AI server" : "The AI only answers about documents saved on the server";
   const blocks = docs.filter((d) => req.sources.includes(d.id)).flatMap(blocksOf);
   const found = search(blocks, `${req.question} ${req.quote ?? ""}`);
   if (found.length === 0) {
     return {
-      text: "The AI isn't connected yet, and nothing in the chosen sources matches those words.",
+      text: `${why}, and nothing in the chosen sources matches those words.`,
       citations: [],
       preview: true,
     };
@@ -157,7 +166,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
   const titles = new Map(docs.map((d) => [d.id, d.title]));
   return {
     text: [
-      "The AI isn't connected yet, so here are the passages that match best:",
+      `${why}, so here are the passages that match best:`,
       ...found.map((b) => `“${clip(b.text)}” — ${titles.get(b.doc) ?? "source"}`),
     ].join("\n\n"),
     citations: found.map((b) => ({

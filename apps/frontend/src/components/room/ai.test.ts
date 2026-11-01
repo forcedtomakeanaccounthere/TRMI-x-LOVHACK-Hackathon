@@ -119,6 +119,20 @@ describe("ask", () => {
     await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/still reading/);
   });
 
+  it("shows the backend's reason when the AI service fails, instead of the preview", async () => {
+    spy.mockRejectedValue(new ApiError("AI features aren't set up on this server yet.", 503));
+    await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/aren't set up/);
+    spy.mockRejectedValue(new ApiError("The AI couldn't answer right now. Try again in a moment.", 502));
+    await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/couldn't answer/);
+  });
+
+  it("falls back to the preview only when the backend can't be reached", async () => {
+    spy.mockRejectedValue(new TypeError("Failed to fetch"));
+    const answer = await ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"]);
+    expect(answer.preview).toBe(true);
+    expect(answer.text).toMatch(/Couldn't reach the AI server/);
+  });
+
   it("sends a lens snapshot to the backend, for the document it was taken from only", async () => {
     spy.mockResolvedValue(message("A diagram of joint angles."));
     const image = "data:image/jpeg;base64,x";
@@ -142,5 +156,6 @@ describe("ask", () => {
     expect(lens.preview).toBe(true);
     expect(lens.text).toMatch(/saved in this box/);
     expect(demo.preview).toBe(true);
+    expect(demo.text).not.toMatch(/Couldn't reach/);
   });
 });
