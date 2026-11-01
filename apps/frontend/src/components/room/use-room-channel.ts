@@ -19,6 +19,8 @@ export type Peer = {
   signedIn: boolean;
   following: string | null;
   doc: string | null;
+  // Leading a laser focus: everyone else is taken to where this person is until they stop.
+  focusing: boolean;
 };
 
 export type CursorAnchor = { block: string; x: number; y: number };
@@ -119,7 +121,7 @@ function createSender() {
 export function useRoomChannel(
   roomId: string,
   me: Identity | null,
-  view: { doc: string; following: string | null },
+  view: { doc: string; following: string | null; focusing: boolean },
   handlers: Handlers,
 ) {
   const [status, setStatus] = useState<ChannelStatus>("connecting");
@@ -127,6 +129,7 @@ export function useRoomChannel(
   const [cursors, setCursors] = useState<Record<string, RemoteCursor>>({});
   const [scrolls, setScrolls] = useState<Record<string, RemoteScroll>>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const focusingRef = useRef(new Set<string>());
   const handlersRef = useRef(handlers);
   const viewRef = useRef(view);
 
@@ -173,7 +176,7 @@ export function useRoomChannel(
         const next = new Map<string, Peer>();
         for (const [key, metas] of Object.entries(state)) {
           const meta = metas.at(-1);
-          if (meta && key !== meId) next.set(key, { ...meta, id: key });
+          if (meta && key !== meId) next.set(key, { ...meta, id: key, focusing: meta.focusing === true });
         }
         const at = new Date().toISOString();
         for (const [id, peer] of next)
@@ -185,6 +188,7 @@ export function useRoomChannel(
           }
         }
         known = next;
+        focusingRef.current = new Set([...next.values()].filter((p) => p.focusing).map((p) => p.id));
         setPeers([...next.values()]);
       })
       .on("broadcast", { event: "cursor" }, ({ payload }) => {
@@ -248,6 +252,7 @@ export function useRoomChannel(
             signedIn: meSignedIn,
             following: viewRef.current.following,
             doc: viewRef.current.doc,
+            focusing: viewRef.current.focusing,
           } satisfies Peer);
           void channel.send({
             type: "broadcast",
@@ -276,16 +281,18 @@ export function useRoomChannel(
       signedIn: meSignedIn,
       following: view.following,
       doc: view.doc,
+      focusing: view.focusing,
     } satisfies Peer);
-  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following]);
+  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.focusing]);
 
-  // Cursors that haven't moved for 5 s fade out.
+  // Cursors that haven't moved for 5 s fade out, except a focus leader's laser, which stays put.
   useEffect(() => {
     const timer = setInterval(() => {
       setCursors((prev) => {
         const cutoff = Date.now() - 5000;
-        const stale = Object.values(prev).some((c) => c.at < cutoff);
-        return stale ? Object.fromEntries(Object.entries(prev).filter(([, c]) => c.at >= cutoff)) : prev;
+        const keep = (c: RemoteCursor) => c.at >= cutoff || focusingRef.current.has(c.id);
+        const stale = Object.values(prev).some((c) => !keep(c));
+        return stale ? Object.fromEntries(Object.entries(prev).filter(([, c]) => keep(c))) : prev;
       });
     }, 1000);
     return () => clearInterval(timer);

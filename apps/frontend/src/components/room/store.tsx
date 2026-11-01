@@ -96,13 +96,15 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- View ---
   const [activeDoc, setActiveDoc] = useState(primary.id);
   const [following, setFollowing] = useState<string | null>(null);
+  // Laser focus: leading one pulls everyone to where you are until you stop.
+  const [focusing, setFocusing] = useState(false);
 
   const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
 
   const channel = useRoomChannel(
     roomId,
     me,
-    { doc: activeDoc, following },
+    { doc: activeDoc, following, focusing },
     {
       onEvents: receive,
       allEvents: () => eventsRef.current,
@@ -121,6 +123,53 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     if (leaderGone) setFollowing(null);
     else if (leaderDoc) setActiveDoc(leaderDoc);
   }, [leaderGone, leaderDoc]);
+
+  // --- Laser focus ---
+  // Someone leading a focus takes everyone else to their document and scroll position (follow mode,
+  // locked) and shows their pointer as a laser. Each person's own place is remembered and they go
+  // back to it when the focus ends or they leave it. One leader at a time: the earliest id wins.
+  const viewPos = useRef<{ doc: string; block: string; ratio: number } | null>(null);
+  const reportView = (doc: string, block: string, ratio: number) => {
+    viewPos.current = { doc, block, ratio };
+  };
+  const focusLeader = focusing
+    ? undefined
+    : channel.peers.filter((p) => p.focusing).sort((a, b) => a.id.localeCompare(b.id))[0];
+  const [leftFocus, setLeftFocus] = useState<string | null>(null); // the leader whose focus you left
+  const activeFocus = focusLeader && focusLeader.id !== leftFocus ? focusLeader : undefined;
+  const returnTo = useRef<{ doc: string; block: string | null; ratio: number } | null>(null);
+  const focusedOn = useRef<string | null>(null);
+  const activeDocRef = useRef(activeDoc);
+  useEffect(() => {
+    activeDocRef.current = activeDoc;
+  });
+  const focusId = activeFocus?.id ?? null;
+  useEffect(() => {
+    const before = focusedOn.current;
+    if (focusId === before) return;
+    focusedOn.current = focusId;
+    if (focusId) {
+      if (!before) {
+        const doc = activeDocRef.current;
+        const pos = viewPos.current?.doc === doc ? viewPos.current : null;
+        returnTo.current = { doc, block: pos?.block ?? null, ratio: pos?.ratio ?? 0 };
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the focus leader's presence
+      setFollowing(focusId);
+      return;
+    }
+    // The focus ended (or you left it): back to where you were.
+    const back = returnTo.current;
+    returnTo.current = null;
+    setFollowing(null);
+    if (back?.block) jumpTo(back.doc, back.block, back.ratio);
+    else if (back) setActiveDoc(back.doc);
+  }, [focusId]);
+  // A new focus by the same person can be joined again.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset once that focus is over
+    if (leftFocus && !focusLeader) setLeftFocus(null);
+  }, [leftFocus, focusLeader]);
 
   // A kick also lands in the ledger, so it holds after a reload or a missed broadcast.
   useEffect(() => {
@@ -244,13 +293,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [jump, setJump] = useState<{
     doc: string;
     block: string;
+    ratio: number;
     n: number;
   } | null>(null);
-  const jumpTo = (doc: string, block: string) => {
+  function jumpTo(doc: string, block: string, ratio = 0) {
     setActiveDoc(doc);
     setFollowing(null);
-    setJump((prev) => ({ doc, block, n: (prev?.n ?? 0) + 1 }));
-  };
+    setJump((prev) => ({ doc, block, ratio, n: (prev?.n ?? 0) + 1 }));
+  }
 
   // --- Writing to the ledger ---
   // A closed or archived room is read only: its documents, marks, notes, threads and artifacts stay as
@@ -452,6 +502,17 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setFocusAnnotation,
     jump,
     jumpTo,
+    reportView,
+    focus: {
+      leader: activeFocus, // someone else's focus you're in
+      mine: focusing,
+      start: () => {
+        setFollowing(null);
+        setFocusing(true);
+      },
+      stop: () => setFocusing(false),
+      leave: () => activeFocus && setLeftFocus(activeFocus.id),
+    },
     channel,
     presenceFeed,
     kickedOut,

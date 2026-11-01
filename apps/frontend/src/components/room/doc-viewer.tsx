@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowSquareOutIcon, DownloadSimpleIcon, EyeIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CrosshairIcon, DownloadSimpleIcon, EyeIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ReactLenis, type LenisRef } from "lenis/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -85,12 +85,41 @@ export function DocViewer() {
 }
 
 function FollowBanner() {
-  const { following, setFollowing, channel } = useRoom();
+  const { following, setFollowing, channel, focus } = useRoom();
   const leader = channel.peers.find((p) => p.id === following);
+  const banner = focus.mine
+    ? { key: "lead", color: "#ef4444", text: <>Everyone is looking where you are</>, action: "Stop", onAction: focus.stop }
+    : focus.leader
+      ? {
+          key: `focus-${focus.leader.id}`,
+          color: focus.leader.color,
+          text: (
+            <>
+              <strong>{focus.leader.name}</strong> wants everyone to look here
+            </>
+          ),
+          action: "Leave",
+          onAction: focus.leave,
+        }
+      : leader
+        ? {
+            key: `follow-${leader.id}`,
+            color: leader.color,
+            text: (
+              <>
+                Following <strong>{leader.name}</strong>
+              </>
+            ),
+            action: "Stop",
+            onAction: () => setFollowing(null),
+          }
+        : null;
+  const Icon = focus.mine || focus.leader ? CrosshairIcon : EyeIcon;
   return (
     <AnimatePresence>
-      {leader && (
+      {banner && (
         <motion.div
+          key={banner.key}
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -12 }}
@@ -98,16 +127,16 @@ function FollowBanner() {
         >
           <div
             className="liquid-glass liquid-glass-strong flex items-center gap-2 rounded-full py-1 pr-1 pl-3 text-[0.8125rem]"
-            style={{ boxShadow: `0 0 0 2px ${leader.color}` }}
+            style={{ boxShadow: `0 0 0 2px ${banner.color}` }}
           >
-            <EyeIcon weight="fill" style={{ color: leader.color }} className="size-4" />
-            Following <strong>{leader.name}</strong>
+            <Icon weight="fill" style={{ color: banner.color }} className="size-4" />
+            {banner.text}
             <button
               type="button"
-              onClick={() => setFollowing(null)}
+              onClick={banner.onAction}
               className="flex h-7 items-center gap-1 rounded-full bg-foreground/8 px-2.5 text-[0.75rem] font-medium hover:bg-foreground/12"
             >
-              <XIcon className="size-3" /> Stop
+              <XIcon className="size-3" /> {banner.action}
             </button>
           </div>
         </motion.div>
@@ -216,7 +245,7 @@ function Scroller({
   // Jumps from citations, history and comment lists.
   useEffect(() => {
     if (jump && jump.doc === docId) {
-      const t = setTimeout(() => scrollToBlock(jump.block), 120);
+      const t = setTimeout(() => scrollToBlock(jump.block, jump.ratio), 120);
       return () => clearTimeout(t);
     }
   }, [jump, docId, scrollToBlock, version > 0]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -236,11 +265,13 @@ function Scroller({
     if (!lenis || !scroller) return;
     const onScroll = () => {
       const top = topBlock(scroller);
-      if (top) channel.send.scroll(docId, top.block, top.ratio);
+      if (!top) return;
+      channel.send.scroll(docId, top.block, top.ratio);
+      room.reportView(docId, top.block, top.ratio); // where a laser focus brings you back to
     };
     lenis.on("scroll", onScroll);
     return () => lenis.off("scroll", onScroll);
-  }, [scroller, docId, channel.send]);
+  }, [scroller, docId, channel.send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Someone who starts following you is sent where you are now, without waiting for you to scroll.
   const followers = channel.peers
@@ -549,8 +580,10 @@ function Scroller({
       ref={lenisRef}
       className="room-scroll h-full overflow-y-auto overscroll-contain"
       options={{ lerp: 0.1, smoothWheel: true, wheelMultiplier: 0.9 }}
-      onWheel={() => following && setFollowing(null)}
-      onTouchMove={() => following && setFollowing(null)}
+      // Scrolling yourself stops following someone, but not a laser focus: that ends when its leader
+      // stops it or you press Leave.
+      onWheel={() => following && !room.focus.leader && setFollowing(null)}
+      onTouchMove={() => following && !room.focus.leader && setFollowing(null)}
     >
       <div className="mx-auto w-full max-w-[min(100%,62rem)] px-5 pt-10 pb-40 md:px-10 xl:pr-[21rem]">
         <header className="mb-10 max-w-[68ch]">
