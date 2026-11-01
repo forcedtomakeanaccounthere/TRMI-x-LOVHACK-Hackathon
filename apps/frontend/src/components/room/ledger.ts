@@ -66,13 +66,13 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
         break;
       case "note.edit": {
         const note = annotations.get(e.annotation_id);
-        if (note?.kind === "note") annotations.set(note.id, { ...note, body: e.body });
+        if (note?.kind === "note") annotations.set(note.id, { ...note, body: e.body, edited_by: e.actor });
         break;
       }
       case "annot.move": {
         const box = annotations.get(e.annotation_id);
         if (box?.kind === "note" || box?.kind === "ai")
-          annotations.set(box.id, { ...box, x: e.x, y: e.y, moved: true });
+          annotations.set(box.id, { ...box, x: e.x, y: e.y, moved: true, moved_by: e.actor });
         break;
       }
       case "thread.ask":

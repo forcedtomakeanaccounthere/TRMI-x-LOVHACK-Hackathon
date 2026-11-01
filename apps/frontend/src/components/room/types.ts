@@ -70,7 +70,17 @@ export type Annotation = AnnotationBase &
     | { kind: "region"; rect: Rect; color: string }
     | { kind: "ink"; points: Point[]; color: string; width: number }
     // moved: dragged by someone, so x/y place it exactly instead of in the margin beside its line.
-    | { kind: "note"; x: number; y: number; body: string; color: string; moved?: boolean }
+    // edited_by / moved_by: the last person to edit or move it (shown when that isn't the author).
+    | {
+        kind: "note";
+        x: number;
+        y: number;
+        body: string;
+        color: string;
+        moved?: boolean;
+        edited_by?: Actor;
+        moved_by?: Actor;
+      }
     // An AI box beside a line (quote) or a lens snapshot (image). Its conversation is threads[id].
     | {
         kind: "ai";
@@ -79,6 +89,7 @@ export type Annotation = AnnotationBase &
         quote: string | null;
         image: string | null;
         moved?: boolean;
+        moved_by?: Actor;
       }
   );
 

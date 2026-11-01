@@ -7,7 +7,7 @@ import { initials } from "@/components/dashboard/primitives";
 import { cn } from "@/lib/utils";
 import { AiText, Avatar, ByLine, PreviewTag, Thinking, timeAgo } from "./bits";
 import { useAwaitingAnswer, useRoom } from "./store";
-import type { Annotation } from "./types";
+import type { Actor, Annotation } from "./types";
 
 type Note = Extract<Annotation, { kind: "note" }>;
 type AiNote = Extract<Annotation, { kind: "ai" }>;
@@ -15,6 +15,16 @@ type AiNote = Extract<Annotation, { kind: "ai" }>;
 const CARD_SURFACE =
   "liquid-glass liquid-glass-strong pointer-events-auto w-72 rounded-2xl text-left shadow-[0_24px_60px_-24px_rgb(14_30_90/0.45)]";
 const CARD = `${CARD_SURFACE} absolute z-30`;
+
+// "Edited by Bo" / "Moved by Bo" when someone other than the author changed a box.
+function ChangedBy({ author, edited, moved }: { author: Actor; edited?: Actor; moved?: Actor }) {
+  const parts = [
+    edited && edited.id !== author.id ? `Edited by ${edited.name}` : null,
+    moved && moved.id !== author.id ? `Moved by ${moved.name}` : null,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return <div className="mt-0.5 truncate text-[0.625rem] text-muted-foreground italic">{parts.join(" · ")}</div>;
+}
 
 function useCanRemove(a: Annotation) {
   return useRoom().canRemove(a.author.id);
@@ -81,15 +91,16 @@ export function NoteBox({
   autoEdit: boolean;
   onDrop: (dx: number, dy: number) => void;
 }) {
-  const { me, actions, focusAnnotation, setFocusAnnotation, readOnly } = useRoom();
+  const { actions, perms, focusAnnotation, setFocusAnnotation, readOnly } = useRoom();
   // Only the author edits a note, and not once the room is read only.
-  const mine = note.author.id === me.id && !readOnly;
+  // Anyone who can annotate edits any comment (History records who changed whose).
+  const mine = perms.annotate && !readOnly;
   const [editing, setEditing] = useState(autoEdit && mine && !note.body);
   const [draft, setDraft] = useState(note.body);
   const [open, setOpen] = useState(autoEdit || !note.body);
   const canRemove = useCanRemove(note);
   const focused = focusAnnotation === note.id;
-  const drag = useDrag(onDrop, canRemove);
+  const drag = useDrag(onDrop, perms.annotate);
 
   const save = () => {
     const body = draft.trim();
@@ -135,7 +146,10 @@ export function NoteBox({
             className={cn("flex touch-none items-center gap-2", canRemove && "cursor-grab active:cursor-grabbing")}
             {...drag.handlers}
           >
-            <ByLine actor={note.author} at={note.at} className="flex-1" />
+            <div className="min-w-0 flex-1">
+              <ByLine actor={note.author} at={note.at} />
+              <ChangedBy author={note.author} edited={note.edited_by} moved={note.moved_by} />
+            </div>
             {canRemove && (
               <button
                 type="button"
@@ -227,7 +241,7 @@ export function AiBox({
   const canRemove = useCanRemove(box);
   const pending = useAwaitingAnswer(thread);
   const focused = focusAnnotation === box.id;
-  const drag = useDrag(onDrop, canRemove);
+  const drag = useDrag(onDrop, perms.annotate);
 
   useEffect(() => {
     scroller.current?.scrollTo({
@@ -313,6 +327,7 @@ export function AiBox({
           <div className="min-w-0 flex-1">
             <div className="text-[0.75rem] font-semibold">{box.image ? "AI lens" : "Ask AI"}</div>
             <ByLine actor={box.author} at={box.at} />
+            <ChangedBy author={box.author} moved={box.moved_by} />
           </div>
           {canRemove && (
             <button

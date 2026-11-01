@@ -544,9 +544,9 @@ function Scroller({
   const cursors = Object.values(channel.cursors).filter(
     (c) => c.doc === docId && (room.showCursors || c.id === following),
   );
-  // Comment and AI boxes can be dragged by their author, or by anyone who manages the room.
+  // Anyone who can annotate may move any comment or AI box; History records who moved whose.
   const moveBox = (a: Annotation, x: number, y: number) => {
-    if (canRemove(a.author.id)) room.actions.moveAnnotation(a.id, x, y);
+    if (perms.annotate) room.actions.moveAnnotation(a.id, x, y);
   };
 
   return (

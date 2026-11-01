@@ -107,6 +107,16 @@ describe("moving boxes, replies and reactions", () => {
     expect(state.annotations[0]).toMatchObject({ x: 0.4, y: 1.5, moved: true });
   });
 
+  it("remembers who else edited or moved a comment", () => {
+    const bo = { id: "u-bo", name: "Bo", color: "#14b8a6" };
+    const state = reduceLedger(primary, [
+      ev({ type: "annot.add", annotation: note }),
+      { ...ev({ type: "note.edit", annotation_id: "n1", body: "better" }), actor: bo },
+      { ...ev({ type: "annot.move", annotation_id: "n1", x: 0.1, y: 0.1 }), actor: bo },
+    ]);
+    expect(state.annotations[0]).toMatchObject({ body: "better", edited_by: bo, moved_by: bo });
+  });
+
   it("ignores a move for marks that are not comments or AI boxes", () => {
     const hl = {
       id: "h1",
