@@ -61,7 +61,10 @@ const Env = z
 
 export const env = Env.parse(process.env);
 
-export const webOrigins = env.WEB_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
+// Browsers send Origin without a trailing slash, so strip any from the configured values.
+export const webOrigins = env.WEB_ORIGIN.split(",")
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
 
 // First entry of WEB_ORIGIN is the frontend we redirect users back to.
 export const webOrigin = webOrigins[0] ?? env.WEB_ORIGIN;
