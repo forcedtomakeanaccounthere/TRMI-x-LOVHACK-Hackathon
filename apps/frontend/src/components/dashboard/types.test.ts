@@ -24,7 +24,7 @@ const room = (patch: Partial<DashboardRoom> = {}): DashboardRoom => ({
 describe("fromApiRoom", () => {
   it("keeps counts and role, and leaves a running room open-ended on the calendar", () => {
     const view = fromApiRoom(room());
-    expect(view.counts).toEqual({ attachments: 0, highlights: 7, comments: 3, ai_queries: 0 });
+    expect(view.counts).toEqual({ attachments: 1, highlights: 7, comments: 3, ai_queries: 0 });
     expect(view.role).toBe("owner");
     expect(view.closed_at).toBeNull();
     expect(view.last_activity_at).toBe("2026-10-30T18:00:00.000Z");

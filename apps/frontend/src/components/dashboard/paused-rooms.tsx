@@ -8,7 +8,7 @@ import { useDashboard } from "./store";
 
 // "Pick up where you paused": paused rooms with a one-tap resume.
 export function PausedRooms() {
-  const { state, actions, groupById } = useDashboard();
+  const { state, actions, groupById, roomHref } = useDashboard();
   const paused = state.rooms
     .filter((r) => r.status === "paused")
     .sort((a, b) => (b.paused_at ?? "").localeCompare(a.paused_at ?? ""));
@@ -30,7 +30,7 @@ export function PausedRooms() {
             <li key={r.id} className="flex items-center gap-3 rounded-2xl p-2.5 ring-1 ring-(--hairline)">
               <span className="animate-blink-soft h-10 w-1 shrink-0 rounded-full" style={{ backgroundColor: color }} />
               <div className="min-w-0 flex-1">
-                <Link href={`/r/${r.id}`} className="block truncate font-display text-[1.15rem] leading-tight hover:underline">
+                <Link href={roomHref(r.id)} className="block truncate font-display text-[1.15rem] leading-tight hover:underline">
                   {r.title}
                 </Link>
                 <div className="mt-1 flex items-center gap-2 text-[0.6875rem] text-muted-foreground">

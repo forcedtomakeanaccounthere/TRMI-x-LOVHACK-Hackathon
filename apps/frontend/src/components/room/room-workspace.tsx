@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "motion/react";
 import Link from "next/link";
-import { useState, useSyncExternalStore } from "react";
+import { Fragment, useState, useSyncExternalStore } from "react";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { AiChat } from "./ai-chat";
@@ -26,7 +26,7 @@ import { Library } from "./library";
 import { Notebook } from "./notebook";
 import { SourcesPanel } from "./sources-panel";
 import { type PanelTab, RoomProvider, useRoom } from "./store";
-import { Studio } from "./studio";
+import { ArtifactDialog, Studio } from "./studio";
 import { TopBar } from "./top-bar";
 import type { DocContent } from "./types";
 
@@ -145,12 +145,12 @@ function Shell() {
             <motion.aside
               key="panel"
               initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 400, opacity: 1 }}
+              animate={{ width: 440, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               transition={{ type: "spring", bounce: 0, duration: 0.5 }}
               className="hidden shrink-0 overflow-hidden border-l border-(--hairline) bg-[color-mix(in_oklab,var(--card)_55%,transparent)] lg:block"
             >
-              <div className="h-full w-[400px]">
+              <div className="h-full w-[440px]">
                 <Panel />
               </div>
             </motion.aside>
@@ -200,6 +200,7 @@ function Shell() {
           )}
         </AnimatePresence>
       </div>
+      <ArtifactDialog />
     </div>
   );
 }
@@ -231,33 +232,36 @@ function Panel() {
   const { tab, setTab } = useRoom();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 gap-0.5 border-b border-(--hairline) px-2 pt-2" role="tablist">
-        {TABS.map(({ id, label, icon: Icon }) => {
+      {/* Tabs with a hairline divider between each, so the labels don't run together. */}
+      <div className="flex shrink-0 items-center border-b border-(--hairline) px-3 pt-2" role="tablist">
+        {TABS.map(({ id, label, icon: Icon }, i) => {
           const on = tab === id;
           return (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              onClick={() => setTab(id)}
-              title={label}
-              className={cn(
-                "relative flex h-10 flex-1 items-center justify-center gap-1.5 text-[0.75rem] font-medium transition-colors",
-                on ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon weight={on ? "fill" : "regular"} className={cn("size-4", on && id === "chat" && "text-azure")} />
-              {/* Six tabs share the panel: only the open one is labelled until the screen is wide. */}
-              <span className={cn(on ? "inline" : "hidden 2xl:inline", "whitespace-nowrap max-[420px]:hidden")}>{label}</span>
-              {on && (
-                <motion.span
-                  layoutId="panel-tab"
-                  className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground"
-                  transition={{ type: "spring", bounce: 0.2, duration: 0.4 }}
-                />
-              )}
-            </button>
+            <Fragment key={id}>
+              {i > 0 && <span className="h-4 w-px shrink-0 bg-(--hairline)" aria-hidden />}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={on}
+                onClick={() => setTab(id)}
+                title={label}
+                className={cn(
+                  "relative flex h-11 flex-1 items-center justify-center gap-1.5 px-2 text-[0.75rem] font-medium whitespace-nowrap transition-colors",
+                  on ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon weight={on ? "fill" : "regular"} className={cn("size-4", on && id === "chat" && "text-azure")} />
+                {/* Six tabs share the panel: only the open one is labelled until the screen is wide. */}
+                <span className={cn(on ? "inline" : "hidden 2xl:inline", "max-[420px]:hidden")}>{label}</span>
+                {on && (
+                  <motion.span
+                    layoutId="panel-tab"
+                    className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-foreground"
+                    transition={{ type: "spring", bounce: 0.2, duration: 0.4 }}
+                  />
+                )}
+              </button>
+            </Fragment>
           );
         })}
       </div>

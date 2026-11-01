@@ -5,7 +5,15 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { AI_POLL_MS, AI_WAITING, loadAiStatuses, loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
+import {
+  AI_POLL_MS,
+  AI_WAITING,
+  loadAiStatuses,
+  loadDoc,
+  loadSavedHighlights,
+  removeSavedHighlight,
+  saveHighlight,
+} from "./docs";
 import type { Identity } from "./identity";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
@@ -96,6 +104,24 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- View ---
   const [activeDoc, setActiveDoc] = useState(primary.id);
   const [following, setFollowing] = useState<string | null>(null);
+  // The artifact open in the viewer dialog. Shared through presence, so followers see it too.
+  const [openArtifact, setOpenArtifact] = useState<string | null>(null);
+  // Other people's cursors can be hidden when they distract; remembered in this browser.
+  const [showCursors, setShowCursorsState] = useState(() => {
+    try {
+      return localStorage.getItem(CURSORS_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const setShowCursors = (on: boolean) => {
+    setShowCursorsState(on);
+    try {
+      localStorage.setItem(CURSORS_KEY, on ? "on" : "off");
+    } catch {
+      // the choice lasts for this page only
+    }
+  };
   // Laser focus: leading one pulls everyone to where you are until you stop.
   const [focusing, setFocusing] = useState(false);
 
@@ -104,7 +130,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const channel = useRoomChannel(
     roomId,
     me,
-    { doc: activeDoc, following, focusing },
+    { doc: activeDoc, following, focusing, artifact: openArtifact },
     {
       onEvents: receive,
       allEvents: () => eventsRef.current,
@@ -114,15 +140,21 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   );
 
   // Follow mode: open the document the leader has open (from presence, so it works before they
-  // scroll), and stop following someone who left.
+  // scroll) and the artifact they're viewing, and stop following someone who left.
   const leader = following ? channel.peers.find((p) => p.id === following) : undefined;
   const leaderDoc = leader?.doc ?? null;
+  const leaderArtifact = leader?.artifact ?? null;
   const leaderGone = !!following && channel.status === "live" && !leader;
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the leader's presence
     if (leaderGone) setFollowing(null);
     else if (leaderDoc) setActiveDoc(leaderDoc);
   }, [leaderGone, leaderDoc]);
+  useEffect(() => {
+    if (!following) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
+    setOpenArtifact(leaderArtifact);
+  }, [following, leaderArtifact]);
 
   // --- Laser focus ---
   // Someone leading a focus takes everyone else to their document and scroll position (follow mode,
@@ -363,7 +395,11 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     editNote(id: string, body: string) {
       emit({ type: "note.edit", annotation_id: id, body });
     },
-    chat(text: string) {
+    moveAnnotation(id: string, x: number, y: number) {
+      const round = (n: number) => Math.round(n * 10000) / 10000;
+      emit({ type: "annot.move", annotation_id: id, x: round(x), y: round(y) });
+    },
+    chat(text: string, replyTo?: string) {
       emit({
         type: "chat",
         message: {
@@ -371,8 +407,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
           text,
           author: actor,
           at: new Date().toISOString(),
+          ...(replyTo ? { reply_to: replyTo } : {}),
         },
       });
+    },
+    react(messageId: string, emoji: string) {
+      emit({ type: "chat.react", message_id: messageId, emoji });
     },
     async ask(
       thread: string,
@@ -479,6 +519,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setActiveDoc,
     following,
     setFollowing,
+    openArtifact,
+    setOpenArtifact,
+    showCursors,
+    setShowCursors,
     included,
     excluded,
     toggleSource,
@@ -519,6 +563,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     actions,
   };
 }
+
+const CURSORS_KEY = "linkroom-show-cursors";
 
 export type RoomContextValue = ReturnType<typeof useRoomValue>;
 const RoomContext = createContext<RoomContextValue | null>(null);

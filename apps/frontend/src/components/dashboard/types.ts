@@ -68,8 +68,18 @@ export function fromApiRoom(r: DashboardRoom, colors: Record<string, string> = {
     paused_at: null,
     last_activity_at: lastActivity,
     deleted_at: r.status === "deleted" ? lastActivity : null,
-    live_count: 0,
-    participants: [],
-    counts: { attachments: 0, highlights: r.highlight_count, comments: r.comment_count, ai_queries: 0 },
+    live_count: r.live_count,
+    participants: r.people.map((p) => ({
+      id: p.user_id,
+      name: p.display_name,
+      handle:
+        p.display_name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "")
+          .slice(0, 20) || "reader",
+      color: p.avatar_color ?? "#2f5bff",
+      avatar_url: null,
+    })),
+    counts: { attachments: 1, highlights: r.highlight_count, comments: r.comment_count, ai_queries: 0 },
   };
 }

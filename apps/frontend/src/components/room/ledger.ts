@@ -2,6 +2,7 @@ import {
   type Annotation,
   type Artifact,
   type ChatMessage,
+  type ChatReactions,
   DEFAULT_SETTINGS,
   type DocRef,
   type LedgerEvent,
@@ -19,6 +20,7 @@ export type RoomState = {
   annotations: Annotation[];
   threads: Record<string, ThreadMessage[]>;
   chat: ChatMessage[];
+  reactions: ChatReactions;
   artifacts: Artifact[];
   roles: Record<string, Role>;
   kicked: Record<string, string>; // member id → name
@@ -42,6 +44,7 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
   const annotations = new Map<string, Annotation>();
   const threads: Record<string, ThreadMessage[]> = {};
   const chat: ChatMessage[] = [];
+  const reactions: ChatReactions = {};
   const artifacts = new Map<string, Artifact>();
   const roles: Record<string, Role> = {};
   const kicked: Record<string, string> = {};
@@ -63,7 +66,13 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
         break;
       case "note.edit": {
         const note = annotations.get(e.annotation_id);
-        if (note?.kind === "note") annotations.set(note.id, { ...note, body: e.body });
+        if (note?.kind === "note") annotations.set(note.id, { ...note, body: e.body, edited_by: e.actor });
+        break;
+      }
+      case "annot.move": {
+        const box = annotations.get(e.annotation_id);
+        if (box?.kind === "note" || box?.kind === "ai")
+          annotations.set(box.id, { ...box, x: e.x, y: e.y, moved: true, moved_by: e.actor });
         break;
       }
       case "thread.ask":
@@ -73,6 +82,15 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
       case "chat":
         chat.push(e.message);
         break;
+      case "chat.react": {
+        const byEmoji = (reactions[e.message_id] ??= {});
+        const who = byEmoji[e.emoji] ?? [];
+        byEmoji[e.emoji] = who.some((a) => a.id === e.actor.id)
+          ? who.filter((a) => a.id !== e.actor.id)
+          : [...who, e.actor];
+        if (byEmoji[e.emoji]!.length === 0) delete byEmoji[e.emoji];
+        break;
+      }
       case "artifact.add":
         artifacts.set(e.artifact.id, e.artifact);
         break;
@@ -98,6 +116,7 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
     annotations: [...annotations.values()].filter((a) => docIds.has(a.doc)),
     threads,
     chat,
+    reactions,
     artifacts: [...artifacts.values()].sort(byTime).reverse(),
     roles,
     kicked,

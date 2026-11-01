@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowsOutCardinalIcon,
   ChatCircleTextIcon,
   ClockCounterClockwiseIcon,
   FilePlusIcon,
@@ -46,6 +47,7 @@ const groupOf = (e: LedgerEvent): Filter | null => {
     case "annot.add":
     case "annot.remove":
     case "note.edit":
+    case "annot.move":
       return "marks";
     case "thread.ask":
     case "artifact.add":
@@ -62,6 +64,11 @@ const groupOf = (e: LedgerEvent): Filter | null => {
 
 // Like Google Docs' version history: every change, who made it and when. It reads straight from the
 // ledger, which is append-only, so entries can't be edited or removed.
+// "Ana's " in a history line about someone else's mark.
+function Owner({ name }: { name: string }) {
+  return <em className="not-italic font-medium text-foreground">{name}&apos;s </em>;
+}
+
 export function History() {
   const { events, state, jumpTo } = useRoom();
   const [filter, setFilter] = useState<Filter>("all");
@@ -72,13 +79,14 @@ export function History() {
     return m;
   }, [events, state.docs]);
   const annotationDoc = useMemo(() => {
-    const m = new Map<string, { doc: string; block: string; kind: string }>();
+    const m = new Map<string, { doc: string; block: string; kind: string; author: { id: string; name: string } }>();
     for (const e of events)
       if (e.type === "annot.add")
         m.set(e.annotation.id, {
           doc: e.annotation.doc,
           block: e.annotation.block,
           kind: e.annotation.kind,
+          author: e.annotation.author,
         });
     return m;
   }, [events]);
@@ -166,15 +174,46 @@ export function History() {
       }
       case "note.edit": {
         const a = annotationDoc.get(e.annotation_id);
+        const quote = (
+          <>
+            “{e.body.slice(0, 70)}
+            {e.body.length > 70 ? "…" : ""}”
+          </>
+        );
         return {
           icon: ChatCircleTextIcon,
           tint: "#64748b",
-          text: (
-            <>
-              wrote “{e.body.slice(0, 70)}
-              {e.body.length > 70 ? "…" : ""}”
-            </>
-          ),
+          text:
+            a && a.author.id !== e.actor.id ? (
+              <>
+                edited <Owner name={a.author.name} />
+                comment to {quote}
+              </>
+            ) : (
+              <>wrote {quote}</>
+            ),
+          jump: a,
+        };
+      }
+      case "annot.move": {
+        const a = annotationDoc.get(e.annotation_id);
+        const what = a?.kind === "ai" ? "AI box" : "comment";
+        return {
+          icon: ArrowsOutCardinalIcon,
+          tint: "#64748b",
+          text:
+            a && a.author.id !== e.actor.id ? (
+              <>
+                moved <Owner name={a.author.name} />
+                {what}
+                {a && <> in {t(a.doc)}</>}
+              </>
+            ) : (
+              <>
+                moved their {what}
+                {a && <> in {t(a.doc)}</>}
+              </>
+            ),
           jump: a,
         };
       }

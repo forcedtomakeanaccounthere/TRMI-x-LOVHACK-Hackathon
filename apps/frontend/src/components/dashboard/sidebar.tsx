@@ -19,6 +19,7 @@ import { Logo } from "@/components/brand/logo";
 import { signOut } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { STATUS_META } from "./primitives";
+import { PEOPLE_SEARCH_ID } from "./people-panel";
 import { useDashboard } from "./store";
 
 export const SECTIONS = [
@@ -151,8 +152,17 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <GroupTree onOpenGroup={openGroup} onNavigate={onNavigate} />
 
       <div className="mt-auto space-y-3 pt-8">
-        <div className="relative overflow-hidden rounded-[1.4rem] p-4 text-pearl" style={{ background: "var(--ink-tile)" }}>
-          <svg viewBox="0 0 120 120" className="pointer-events-none absolute -top-6 -right-6 size-28 text-pearl/15" fill="none" stroke="currentColor" aria-hidden>
+        <div
+          className="relative overflow-hidden rounded-[1.4rem] p-4 text-pearl"
+          style={{ background: "var(--ink-tile)" }}
+        >
+          <svg
+            viewBox="0 0 120 120"
+            className="pointer-events-none absolute -top-6 -right-6 size-28 text-pearl/15"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden
+          >
             <circle cx="50" cy="60" r="34" />
             <circle cx="70" cy="60" r="34" stroke="rgb(109 143 255 / 0.6)" />
           </svg>
@@ -162,7 +172,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <p className="relative mt-1 text-[0.6875rem] text-pearl/60">Follow people to invite them in one tap.</p>
           <button
             type="button"
-            onClick={() => go("people")}
+            onClick={() => {
+              go("people");
+              // Ready to type a name once the page has scrolled there.
+              window.setTimeout(() => document.getElementById(PEOPLE_SEARCH_ID)?.focus({ preventScroll: true }), 700);
+            }}
             className="relative mt-3 h-8 w-full rounded-full bg-pearl text-[0.75rem] font-medium text-ink"
           >
             Find people
@@ -194,7 +208,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 // Groups as a tree: a hairline trunk with a curved branch into each group, and each group's rooms
 // nested one level deeper. Groups start expanded; the chevron folds one away.
 function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => void; onNavigate?: () => void }) {
-  const { state } = useDashboard();
+  const { state, roomHref } = useDashboard();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggle = (id: string) =>
@@ -213,7 +227,10 @@ function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => v
         const rooms = state.rooms.filter((r) => r.group_id === g.id && r.status !== "deleted");
         return (
           <li key={g.id} className="relative">
-            <span className="absolute top-0 -left-px h-[1.125rem] w-3.5 rounded-bl-[10px] border-b border-l border-(--hairline)" aria-hidden />
+            <span
+              className="absolute top-0 -left-px h-[1.125rem] w-3.5 rounded-bl-[10px] border-b border-l border-(--hairline)"
+              aria-hidden
+            />
             <div className="ml-4 flex h-9 items-center gap-1">
               <button
                 type="button"
@@ -223,7 +240,13 @@ function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => v
                 disabled={rooms.length === 0}
                 className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-foreground/5 hover:text-foreground disabled:opacity-30"
               >
-                <CaretRightIcon weight="bold" className={cn("size-3 transition-transform duration-300 ease-fluid", open && rooms.length > 0 && "rotate-90")} />
+                <CaretRightIcon
+                  weight="bold"
+                  className={cn(
+                    "size-3 transition-transform duration-300 ease-fluid",
+                    open && rooms.length > 0 && "rotate-90",
+                  )}
+                />
               </button>
               <button
                 type="button"
@@ -244,9 +267,12 @@ function GroupTree({ onOpenGroup, onNavigate }: { onOpenGroup: (id: string) => v
               <ul className="relative mb-1 ml-[2.05rem] border-l border-(--hairline)">
                 {rooms.map((r) => (
                   <li key={r.id} className="relative">
-                    <span className="absolute top-0 -left-px h-3.5 w-3 rounded-bl-[8px] border-b border-l border-(--hairline)" aria-hidden />
+                    <span
+                      className="absolute top-0 -left-px h-3.5 w-3 rounded-bl-[8px] border-b border-l border-(--hairline)"
+                      aria-hidden
+                    />
                     <Link
-                      href={`/r/${r.id}`}
+                      href={roomHref(r.id)}
                       onClick={onNavigate}
                       title={`${r.title} · ${STATUS_META[r.status].label}`}
                       className="ml-3.5 flex h-7 items-center gap-2 rounded-md pr-2 pl-1 text-[0.75rem] text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"

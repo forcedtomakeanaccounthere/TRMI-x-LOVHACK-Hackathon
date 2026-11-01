@@ -21,6 +21,7 @@ export type Peer = {
   doc: string | null;
   // Leading a laser focus: everyone else is taken to where this person is until they stop.
   focusing: boolean;
+  artifact: string | null; // the artifact they have open, so followers can open it too
 };
 
 export type CursorAnchor = { block: string; x: number; y: number };
@@ -53,9 +54,7 @@ export type ChannelStatus = "solo" | "connecting" | "live";
 
 // The shared notebook's live edits (Yjs updates, base64), and a newcomer's request for what it lacks
 // (its state vector). Ephemeral: the merged notebook is saved by apps/backend.
-export type NotebookMessage =
-  | { type: "update"; update: string }
-  | { type: "request"; from: string; sv: string };
+export type NotebookMessage = { type: "update"; update: string } | { type: "request"; from: string; sv: string };
 // Supabase Realtime caps a message's size; a larger catch-up is left to the saved copy.
 const MAX_NOTEBOOK_MESSAGE_CHARS = 200_000;
 
@@ -132,10 +131,15 @@ function createSender() {
   };
 }
 
+// supabase-js keeps one channel per topic and removes it asynchronously, so a quick remount (React's
+// dev double-mount, or a new identity) would get the old, already-subscribed channel back and fail with
+// "cannot add presence callbacks after subscribe()". New channels wait for the previous removal.
+const removing = new Map<string, Promise<unknown>>();
+
 export function useRoomChannel(
   roomId: string,
   me: Identity | null,
-  view: { doc: string; following: string | null; focusing: boolean },
+  view: { doc: string; following: string | null; focusing: boolean; artifact: string | null },
   handlers: Handlers,
 ) {
   const [status, setStatus] = useState<ChannelStatus>("connecting");
@@ -169,132 +173,151 @@ export function useRoomChannel(
       return;
     }
 
-    const channel = supabase.channel(roomChannel(roomId), {
-      config: { presence: { key: meId }, broadcast: { self: false } },
-    });
-    channelRef.current = channel;
-    let known = new Map<string, Peer>();
+    const topic = roomChannel(roomId);
+    let cancelled = false;
+    let channel: RealtimeChannel | null = null;
 
-    const sendEvents = (events: LedgerEvent[], to?: string) => {
-      for (const batch of chunkEvents(events)) {
-        void channel.send({
-          type: "broadcast",
-          event: to ? "sync" : "ledger",
-          payload: { to, events: batch },
+    const start = () => {
+      const channel = supabase.channel(topic, {
+        config: { presence: { key: meId }, broadcast: { self: false } },
+      });
+      channelRef.current = channel;
+      let known = new Map<string, Peer>();
+
+      const sendEvents = (events: LedgerEvent[], to?: string) => {
+        for (const batch of chunkEvents(events)) {
+          void channel.send({
+            type: "broadcast",
+            event: to ? "sync" : "ledger",
+            payload: { to, events: batch },
+          });
+        }
+      };
+
+      channel
+        .on("presence", { event: "sync" }, () => {
+          const state = channel.presenceState<Peer>();
+          const next = new Map<string, Peer>();
+          for (const [key, metas] of Object.entries(state)) {
+            const meta = metas.at(-1);
+            if (meta && key !== meId)
+              next.set(key, { ...meta, id: key, focusing: meta.focusing === true, artifact: meta.artifact ?? null });
+          }
+          const at = new Date().toISOString();
+          for (const [id, peer] of next)
+            if (!known.has(id)) handlersRef.current.onPresenceChange({ kind: "joined", peer, at });
+          for (const [id, peer] of known) {
+            if (!next.has(id)) {
+              handlersRef.current.onPresenceChange({ kind: "left", peer, at });
+              setCursors((prev) => omit(prev, id));
+            }
+          }
+          known = next;
+          focusingRef.current = new Set([...next.values()].filter((p) => p.focusing).map((p) => p.id));
+          setPeers([...next.values()]);
+        })
+        .on("broadcast", { event: "cursor" }, ({ payload }) => {
+          const p = payload as {
+            id: string;
+            doc: string;
+            anchor: CursorAnchor | null;
+          };
+          setCursors((prev) => {
+            if (!p.anchor) return omit(prev, p.id);
+            return {
+              ...prev,
+              [p.id]: { id: p.id, doc: p.doc, anchor: p.anchor, at: Date.now() },
+            };
+          });
+        })
+        .on("broadcast", { event: "scroll" }, ({ payload }) => {
+          const p = payload as RemoteScroll;
+          setScrolls((prev) => ({ ...prev, [p.id]: p }));
+        })
+        .on("broadcast", { event: "ledger" }, ({ payload }) => {
+          handlersRef.current.onEvents((payload as { events: LedgerEvent[] }).events);
+        })
+        .on("broadcast", { event: "sync" }, ({ payload }) => {
+          const p = payload as { to?: string; events: LedgerEvent[] };
+          if (!p.to || p.to === meId) handlersRef.current.onEvents(p.events);
+        })
+        .on("broadcast", { event: "sync-req" }, ({ payload }) => {
+          // A newcomer lists the event ids it holds. Each peer sends the events it is missing and, when
+          // the newcomer holds events this peer lacks, asks back once (reply: true) with its own ids, so
+          // both sides end up with the union even when each changed something different offline.
+          const p = payload as SyncRequest;
+          if (p.to && p.to !== meId) return;
+          const mine = handlersRef.current.allEvents();
+          const theirs = p.ids ? new Set(p.ids) : null;
+          const missing = theirs ? mine.filter((e) => !theirs.has(e.id)) : mine;
+          if (missing.length) sendEvents(missing, p.from);
+          if (p.reply) return;
+          const have = new Set(mine.map((e) => e.id));
+          if (!p.ids || p.ids.some((id) => !have.has(id))) {
+            void channel.send({
+              type: "broadcast",
+              event: "sync-req",
+              payload: syncRequest(meId, mine, { to: p.from, reply: true }),
+            });
+          }
+        })
+        .on("broadcast", { event: "nb" }, ({ payload }) => {
+          const p = payload as { to?: string; update: string };
+          if (p.to && p.to !== meId) return;
+          for (const listener of notebookListeners.current) listener({ type: "update", update: p.update });
+        })
+        .on("broadcast", { event: "nb-req" }, ({ payload }) => {
+          const p = payload as { from: string; sv: string };
+          for (const listener of notebookListeners.current) listener({ type: "request", from: p.from, sv: p.sv });
+        })
+        .on("broadcast", { event: "status" }, ({ payload }) => {
+          emitRoomStatus((payload ?? {}) as RoomStatusMessage);
+        })
+        .on("broadcast", { event: "kick" }, ({ payload }) => {
+          if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
+        })
+        .subscribe(async (s) => {
+          if (s === "SUBSCRIBED") {
+            setStatus("live");
+            await channel.track({
+              id: meId,
+              name: meName,
+              color: meColor,
+              signedIn: meSignedIn,
+              following: viewRef.current.following,
+              doc: viewRef.current.doc,
+              focusing: viewRef.current.focusing,
+              artifact: viewRef.current.artifact,
+            } satisfies Peer);
+            void channel.send({
+              type: "broadcast",
+              event: "sync-req",
+              payload: syncRequest(meId, handlersRef.current.allEvents()),
+            });
+          } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
+            setStatus("solo");
+          }
         });
-      }
+
+      return channel;
     };
 
-    channel
-      .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState<Peer>();
-        const next = new Map<string, Peer>();
-        for (const [key, metas] of Object.entries(state)) {
-          const meta = metas.at(-1);
-          if (meta && key !== meId) next.set(key, { ...meta, id: key, focusing: meta.focusing === true });
-        }
-        const at = new Date().toISOString();
-        for (const [id, peer] of next)
-          if (!known.has(id)) handlersRef.current.onPresenceChange({ kind: "joined", peer, at });
-        for (const [id, peer] of known) {
-          if (!next.has(id)) {
-            handlersRef.current.onPresenceChange({ kind: "left", peer, at });
-            setCursors((prev) => omit(prev, id));
-          }
-        }
-        known = next;
-        focusingRef.current = new Set([...next.values()].filter((p) => p.focusing).map((p) => p.id));
-        setPeers([...next.values()]);
-      })
-      .on("broadcast", { event: "cursor" }, ({ payload }) => {
-        const p = payload as {
-          id: string;
-          doc: string;
-          anchor: CursorAnchor | null;
-        };
-        setCursors((prev) => {
-          if (!p.anchor) return omit(prev, p.id);
-          return {
-            ...prev,
-            [p.id]: { id: p.id, doc: p.doc, anchor: p.anchor, at: Date.now() },
-          };
-        });
-      })
-      .on("broadcast", { event: "scroll" }, ({ payload }) => {
-        const p = payload as RemoteScroll;
-        setScrolls((prev) => ({ ...prev, [p.id]: p }));
-      })
-      .on("broadcast", { event: "ledger" }, ({ payload }) => {
-        handlersRef.current.onEvents((payload as { events: LedgerEvent[] }).events);
-      })
-      .on("broadcast", { event: "sync" }, ({ payload }) => {
-        const p = payload as { to?: string; events: LedgerEvent[] };
-        if (!p.to || p.to === meId) handlersRef.current.onEvents(p.events);
-      })
-      .on("broadcast", { event: "sync-req" }, ({ payload }) => {
-        // A newcomer lists the event ids it holds. Each peer sends the events it is missing and, when
-        // the newcomer holds events this peer lacks, asks back once (reply: true) with its own ids, so
-        // both sides end up with the union even when each changed something different offline.
-        const p = payload as SyncRequest;
-        if (p.to && p.to !== meId) return;
-        const mine = handlersRef.current.allEvents();
-        const theirs = p.ids ? new Set(p.ids) : null;
-        const missing = theirs ? mine.filter((e) => !theirs.has(e.id)) : mine;
-        if (missing.length) sendEvents(missing, p.from);
-        if (p.reply) return;
-        const have = new Set(mine.map((e) => e.id));
-        if (!p.ids || p.ids.some((id) => !have.has(id))) {
-          void channel.send({
-            type: "broadcast",
-            event: "sync-req",
-            payload: syncRequest(meId, mine, { to: p.from, reply: true }),
-          });
-        }
-      })
-      .on("broadcast", { event: "nb" }, ({ payload }) => {
-        const p = payload as { to?: string; update: string };
-        if (p.to && p.to !== meId) return;
-        for (const listener of notebookListeners.current) listener({ type: "update", update: p.update });
-      })
-      .on("broadcast", { event: "nb-req" }, ({ payload }) => {
-        const p = payload as { from: string; sv: string };
-        for (const listener of notebookListeners.current) listener({ type: "request", from: p.from, sv: p.sv });
-      })
-      .on("broadcast", { event: "status" }, ({ payload }) => {
-        emitRoomStatus((payload ?? {}) as RoomStatusMessage);
-      })
-      .on("broadcast", { event: "kick" }, ({ payload }) => {
-        if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
-      })
-      .subscribe(async (s) => {
-        if (s === "SUBSCRIBED") {
-          setStatus("live");
-          await channel.track({
-            id: meId,
-            name: meName,
-            color: meColor,
-            signedIn: meSignedIn,
-            following: viewRef.current.following,
-            doc: viewRef.current.doc,
-            focusing: viewRef.current.focusing,
-          } satisfies Peer);
-          void channel.send({
-            type: "broadcast",
-            event: "sync-req",
-            payload: syncRequest(meId, handlersRef.current.allEvents()),
-          });
-        } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
-          setStatus("solo");
-        }
-      });
+    void (removing.get(topic) ?? Promise.resolve()).then(() => {
+      if (!cancelled) channel = start();
+    });
 
     return () => {
+      cancelled = true;
       channelRef.current = null;
-      void supabase.removeChannel(channel);
+      if (!channel) return;
+      const removal = supabase.removeChannel(channel).finally(() => {
+        if (removing.get(topic) === removal) removing.delete(topic);
+      });
+      removing.set(topic, removal);
     };
   }, [roomId, meId, meName, meColor, meSignedIn]);
 
-  // Keep presence current when you switch documents or start following someone.
+  // Keep presence current when you switch documents, open an artifact, follow someone or lead a focus.
   useEffect(() => {
     const channel = channelRef.current;
     if (!channel || status !== "live" || !meId) return;
@@ -306,8 +329,9 @@ export function useRoomChannel(
       following: view.following,
       doc: view.doc,
       focusing: view.focusing,
+      artifact: view.artifact,
     } satisfies Peer);
-  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.focusing]);
+  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.focusing, view.artifact]);
 
   // Cursors that haven't moved for 5 s fade out, except a focus leader's laser, which stays put.
   useEffect(() => {

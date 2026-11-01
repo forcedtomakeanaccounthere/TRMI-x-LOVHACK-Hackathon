@@ -72,7 +72,7 @@ export function StatCards() {
               </span>
             </div>
             <div className="relative mt-5 font-display text-[3.4rem] leading-[0.85] font-normal tabular-nums">
-              {String(rooms.length).padStart(2, "0")}
+              {rooms.length}
             </div>
             <div className={cn("relative mt-3 text-[0.75rem]", featured ? "text-pearl/65" : "text-muted-foreground")}>
               {caption(rooms.length, live)}
