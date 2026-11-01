@@ -53,7 +53,7 @@ import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
-import { assertParticipant, can, roomAccess } from "../lib/ledger";
+import { assertParticipant, assertReader, can, roomAccess } from "../lib/ledger";
 import { roomScope } from "../lib/sources";
 import { ledgerRoutes } from "./ledger";
 import { sourcesRoutes } from "./sources";
@@ -852,7 +852,7 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
 
   const wanted = sources ? [...new Set(sources)] : [id];
   if (sources) {
-    const scope = new Set(await roomScope(id));
+    const scope = new Set(await roomScope(id, access.identity));
     if (wanted.some((source) => !scope.has(source))) throw new HttpError(404, "Some of the chosen sources aren't in this room");
   }
 
@@ -919,14 +919,14 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
         )
       : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
 
-  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
-  const several = wanted.length > 1;
+  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped. A
+  // citation names its room whenever it isn't the room the question was asked in.
   const citations = answer.citations.flatMap((citation): AiCitation[] => {
     const chunk = chunks[citation.chunk - 1];
     if (!chunk) return [];
     return [
       {
-        ...(several ? { room_id: chunk.room_id } : {}),
+        ...(wanted.length > 1 || chunk.room_id !== id ? { room_id: chunk.room_id } : {}),
         quote: citation.quote,
         block_ids: chunk.block_ids,
         page: chunk.page,
@@ -1131,6 +1131,8 @@ roomsRouter.get("/:id/summary/export", optionalAuth, async (req, res) => {
 // from a link, text or a video have no file.
 roomsRouter.get("/:id/original", optionalAuth, async (req, res) => {
   const id = req.params.id as string;
+  // Removed people, and guests where the room is for members only, can't download it.
+  assertReader(await roomAccess(id, req));
   const { data: room, error } = await supabaseAdmin()
     .from("rooms")
     .select("kind, status, pdf_path, source_meta")

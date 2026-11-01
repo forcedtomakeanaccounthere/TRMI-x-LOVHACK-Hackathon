@@ -5,6 +5,7 @@ import {
   PostEventsRequest,
   type ListEventsResponse,
   type PostEventsResponse,
+  type RoomSettings,
   type RoomMember,
   type RoomMembersResponse,
 } from "@linkroom/shared";
@@ -19,7 +20,6 @@ import {
   checkEvent,
   project,
   roomAccess,
-  settingsToRow,
   type Access,
   type MemberRow,
   type RuleContext,
@@ -84,7 +84,7 @@ async function loadAuthors(roomId: string, events: LedgerEvent[]) {
   const wanted: Record<Authored, Set<string>> = { annotation: new Set(), artifact: new Set(), doc: new Set() };
   for (const event of events) {
     const ref = authoredRef(event);
-    if (ref && !event.type.endsWith(".add")) wanted[ref.kind].add(ref.id);
+    if (ref) wanted[ref.kind].add(ref.id);
   }
   const authors = new Map<string, string>();
   const db = supabaseAdmin();
@@ -113,6 +113,83 @@ async function loadAuthors(roomId: string, events: LedgerEvent[]) {
     }),
   );
   return authors;
+}
+
+// Concurrent writes to one room retry this many times before giving up with a 503.
+const MAX_APPEND_ATTEMPTS = 5;
+
+type MemberPatch = { member_id: string; name: string; role?: string; kick?: true };
+
+/**
+ * One attempt at a batch: reads the room's members, the authors the batch points at, the events
+ * already saved and the ledger's last seq; checks every event; then hands the accepted ones and their
+ * effects to append_room_events. Returns null when another write landed since the read (try again).
+ */
+async function checkAndAppend(roomId: string, access: Access, events: LedgerEvent[]) {
+  const db = supabaseAdmin();
+  const me = access.identity!;
+  const [last, existing, members, authors] = await Promise.all([
+    db.from("room_events").select("seq").eq("room_id", roomId).order("seq", { ascending: false }).limit(1).maybeSingle(),
+    events.length
+      ? db.from("room_events").select("id").eq("room_id", roomId).in("id", events.map((e) => e.id))
+      : Promise.resolve({ data: [], error: null }),
+    db.from("room_members").select("member_id, name, role, kicked_at, key_hash").eq("room_id", roomId),
+    loadAuthors(roomId, events),
+  ]);
+  if (last.error) throw last.error;
+  if (existing.error) throw existing.error;
+  if (members.error) throw members.error;
+  const saved = new Set((existing.data as { id: string }[]).map((row) => row.id));
+
+  const ctx: RuleContext = {
+    roomId,
+    status: access.status,
+    ownerId: access.ownerId,
+    me,
+    settings: access.settings,
+    members: new Map((members.data as MemberRow[]).map((row) => [row.member_id, row])),
+    authorOf: (kind, ref) => authors.get(`${kind}:${ref}`),
+  };
+
+  const accepted: string[] = [];
+  const rejected: PostEventsResponse["rejected"] = [];
+  const rows: Record<string, unknown>[] = [];
+  const memberPatches: MemberPatch[] = [];
+  let settingsPatch: Partial<RoomSettings> | null = null;
+  for (const event of events) {
+    if (saved.has(event.id)) {
+      accepted.push(event.id); // a retry: already applied
+      continue;
+    }
+    const reason = checkEvent(event, ctx);
+    if (reason) {
+      rejected.push({ id: event.id, reason });
+      continue;
+    }
+    project(event, ctx);
+    if (event.type === "role.set") memberPatches.push({ member_id: event.member, name: event.name || "Someone", role: event.role });
+    if (event.type === "member.kick") memberPatches.push({ member_id: event.member, name: event.name || "Someone", kick: true });
+    if (event.type === "settings.update") settingsPatch = { ...(settingsPatch ?? {}), ...event.patch };
+    const ref = authoredRef(event);
+    if (ref && event.type.endsWith(".add") && !authors.has(`${ref.kind}:${ref.id}`)) {
+      authors.set(`${ref.kind}:${ref.id}`, event.actor.id);
+    }
+    saved.add(event.id); // a duplicate id later in the same batch is a retry too
+    accepted.push(event.id);
+    rows.push({ id: event.id, type: event.type, actor_id: event.actor.id, actor_name: event.actor.name, payload: event, at: event.at });
+  }
+  if (!rows.length) return { accepted, rejected };
+
+  const { data: status, error } = await db.rpc("append_room_events", {
+    p_room: roomId,
+    p_expected_seq: (last.data?.seq as number | undefined) ?? 0,
+    p_events: rows,
+    p_writer: { member_id: me.id, name: (rows.at(-1)!.actor_name as string) || "Someone" },
+    p_members: memberPatches,
+    p_settings: settingsPatch,
+  });
+  if (error) throw error;
+  return status === "ok" ? { accepted, rejected } : null;
 }
 
 export function ledgerRoutes(router: Router) {
@@ -167,89 +244,20 @@ export function ledgerRoutes(router: Router) {
       events.push(parsed.data);
     }
 
-    const db = supabaseAdmin();
     if (events.length) await claimGuest(access, events[0]!.actor.name);
 
-    const [existing, members, authors] = await Promise.all([
-      events.length
-        ? db.from("room_events").select("id").eq("room_id", id).in("id", events.map((e) => e.id))
-        : Promise.resolve({ data: [], error: null }),
-      db.from("room_members").select("member_id, name, role, kicked_at, key_hash").eq("room_id", id),
-      loadAuthors(id, events),
-    ]);
-    if (existing.error) throw existing.error;
-    if (members.error) throw members.error;
-    const saved = new Set((existing.data as { id: string }[]).map((row) => row.id));
-
-    const ctx: RuleContext = {
-      roomId: id,
-      status: access.status,
-      ownerId: access.ownerId,
-      me: access.identity,
-      settings: access.settings,
-      members: new Map((members.data as MemberRow[]).map((row) => [row.member_id, row])),
-      authorOf: (kind, ref) => authors.get(`${kind}:${ref}`),
-    };
-    const settingsBefore = ctx.settings;
-    const membersBefore = new Map(ctx.members);
-
-    const rows: Record<string, unknown>[] = [];
-    for (const event of events) {
-      if (saved.has(event.id)) {
-        accepted.push(event.id);
-        continue;
-      }
-      const reason = checkEvent(event, ctx);
-      if (reason) {
-        rejected.push({ id: event.id, reason });
-        continue;
-      }
-      project(event, ctx);
-      const ref = authoredRef(event);
-      if (ref && event.type.endsWith(".add") && !authors.has(`${ref.kind}:${ref.id}`)) {
-        authors.set(`${ref.kind}:${ref.id}`, event.actor.id);
-      }
-      saved.add(event.id); // a duplicate id later in the same batch is a retry too
-      accepted.push(event.id);
-      rows.push({
-        room_id: id,
-        id: event.id,
-        type: event.type,
-        actor_id: event.actor.id,
-        actor_name: event.actor.name,
-        payload: event,
-        at: event.at,
-      });
+    // Check the batch against the room as it is now, then write it and its effects in one transaction
+    // (append_room_events, 0023). If another write landed in between, read and check again.
+    let outcome: { accepted: string[]; rejected: PostEventsResponse["rejected"] } | null = null;
+    for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS && !outcome; attempt++) {
+      const current = attempt === 0 ? access : await roomAccess(id, req);
+      if (attempt > 0) assertParticipant(current);
+      const result = await checkAndAppend(id, current, events);
+      if (result) outcome = result;
     }
+    if (!outcome) throw new HttpError(503, "The room is busy. Try again in a moment.");
 
-    if (rows.length) {
-      const { error } = await db.from("room_events").upsert(rows, { onConflict: "room_id,id", ignoreDuplicates: true });
-      if (error) throw error;
-
-      // The writer's latest name, and every role or removal the batch changed.
-      const me = access.identity;
-      const latestName = (rows.at(-1)!.actor_name as string) || "Someone";
-      const changed = [...ctx.members.values()].filter((row) => membersBefore.get(row.member_id) !== row);
-      const memberRows = [
-        { room_id: id, member_id: me.id, name: latestName },
-        ...changed.map((row) => ({ room_id: id, member_id: row.member_id, name: row.name, role: row.role, kicked_at: row.kicked_at })),
-      ];
-      // One upsert per column set: PostgREST needs the same keys on every row.
-      const { error: meError } = await db.from("room_members").upsert(memberRows[0]!, { onConflict: "room_id,member_id" });
-      if (meError) throw meError;
-      if (changed.length) {
-        const { error: memberError } = await db
-          .from("room_members")
-          .upsert(memberRows.slice(1), { onConflict: "room_id,member_id" });
-        if (memberError) throw memberError;
-      }
-      if (ctx.settings !== settingsBefore) {
-        const { error: settingsError } = await db.from("room_settings").upsert(settingsToRow(id, ctx.settings));
-        if (settingsError) throw settingsError;
-      }
-    }
-
-    res.json({ accepted, rejected } satisfies PostEventsResponse);
+    res.json({ accepted: [...accepted, ...outcome.accepted], rejected: [...rejected, ...outcome.rejected] } satisfies PostEventsResponse);
   });
 
   // GET /api/rooms/:id/members: everyone given a role or removed, everyone who wrote, and the settings.

@@ -29,7 +29,7 @@ export function artifactsRoutes(router: Router, limits: RequestHandler[]) {
     if (access.status !== "running") throw new HttpError(409, "This room is read only");
     if (!can.generate(access.role)) throw new HttpError(403, "Your role can't make artifacts");
 
-    const scope = new Set(await roomScope(id));
+    const scope = new Set(await roomScope(id, access.identity));
     const roomIds = [...new Set(sources)];
     if (roomIds.some((source) => !scope.has(source))) throw new HttpError(404, "Some of the chosen sources aren't in this room");
 

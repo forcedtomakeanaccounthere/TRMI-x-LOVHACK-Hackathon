@@ -1,4 +1,5 @@
 import type { AttachedSource, RoomKind } from "@linkroom/shared";
+import { readableBy, type Identity } from "./ledger";
 import { supabaseAdmin } from "./supabase";
 
 // A room workspace's documents: the room itself, then the rooms attached to it (room_attachments,
@@ -34,7 +35,13 @@ export async function attachedSources(roomId: string): Promise<AttachedSource[]>
     }));
 }
 
-/** The room ids an AI request on `roomId` may draw on: the room and its attached sources. */
-export async function roomScope(roomId: string): Promise<string[]> {
-  return [roomId, ...(await attachedSources(roomId)).map((source) => source.id)];
+/**
+ * The room ids an AI request on `roomId` may draw on: the room and those of its attached sources the
+ * caller may read themselves, so a source someone was removed from (or that is members-only) can't
+ * be read through another room. Checked on every request, so later removals take effect.
+ */
+export async function roomScope(roomId: string, identity: Identity | null): Promise<string[]> {
+  const attached = (await attachedSources(roomId)).map((source) => source.id);
+  const readable = await readableBy(attached, identity);
+  return [roomId, ...attached.filter((id) => readable.has(id))];
 }

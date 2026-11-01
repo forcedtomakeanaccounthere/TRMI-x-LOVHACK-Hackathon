@@ -254,6 +254,73 @@ describe("the room ledger", () => {
     expect((await post(id, gus, Array.from({ length: 51 }, () => chat(gus)))).status).toBe(400);
   });
 
+  it("story: an editor can't take over someone else's note or artifact by reusing its id", async () => {
+    const id = await newRoom();
+    const gus = asGuest("Gus");
+    const eve = asGuest("Eve");
+    const note = (w: Writer, body: string) =>
+      event(w, {
+        type: "annot.add",
+        annotation: { id: "shared-note", doc: id, block: "b0", author: actor(w), at: at(), kind: "note", x: 0.1, y: 0.1, body, color: "#38bdf8" },
+      });
+    expect((await post(id, gus, [note(gus, "Mine")])).body.rejected).toEqual([]);
+    const takeover = await post(id, eve, [note(eve, "Now mine")]);
+    expect(takeover.body.rejected).toEqual([expect.objectContaining({ reason: "That annotation id belongs to someone else" })]);
+    // The author re-adding their own note is fine.
+    expect((await post(id, gus, [note(gus, "Still mine")])).body.rejected).toEqual([]);
+
+    const artifact = (w: Writer) =>
+      event(w, {
+        type: "artifact.add",
+        artifact: { id: "art-1", title: "Cards", sources: [id], author: actor(w), at: at(), preview: false, body: { kind: "flashcards", cards: [] } },
+      });
+    await post(id, gus, [artifact(gus)]);
+    expect((await post(id, eve, [artifact(eve)])).body.rejected[0].reason).toBe("That artifact id belongs to someone else");
+  });
+
+  it("story: two admins act at once; a kick and a role change both hold, and settings patches merge", async () => {
+    const id = await newRoom();
+    const olivia = asUser(owner, "Olivia");
+    const max = asUser(member, "Max");
+    const gus = asGuest("Gus");
+    await post(id, olivia, [event(olivia, { type: "role.set", member: max.id, name: "Max", role: "admin" })]);
+
+    const results = await Promise.all([
+      post(id, olivia, [event(olivia, { type: "member.kick", member: gus.id, name: "Gus" })]),
+      post(id, max, [event(max, { type: "role.set", member: gus.id, name: "Gus", role: "viewer" })]),
+      post(id, olivia, [event(olivia, { type: "settings.update", patch: { viewersUseAi: false } })]),
+      post(id, max, [event(max, { type: "settings.update", patch: { guestRole: "viewer" } })]),
+    ]);
+    for (const res of results) expect(res.body.rejected).toEqual([]);
+
+    const members = await request(app).get(`/api/rooms/${id}/members`).set(olivia.headers);
+    expect(members.body.members).toEqual(
+      expect.arrayContaining([expect.objectContaining({ member_id: gus.id, role: "viewer", kicked_at: expect.any(String) })]),
+    );
+    expect(members.body.settings).toMatchObject({ viewersUseAi: false, guestRole: "viewer" });
+    expect((await list(id)).body.events).toHaveLength(5);
+  });
+
+  it("saves an event and its effect together, or neither", async () => {
+    const id = await newRoom();
+    const db = createClient(supabase.url, supabase.serviceRoleKey, { auth: { persistSession: false } });
+    const olivia = asUser(owner, "Olivia");
+    await post(id, olivia, [chat(olivia)]);
+    // A write checked against a stale view of the room: neither the event nor the kick is saved.
+    const kick = event(olivia, { type: "member.kick", member: "guest-zzzz1111", name: "Z" });
+    const { data } = await db.rpc("append_room_events", {
+      p_room: id,
+      p_expected_seq: 0,
+      p_events: [{ id: kick.id, type: "member.kick", actor_id: olivia.id, actor_name: "Olivia", payload: kick, at: kick.at }],
+      p_writer: null,
+      p_members: [{ member_id: "guest-zzzz1111", name: "Z", kick: true }],
+      p_settings: null,
+    });
+    expect(data).toBe("conflict");
+    expect((await db.from("room_events").select("id").eq("room_id", id).eq("id", kick.id)).data).toEqual([]);
+    expect((await db.from("room_members").select("member_id").eq("room_id", id).eq("member_id", "guest-zzzz1111")).data).toEqual([]);
+  });
+
   it("is append-only in the database, and goes when the room is deleted", async () => {
     const id = await newRoom();
     const olivia = asUser(owner, "Olivia");

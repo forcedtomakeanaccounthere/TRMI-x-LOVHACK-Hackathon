@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(26);
+select plan(31);
 
 insert into rooms (id, kind, title) values ('ledg0001', 'link', 'Ledger room');
 insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
@@ -69,6 +69,35 @@ select throws_ok(
   '23514', null, 'a room is not attached to itself'
 );
 
+-- append_room_events (0023): writes events and their effects together, against the latest state.
+select is(
+  append_room_events('ledg0001', 0, '[]'::jsonb, null, '[]'::jsonb, null),
+  'conflict',
+  'a write checked against an older ledger is refused'
+);
+select is(
+  append_room_events(
+    'ledg0001',
+    (select max(seq) from room_events where room_id = 'ledg0001'),
+    '[{"id": "e2", "type": "member.kick", "actor_id": "owner", "actor_name": "Olivia", "payload": {"type": "member.kick"}, "at": "2026-11-01T10:00:00Z"}]'::jsonb,
+    null,
+    '[{"member_id": "guest-abcd1234", "name": "Gus", "kick": true}]'::jsonb,
+    '{"viewersUseAi": false}'::jsonb
+  ),
+  'ok',
+  'a write against the latest ledger is accepted'
+);
+select results_eq(
+  $$select role, kicked_at is not null from room_members where room_id = 'ledg0001' and member_id = 'guest-abcd1234'$$,
+  $$values ('viewer', true)$$,
+  'a kick keeps the member''s role (only the kick is patched)'
+);
+select results_eq(
+  $$select viewers_use_ai, guest_role from room_settings where room_id = 'ledg0001'$$,
+  $$values (false, 'editor')$$,
+  'a settings patch changes only what it names'
+);
+
 -- Browsers (anon and authenticated) can't reach any of it.
 set local role anon;
 select throws_ok($$select 1 from room_events$$, '42501', null, 'anon cannot read the ledger');
@@ -80,6 +109,10 @@ select throws_ok(
 select throws_ok($$select 1 from room_members$$, '42501', null, 'anon cannot read members (or guest key hashes)');
 select throws_ok($$update room_settings set allow_guests = false$$, '42501', null, 'anon cannot change settings');
 select throws_ok($$select 1 from room_attachments$$, '42501', null, 'anon cannot read attachments');
+select throws_ok(
+  $$select append_room_events('ledg0001', 0, '[]'::jsonb, null, '[]'::jsonb, null)$$,
+  '42501', null, 'anon cannot append through the function either'
+);
 
 set local role authenticated;
 select throws_ok($$select 1 from room_events$$, '42501', null, 'a signed-in browser cannot read the ledger either');

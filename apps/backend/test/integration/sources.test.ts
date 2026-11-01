@@ -37,6 +37,8 @@ beforeAll(async () => {
     WEB_ORIGIN: "http://web.test",
     AUTH_RATE_LIMIT: "1000",
     LEDGER_RATE_LIMIT: "10000",
+    ASK_RATE_LIMIT: "1000",
+    ASK_ROOM_RATE_LIMIT: "1000",
     AI_SERVICE_URL: ai.url,
     AI_INTERNAL_TOKEN: ai.token,
   });
@@ -174,6 +176,43 @@ describe("attached sources", () => {
     expect((await db.from("room_attachments").select("source_room_id").eq("room_id", id)).data).toEqual([
       { source_room_id: a },
     ]);
+  });
+
+  it("story: someone removed from a room can't attach it to their own room, or read it through one", async () => {
+    const theirs = await room(eve, "Eve's room");
+    const secret = await room(owner, "Olivia's notes");
+    const kick = (roomId: string, who: Session) =>
+      request(app)
+        .post(`/api/rooms/${roomId}/events`)
+        .set(auth(owner))
+        .send({
+          events: [
+            {
+              id: `k${randomBytes(4).toString("hex")}`,
+              at: new Date().toISOString(),
+              actor: { id: owner.user.id, name: "Olivia", color: "#ef4444" },
+              type: "member.kick",
+              member: who.user.id,
+              name: "Eve",
+            },
+          ],
+        });
+    await kick(secret, eve);
+    const res = await attach(eve, theirs, secret);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("You can't read that document, so you can't attach it");
+
+    // Attached before the removal: the source stops counting for Eve's questions and artifacts.
+    const other = await room(owner, "Olivia's slides");
+    expect((await attach(eve, theirs, other)).status).toBe(201);
+    await kick(other, eve);
+    const asked = await request(app)
+      .post(`/api/rooms/${theirs}/ask`)
+      .set(auth(eve))
+      .send({ question: "What do the slides say?", sources: [theirs, other] });
+    expect(asked.status).toBe(404);
+    const artifact = await request(app).post(`/api/rooms/${theirs}/artifacts`).set(auth(eve)).send({ kind: "quiz", sources: [other] });
+    expect(artifact.status).toBe(404);
   });
 
   it("story: a closed room takes no new sources", async () => {

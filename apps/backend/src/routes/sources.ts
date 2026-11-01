@@ -1,6 +1,6 @@
 import { AddSourceRequest, MAX_ROOM_SOURCES, type AttachedSource, type RoomSourcesResponse } from "@linkroom/shared";
 import type { Router } from "express";
-import { assertParticipant, assertReader, can, roomAccess, type Access } from "../lib/ledger";
+import { assertParticipant, assertReader, can, readableBy, roomAccess, type Access } from "../lib/ledger";
 import { attachedSources } from "../lib/sources";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth, requireAuth } from "../middleware/auth";
@@ -35,6 +35,10 @@ export function sourcesRoutes(router: Router) {
     const { data: source, error: sourceError } = await db.from("rooms").select("status").eq("id", sourceId).maybeSingle();
     if (sourceError) throw sourceError;
     if (!source || source.status === "deleted") throw new HttpError(404, "That document wasn't found");
+    // Attaching a room makes it readable through this one, so the caller must be able to read it.
+    if (!(await readableBy([sourceId], access.identity)).has(sourceId)) {
+      throw new HttpError(403, "You can't read that document, so you can't attach it");
+    }
 
     const current = await attachedSources(id);
     const existing = current.find((s) => s.id === sourceId);

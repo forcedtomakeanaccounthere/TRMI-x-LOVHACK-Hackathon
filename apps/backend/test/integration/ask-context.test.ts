@@ -96,6 +96,13 @@ describe("asking across a room's documents", () => {
     expect(data).toEqual({ room_id: bio, asked_by: "Gus" });
   });
 
+  it("story: asking only the attached source still says which document each citation is from", async () => {
+    const res = await ask(bio, { question: "What is photosynthesis?", sources: [chem] });
+    expect(res.status).toBe(201);
+    expect(res.body.citations.length).toBeGreaterThan(0);
+    for (const citation of res.body.citations as { room_id?: string }[]) expect(citation.room_id).toBe(chem);
+  });
+
   it("story: an AI box's passage and earlier turns reach apps/ai", async () => {
     await ask(bio, {
       question: "Explain this line",

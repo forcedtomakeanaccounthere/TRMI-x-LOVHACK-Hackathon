@@ -10,8 +10,11 @@ const signed: { bucket: string; path: string; ttl: number; download: unknown }[]
 
 vi.mock("../../src/lib/supabase", () => ({
   supabaseAdmin: () => ({
-    from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: room, error: null }) }) }),
+    // The room for "rooms"; no settings or member rows (a guest in a room open to guests).
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: async () => ({ data: table === "rooms" ? room : null, error: null }) }),
+      }),
     }),
     storage: {
       from: (bucket: string) => ({

@@ -115,6 +115,17 @@ describe("checkEvent", () => {
     expect(checkEvent(art(GUEST), ctx(GUEST, { authors: { "artifact:x1": MEMBER } }))).toBe("Only its author or an admin can remove this");
   });
 
+  it("refuses an add that reuses someone else's annotation or artifact id", () => {
+    const authors = { "annotation:a1": GUEST, "artifact:x1": GUEST };
+    expect(checkEvent(highlight(MEMBER, "a1"), ctx(MEMBER, { authors }))).toBe("That annotation id belongs to someone else");
+    expect(checkEvent(highlight(GUEST, "a1"), ctx(GUEST, { authors }))).toBeNull(); // the author re-adding is fine
+    const artifact = ev(MEMBER, {
+      type: "artifact.add",
+      artifact: { id: "x1", title: "T", sources: [], author: actor(MEMBER), at: AT, preview: false, body: { kind: "flashcards", cards: [] } },
+    });
+    expect(checkEvent(artifact, ctx(MEMBER, { authors }))).toBe("That artifact id belongs to someone else");
+  });
+
   it("only the note's author edits it", () => {
     const edit = (who: string) => ev(who, { type: "note.edit", annotation_id: "n1", body: "changed" });
     const authors = { "annotation:n1": MEMBER };

@@ -159,6 +159,41 @@ export function assertReader(access: Access) {
   }
 }
 
+/**
+ * Which of `roomIds` the caller may read: not deleted, not removed from it, and not a guest where the
+ * room is for signed-in members only. Three queries for any number of rooms.
+ */
+export async function readableBy(roomIds: string[], identity: Identity | null): Promise<Set<string>> {
+  const ids = [...new Set(roomIds)];
+  if (!ids.length) return new Set();
+  const db = supabaseAdmin();
+  const [rooms, settings, members] = await Promise.all([
+    db.from("rooms").select("id, status, created_by").in("id", ids),
+    db.from("room_settings").select("room_id, allow_guests").in("room_id", ids),
+    identity
+      ? db.from("room_members").select("room_id, kicked_at").eq("member_id", identity.id).in("room_id", ids)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (rooms.error) throw rooms.error;
+  if (settings.error) throw settings.error;
+  if (members.error) throw members.error;
+  const guestsOff = new Set(
+    (settings.data as { room_id: string; allow_guests: boolean }[]).filter((row) => !row.allow_guests).map((row) => row.room_id),
+  );
+  const kicked = new Set(
+    (members.data as { room_id: string; kicked_at: string | null }[]).filter((row) => row.kicked_at).map((row) => row.room_id),
+  );
+  const readable = new Set<string>();
+  for (const room of rooms.data as { id: string; status: string; created_by: string | null }[]) {
+    if (room.status === "deleted") continue;
+    const owner = Boolean(identity && room.created_by === identity.id);
+    if (!owner && kicked.has(room.id)) continue;
+    if (!owner && !identity?.signedIn && guestsOff.has(room.id)) continue;
+    readable.add(room.id);
+  }
+  return readable;
+}
+
 // --- Checking events ---
 
 type Authored = "annotation" | "artifact" | "doc";
@@ -195,10 +230,17 @@ export function checkEvent(event: LedgerEvent, ctx: RuleContext): string | null 
     return author === ctx.me.id || can.manage(role);
   };
 
+  const takenByOther = (kind: Authored, id: string) => {
+    const author = ctx.authorOf(kind, id);
+    return author !== undefined && author !== ctx.me.id;
+  };
+
   switch (event.type) {
     case "annot.add":
       if (!can.annotate(role)) return "Your role can't annotate";
       if (event.annotation.author.id !== ctx.me.id) return "An annotation's author must be you";
+      // Replaying an add with someone else's id would replace their mark or note.
+      if (takenByOther("annotation", event.annotation.id)) return "That annotation id belongs to someone else";
       if (event.annotation.kind === "ai" && !can.useAi(role, ctx.settings)) return "Your role can't use the AI";
       return null;
     case "note.edit":
@@ -223,6 +265,7 @@ export function checkEvent(event: LedgerEvent, ctx: RuleContext): string | null 
       return event.message.author.id === ctx.me.id ? null : "A message's author must be you";
     case "artifact.add":
       if (event.artifact.author.id !== ctx.me.id) return "An artifact's author must be you";
+      if (takenByOther("artifact", event.artifact.id)) return "That artifact id belongs to someone else";
       return can.generate(role) ? null : "Your role can't make artifacts";
     case "artifact.remove":
       return authorOrManager("artifact", event.artifact_id) ? null : "Only its author or an admin can remove this";
