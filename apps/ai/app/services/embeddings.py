@@ -11,6 +11,10 @@ log = logging.getLogger(__name__)
 InputType = Literal["passage", "query"]
 
 
+# NVIDIA models whose vectors have one fixed size and refuse a `dimensions` parameter.
+FIXED_SIZE_MODELS = frozenset({"nvidia/nv-embedqa-e5-v5", "nvidia/nv-embedqa-mistral-7b-v2"})
+
+
 class EmbeddingError(Exception):
     pass
 
@@ -47,6 +51,10 @@ async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list
         # NVIDIA's retrieval models embed documents and questions differently, and refuse input
         # over their token limit unless told to cut it.
         kwargs["extra_body"] = {"input_type": input_type, "truncate": "END"}
+        # Newer ones (llama-3.2-nv-embedqa-1b-v2) make vectors of several sizes: ask for the
+        # column's.
+        if model not in FIXED_SIZE_MODELS:
+            kwargs["dimensions"] = dim
     elif provider == "gemini":
         kwargs["dimensions"] = dim
 

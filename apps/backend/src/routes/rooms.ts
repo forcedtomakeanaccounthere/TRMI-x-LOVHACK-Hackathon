@@ -795,10 +795,10 @@ roomsRouter.post("/:id/recap", optionalAuth, async (req, res) => {
 
 // Chunks a question is answered from (match_chunks p_k).
 const ASK_CHUNKS = 8;
-// apps/ai answers within 25 s; embedding the question is quick or not worth waiting for.
+// apps/ai answers within 50 s; embedding the question is quick or not worth waiting for.
 // apps/ai gives Mistral's moderation 5 s.
 const MODERATE_TIMEOUT_MS = 8_000;
-const ANSWER_TIMEOUT_MS = 30_000;
+const ANSWER_TIMEOUT_MS = 60_000;
 const QUESTION_EMBED_TIMEOUT_MS = 10_000;
 
 const tooManyQuestions = (scope: string) => ({ error: `Too many questions ${scope}. Try again in a minute.` });
@@ -838,8 +838,8 @@ export function interleaveChunks(perRoom: SourcedChunk[][], limit: number): Sour
 }
 
 const NOT_READY = new Set(["pending", "indexing"]);
-// apps/ai gives a question with a snapshot 40 s.
-const IMAGE_ANSWER_TIMEOUT_MS = 45_000;
+// apps/ai gives a question with a snapshot 70 s.
+const IMAGE_ANSWER_TIMEOUT_MS = 80_000;
 
 // POST /api/rooms/:id/ask  { question, name?, sources?, quote?, history?, image? }: answers a question
 // from the room's document, or from several of the room's documents (`sources`: the room and its
@@ -983,7 +983,7 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
 
 const MAX_CATCHUP_ITEMS = 200;
 const QUIZ_CHUNKS = 12;
-const EXTRAS_TIMEOUT_MS = 30_000; // apps/ai gives these 25 s, like an answer
+const EXTRAS_TIMEOUT_MS = 60_000; // apps/ai gives these 50 s, like an answer
 
 // A readable room, or the error for one that isn't (deleted, unknown).
 async function readableRoom(id: string) {

@@ -108,13 +108,15 @@ export function toCitations(doc: string, message: Pick<AiMessage, "citations">):
 }
 
 // Asks the backend about each chosen document that is a backend room (`remote`), one call per
-// document, and joins the answers. A lens snapshot goes only to the first one (the document it was
-// taken from), so one picture isn't sent to the vision model once per source. What the backend
+// document, and joins the answers. A lens snapshot or a selected passage goes only to the first one
+// (the document it was taken from), so it isn't asked of every source. What the backend
 // can't answer (the demo room's bundled documents, the backend being down) gets the browser preview
 // below, marked as such.
 export async function ask(req: AskRequest, docs: DocContent[], remote: string[]): Promise<Answer> {
   const backendDocs = req.sources.filter((id) => remote.includes(id));
-  const targets = req.image ? backendDocs.slice(0, 1) : backendDocs;
+  // A snapshot or a selected passage belongs to the document it was taken from (the box's, first):
+  // asking the other sources about it only adds "not in this document" answers.
+  const targets = req.image || req.quote?.trim() ? backendDocs.slice(0, 1) : backendDocs;
   if (targets.length > 0) {
     const body = backendBody(req);
     const results = await Promise.allSettled(targets.map((id) => api.ask(id, body)));

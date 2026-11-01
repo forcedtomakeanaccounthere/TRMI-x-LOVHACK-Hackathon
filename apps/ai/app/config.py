@@ -22,12 +22,14 @@ class Settings(BaseSettings):
     recap_deadline_seconds: float = 100.0
 
     # Each *_model may be a comma-separated list, tried in order before moving to the next provider.
-    # Defaults are the strongest models that worked on free tiers (checked 2026-10-31).
+    # Defaults are models that worked on free tiers (checked 2026-10-31), fastest-answering first:
+    # the 550B model often took longer than an answer's whole budget on the hosted free tier, so
+    # it is tried last.
     nvidia_api_key: str | None = None
     nvidia_model: str = (
-        "nvidia/nemotron-3-ultra-550b-a55b,"
         "nvidia/nemotron-3.5-super-vl-120b-a12b,"
-        "nvidia/nemotron-3.5-lightning-30b-a3b"
+        "nvidia/nemotron-3.5-lightning-30b-a3b,"
+        "nvidia/nemotron-3-ultra-550b-a55b"
     )
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash,gemini-3.5-flash-lite"
@@ -47,14 +49,14 @@ class Settings(BaseSettings):
     summary_call_deadline_seconds: float = 100.0
     summary_deadline_seconds: float = 540.0
 
-    # Answers (POST /answer): someone is waiting in the room, so one call gets 25 s in all,
-    # below apps/backend's 30 s timeout for it.
-    answer_deadline_seconds: float = 25.0
-    # One provider's share, so a provider that hangs still leaves time to fall back to the next.
-    answer_attempt_seconds: float = 10.0
-    # A question with an AI-lens snapshot: reading an image takes longer. Below apps/backend's 45 s.
-    answer_image_deadline_seconds: float = 40.0
-    answer_image_attempt_seconds: float = 20.0
+    # Answers (POST /answer, /explain, /catchup): someone is waiting in the room, so one call gets
+    # 50 s in all, below apps/backend's 60 s timeout for it. Hosted models often need 10-20 s, so
+    # each attempt gets 20 s and a slow one still leaves time to fall back to the next.
+    answer_deadline_seconds: float = 50.0
+    answer_attempt_seconds: float = 20.0
+    # A question with an AI-lens snapshot: reading an image takes longer. Below apps/backend's 80 s.
+    answer_image_deadline_seconds: float = 70.0
+    answer_image_attempt_seconds: float = 30.0
     # Models that can read images, from the *_MODEL lists. Only these are tried for a question with
     # a snapshot; with none configured, such questions get a 501.
     vision_models: str = (
@@ -66,11 +68,11 @@ class Settings(BaseSettings):
     # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
     # models can't be compared, so mixing them would break search. When it fails, apps/backend
     # falls back to keyword search. The key is the provider's *_API_KEY above.
-    # nvidia/nv-embedqa-e5-v5 and mistral (mistral-embed) give 1024 numbers; gemini is asked for
-    # EMBEDDING_DIM. EMBEDDING_DIM must match the vector column in
-    # supabase/migrations/0011_chunks.sql.
+    # nvidia and gemini are asked for EMBEDDING_DIM numbers; mistral (mistral-embed) gives 1024.
+    # EMBEDDING_DIM must match the vector column in supabase/migrations/0011_chunks.sql.
     embedding_provider: Literal["nvidia", "gemini", "mistral"] = "nvidia"
-    embedding_model: str = "nvidia/nv-embedqa-e5-v5"
+    # nvidia/nv-embedqa-e5-v5 was retired (410 Gone); this is its successor.
+    embedding_model: str = "nvidia/llama-3.2-nv-embedqa-1b-v2"
     embedding_dim: int = 1024
     embedding_timeout_seconds: float = 30.0
 

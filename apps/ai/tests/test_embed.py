@@ -65,7 +65,7 @@ def test_returns_one_vector_per_text_in_order(client, auth, fake_embeddings):
     res = post(client, auth, ["first", "second", "third"])
     assert res.status_code == 200
     body = res.json()
-    assert body["model"] == "nvidia/nv-embedqa-e5-v5"
+    assert body["model"] == "nvidia/llama-3.2-nv-embedqa-1b-v2"
     assert [v[0] for v in body["vectors"]] == [0.0, 1.0, 2.0]
     assert all(len(v) == DIM for v in body["vectors"])
 
@@ -77,6 +77,17 @@ def test_nvidia_gets_the_input_type_and_truncation(client, auth, fake_embeddings
     assert call["provider"] == "nvidia"
     assert call["extra_body"] == {"input_type": input_type, "truncate": "END"}
     assert call["encoding_format"] == "float"
+
+
+def test_nvidia_is_asked_for_the_column_size_unless_the_model_has_one_size(
+    client, auth, fake_embeddings, monkeypatch
+):
+    post(client, auth, ["text"])
+    assert fake_embeddings.calls[0]["dimensions"] == DIM
+    monkeypatch.setenv("EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5")
+    get_settings.cache_clear()
+    post(client, auth, ["text"])
+    assert "dimensions" not in fake_embeddings.calls[1]
 
 
 def test_passage_is_the_default(client, auth, fake_embeddings):

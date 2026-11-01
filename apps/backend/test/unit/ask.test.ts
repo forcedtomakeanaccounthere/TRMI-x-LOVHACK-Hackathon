@@ -65,7 +65,7 @@ describe("POST /api/rooms/:id/ask", () => {
         image: null,
       },
       expect.anything(),
-      30_000,
+      60_000,
       { 501: expect.any(HttpError) },
     ]);
 
@@ -279,7 +279,7 @@ describe("POST /api/rooms/:id/ask with the workspace's context", () => {
     expect(res.body).toMatchObject({ answer: "A diagram of a cell.", found_in_document: false, citations: [] });
     const call = callAi.mock.calls.find(([path]) => path === "/answer")!;
     expect(call[1]).toMatchObject({ image, chunks: [] });
-    expect(call[3]).toBe(45_000);
+    expect(call[3]).toBe(80_000);
   });
 
   it("answers a snapshot question even before the room is indexed", async () => {

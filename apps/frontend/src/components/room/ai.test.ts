@@ -146,6 +146,13 @@ describe("ask", () => {
     expect(answer).toEqual({ text: "A diagram of joint angles.", citations: [], preview: false });
   });
 
+  it("asks only the box's own document about a selected passage", async () => {
+    spy.mockResolvedValue(message("It splits the signal by frequency."));
+    await ask({ question: "Explain this", sources: ["a", "b"], quote: "FFT for frequency content" }, [doc("a"), doc("b")], ["a", "b"]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toBe("a");
+  });
+
   it("passes on a refusal of the snapshot, such as no vision model", async () => {
     spy.mockRejectedValue(new ApiError("This server's AI can't read images yet.", 422));
     await expect(
