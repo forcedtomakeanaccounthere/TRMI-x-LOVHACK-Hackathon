@@ -1,8 +1,94 @@
+<div align="center">
+
 # LinkRoom
 
-> The internet is single-player. LinkRoom makes every link multiplayer.
+### Every link, read *together*.
 
-Paste a link or drop a PDF, share the room, and read, highlight, comment and get an AI group recap together. See [MASTER.md](MASTER.md) and [CHECKLIST.md](CHECKLIST.md).
+**The internet is single-player. LinkRoom makes every link multiplayer.**
+
+Paste any article or drop a PDF, share one link, then highlight, comment and follow each other as you read, and finish with an AI recap of what the group cared about.
+
+Built for the **TRMI x LOVHACK Hackathon**.
+
+![LinkRoom landing page](docs/images/landing-hero.jpg)
+
+</div>
+
+## The problem
+
+We share a link, everyone reads it alone, and the conversation happens somewhere else, in screenshots and "which paragraph?" messages. LinkRoom puts the people back on the page.
+
+![The problem](docs/images/landing-problem.jpg)
+
+## How it works
+
+Three steps, no onboarding:
+
+1. **Paste a link or drop a PDF** (up to 20 MB).
+2. **Share the room** with one short link or QR code. Guests just type a name, no account needed.
+3. **Read together** with live cursors, highlights, comments, reactions and follow mode. When you are done, the AI recaps the room.
+
+![How it works](docs/images/how-it-works.jpg)
+
+## Features
+
+### Inside a room
+
+| | |
+| --- | --- |
+| ![Room with AI chat](docs/images/room-ai-chat.jpg) | **AI chat with sources.** Ask anything about the room's sources (PDFs, web pages, docs, Markdown, text). Answers cite the exact passages. |
+| ![AI lens](docs/images/ai-lens.jpg) | **AI lens.** Drag over any part of the page, even a diagram, and ask about it. |
+| ![While you were away](docs/images/while-you-were-away.jpg) | **While you were away.** Come back to a short AI summary of what others highlighted and discussed. |
+| ![Follow mode and Studio](docs/images/follow-mode-studio.jpg) | **Follow mode + Studio.** "Everyone look here" brings the whole room to your paragraph. Studio makes summaries, quizzes, flashcards, mind maps and infographics. |
+| ![Mind map](docs/images/mind-map.jpg) | **Mind maps** from any mix of sources in the room. |
+| ![Discussion](docs/images/discussion.jpg) | **Discussion** with @mentions, replies and reactions, right beside the text. |
+| ![Notebook](docs/images/notebook.jpg) | **Room notebook.** Notes, passages and images everyone in the room can see. |
+| ![Room settings](docs/images/room-settings.jpg) | **Roles and access.** Owner, admin, editor and viewer roles, guest access, and AI chat permissions. |
+
+### Four verbs, one page
+
+| Highlight | Discuss |
+| --- | --- |
+| ![Highlight](docs/images/verbs-highlight.jpg) | ![Discuss](docs/images/verbs-discuss.jpg) |
+
+Highlight, Discuss, Follow and Recap. Each reader gets one colour for their cursor, avatar and highlights.
+
+![Features](docs/images/features.jpg)
+
+### Dashboard
+
+Your rooms, groups, calendar and the people you read with, in one place.
+
+![Dashboard](docs/images/dashboard.jpg)
+
+| Calendar and paused rooms | Groups and people |
+| --- | --- |
+| ![Calendar](docs/images/dashboard-calendar.jpg) | ![Groups and people](docs/images/dashboard-people-groups.jpg) |
+
+| New room | New group |
+| --- | --- |
+| ![New room](docs/images/new-room.jpg) | ![New group](docs/images/new-group.jpg) |
+
+### Made for every reading circle
+
+Study groups, product teams, friends and classrooms.
+
+![Use cases](docs/images/use-cases.jpg)
+
+| Sign in | Call to action |
+| --- | --- |
+| ![Sign in](docs/images/sign-in.jpg) | ![Make your next read multiplayer](docs/images/landing-cta.jpg) |
+
+## Tech stack
+
+- **Frontend:** Next.js 16, TypeScript, Tailwind v4
+- **Backend:** Express 5, TypeScript
+- **AI service:** Python, FastAPI, Anthropic SDK
+- **Data and realtime:** Supabase (Postgres, Auth, Storage, Realtime)
+- **Voice huddles:** LiveKit
+- **Tooling:** Turborepo, Vitest, pgTAP, ruff, pytest
+
+See [MASTER.md](MASTER.md) and [CHECKLIST.md](CHECKLIST.md) for the full plan.
 
 ## Repo layout
 
