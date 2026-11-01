@@ -5,7 +5,15 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { AI_POLL_MS, AI_WAITING, loadAiStatuses, loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
+import {
+  AI_POLL_MS,
+  AI_WAITING,
+  loadAiStatuses,
+  loadDoc,
+  loadSavedHighlights,
+  removeSavedHighlight,
+  saveHighlight,
+} from "./docs";
 import type { Identity } from "./identity";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
@@ -30,7 +38,7 @@ export type NewAnnotation = Annotation extends infer A
     ? Omit<A, "id" | "author" | "at"> & { id?: string }
     : never
   : never;
-export type PanelTab = "chat" | "discussion" | "studio" | "library" | "history";
+export type PanelTab = "chat" | "notebook" | "discussion" | "studio" | "library" | "history";
 
 type Props = {
   roomId: string;
@@ -96,13 +104,33 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- View ---
   const [activeDoc, setActiveDoc] = useState(primary.id);
   const [following, setFollowing] = useState<string | null>(null);
+  // The artifact open in the viewer dialog. Shared through presence, so followers see it too.
+  const [openArtifact, setOpenArtifact] = useState<string | null>(null);
+  // Other people's cursors can be hidden when they distract; remembered in this browser.
+  const [showCursors, setShowCursorsState] = useState(() => {
+    try {
+      return localStorage.getItem(CURSORS_KEY) !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const setShowCursors = (on: boolean) => {
+    setShowCursorsState(on);
+    try {
+      localStorage.setItem(CURSORS_KEY, on ? "on" : "off");
+    } catch {
+      // the choice lasts for this page only
+    }
+  };
+  // Laser focus: leading one pulls everyone to where you are until you stop.
+  const [focusing, setFocusing] = useState(false);
 
   const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
 
   const channel = useRoomChannel(
     roomId,
     me,
-    { doc: activeDoc, following },
+    { doc: activeDoc, following, focusing, artifact: openArtifact },
     {
       onEvents: receive,
       allEvents: () => eventsRef.current,
@@ -112,15 +140,68 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   );
 
   // Follow mode: open the document the leader has open (from presence, so it works before they
-  // scroll), and stop following someone who left.
+  // scroll) and the artifact they're viewing, and stop following someone who left.
   const leader = following ? channel.peers.find((p) => p.id === following) : undefined;
   const leaderDoc = leader?.doc ?? null;
+  const leaderArtifact = leader?.artifact ?? null;
   const leaderGone = !!following && channel.status === "live" && !leader;
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the leader's presence
     if (leaderGone) setFollowing(null);
     else if (leaderDoc) setActiveDoc(leaderDoc);
   }, [leaderGone, leaderDoc]);
+  useEffect(() => {
+    if (!following) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
+    setOpenArtifact(leaderArtifact);
+  }, [following, leaderArtifact]);
+
+  // --- Laser focus ---
+  // Someone leading a focus takes everyone else to their document and scroll position (follow mode,
+  // locked) and shows their pointer as a laser. Each person's own place is remembered and they go
+  // back to it when the focus ends or they leave it. One leader at a time: the earliest id wins.
+  const viewPos = useRef<{ doc: string; block: string; ratio: number } | null>(null);
+  const reportView = (doc: string, block: string, ratio: number) => {
+    viewPos.current = { doc, block, ratio };
+  };
+  const focusLeader = focusing
+    ? undefined
+    : channel.peers.filter((p) => p.focusing).sort((a, b) => a.id.localeCompare(b.id))[0];
+  const [leftFocus, setLeftFocus] = useState<string | null>(null); // the leader whose focus you left
+  const activeFocus = focusLeader && focusLeader.id !== leftFocus ? focusLeader : undefined;
+  const returnTo = useRef<{ doc: string; block: string | null; ratio: number } | null>(null);
+  const focusedOn = useRef<string | null>(null);
+  const activeDocRef = useRef(activeDoc);
+  useEffect(() => {
+    activeDocRef.current = activeDoc;
+  });
+  const focusId = activeFocus?.id ?? null;
+  useEffect(() => {
+    const before = focusedOn.current;
+    if (focusId === before) return;
+    focusedOn.current = focusId;
+    if (focusId) {
+      if (!before) {
+        const doc = activeDocRef.current;
+        const pos = viewPos.current?.doc === doc ? viewPos.current : null;
+        returnTo.current = { doc, block: pos?.block ?? null, ratio: pos?.ratio ?? 0 };
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the focus leader's presence
+      setFollowing(focusId);
+      return;
+    }
+    // The focus ended (or you left it): back to where you were.
+    const back = returnTo.current;
+    returnTo.current = null;
+    setFollowing(null);
+    if (back?.block) jumpTo(back.doc, back.block, back.ratio);
+    else if (back) setActiveDoc(back.doc);
+  }, [focusId]);
+  // A new focus by the same person can be joined again.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset once that focus is over
+    if (leftFocus && !focusLeader) setLeftFocus(null);
+  }, [leftFocus, focusLeader]);
 
   // A kick also lands in the ledger, so it holds after a reload or a missed broadcast.
   useEffect(() => {
@@ -244,13 +325,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [jump, setJump] = useState<{
     doc: string;
     block: string;
+    ratio: number;
     n: number;
   } | null>(null);
-  const jumpTo = (doc: string, block: string) => {
+  function jumpTo(doc: string, block: string, ratio = 0) {
     setActiveDoc(doc);
     setFollowing(null);
-    setJump((prev) => ({ doc, block, n: (prev?.n ?? 0) + 1 }));
-  };
+    setJump((prev) => ({ doc, block, ratio, n: (prev?.n ?? 0) + 1 }));
+  }
 
   // --- Writing to the ledger ---
   // A closed or archived room is read only: its documents, marks, notes, threads and artifacts stay as
@@ -313,7 +395,11 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     editNote(id: string, body: string) {
       emit({ type: "note.edit", annotation_id: id, body });
     },
-    chat(text: string) {
+    moveAnnotation(id: string, x: number, y: number) {
+      const round = (n: number) => Math.round(n * 10000) / 10000;
+      emit({ type: "annot.move", annotation_id: id, x: round(x), y: round(y) });
+    },
+    chat(text: string, replyTo?: string) {
       emit({
         type: "chat",
         message: {
@@ -321,8 +407,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
           text,
           author: actor,
           at: new Date().toISOString(),
+          ...(replyTo ? { reply_to: replyTo } : {}),
         },
       });
+    },
+    react(messageId: string, emoji: string) {
+      emit({ type: "chat.react", message_id: messageId, emoji });
     },
     async ask(
       thread: string,
@@ -379,7 +469,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         toast.error("Pick at least one source that has loaded");
         return null;
       }
-      const { body, preview } = await generate(roomId, kind, docs);
+      let made: Awaited<ReturnType<typeof generate>>;
+      try {
+        made = await generate(roomId, kind, docs, realDoc(roomId) && docs.every((d) => realDoc(d.id)));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't make that");
+        return null;
+      }
+      const { body, preview } = made;
       const artifact = {
         id: nanoid(10),
         title,
@@ -422,6 +519,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setActiveDoc,
     following,
     setFollowing,
+    openArtifact,
+    setOpenArtifact,
+    showCursors,
+    setShowCursors,
     included,
     excluded,
     toggleSource,
@@ -445,12 +546,25 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setFocusAnnotation,
     jump,
     jumpTo,
+    reportView,
+    focus: {
+      leader: activeFocus, // someone else's focus you're in
+      mine: focusing,
+      start: () => {
+        setFollowing(null);
+        setFocusing(true);
+      },
+      stop: () => setFocusing(false),
+      leave: () => activeFocus && setLeftFocus(activeFocus.id),
+    },
     channel,
     presenceFeed,
     kickedOut,
     actions,
   };
 }
+
+const CURSORS_KEY = "linkroom-show-cursors";
 
 export type RoomContextValue = ReturnType<typeof useRoomValue>;
 const RoomContext = createContext<RoomContextValue | null>(null);

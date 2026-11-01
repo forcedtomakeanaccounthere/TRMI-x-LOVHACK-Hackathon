@@ -17,8 +17,8 @@ import { cn } from "@/lib/utils";
 import { downloadText, fileSafe } from "./ai";
 import { ByLine } from "./bits";
 import { useRoom } from "./store";
-import { ArtifactDialog, ArtifactList } from "./studio";
-import type { Artifact, DocContent, DocRef } from "./types";
+import { ArtifactList } from "./studio";
+import type { DocContent, DocRef } from "./types";
 
 export function docIcon(doc: Pick<DocRef, "kind" | "format">): Icon {
   if (doc.kind === "video" || doc.kind === "youtube") return YoutubeLogoIcon;
@@ -61,9 +61,8 @@ function escapeHtml(s: string) {
 
 // Every source and artifact in the room, still available when the room is archived.
 export function Library() {
-  const { state, events, contents, setActiveDoc, primary } = useRoom();
+  const { state, events, contents, setActiveDoc, primary, setOpenArtifact } = useRoom();
   const [tab, setTab] = useState<"sources" | "artifacts">("sources");
-  const [open, setOpen] = useState<Artifact | null>(null);
 
   const addedBy = (id: string) => {
     const e = events.find((ev) => ev.type === "doc.add" && ev.doc.id === id);
@@ -148,9 +147,8 @@ export function Library() {
           })}
         </ul>
       ) : (
-        <ArtifactList artifacts={state.artifacts} onOpen={setOpen} />
+        <ArtifactList artifacts={state.artifacts} onOpen={(a) => setOpenArtifact(a.id)} />
       )}
-      <ArtifactDialog artifact={open} onClose={() => setOpen(null)} />
     </div>
   );
 }

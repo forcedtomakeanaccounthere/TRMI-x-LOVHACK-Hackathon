@@ -3,6 +3,8 @@
 import {
   ArrowLeftIcon,
   CopyIcon,
+  CrosshairIcon,
+  CursorIcon,
   EyeIcon,
   GearSixIcon,
   QrCodeIcon,
@@ -31,7 +33,21 @@ const ROLE_LABEL = {
 } as const;
 
 export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: () => void; onTogglePanel: () => void }) {
-  const { primary, me, role, channel, following, setFollowing, actions, ownerId, state, isDemo, panelOpen } = useRoom();
+  const {
+    primary,
+    me,
+    role,
+    channel,
+    following,
+    setFollowing,
+    actions,
+    ownerId,
+    state,
+    isDemo,
+    panelOpen,
+    showCursors,
+    setShowCursors,
+  } = useRoom();
   const session = useSession();
   const [settings, setSettings] = useState(false);
   const peers = channel.peers;
@@ -114,17 +130,46 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
                     <div className="text-[0.6875rem] text-muted-foreground">
                       {ROLE_LABEL[theirRole]}
                       {!p.signedIn && " · guest"}
-                      {p.doc && ` · reading ${state.docs.find((d) => d.id === p.doc)?.title ?? "…"}`}
                     </div>
                   </div>
                 </div>
+                {(p.doc || p.artifact) && (
+                  <div className="mx-2 mb-1.5 rounded-xl bg-foreground/[0.04] px-2.5 py-2 text-[0.6875rem] text-muted-foreground">
+                    {p.doc && (
+                      <div className="truncate">
+                        Reading{" "}
+                        <span className="font-medium text-foreground">
+                          {state.docs.find((d) => d.id === p.doc)?.title ?? "…"}
+                        </span>
+                      </div>
+                    )}
+                    {p.artifact && (
+                      <div className="truncate">
+                        Viewing{" "}
+                        <span className="font-medium text-foreground">
+                          {state.artifacts.find((a) => a.id === p.artifact)?.title ?? "an artifact"}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setFollowing(following === p.id ? null : p.id)}
-                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-[0.8125rem] hover:bg-foreground/5"
+                  className={cn(
+                    "flex w-full items-start gap-2 rounded-xl px-2.5 py-2 text-left text-[0.8125rem] hover:bg-foreground/5",
+                    following === p.id && "bg-azure/8 text-azure",
+                  )}
                 >
-                  <EyeIcon className="size-4" />{" "}
-                  {following === p.id ? "Stop following" : `Follow ${p.name.split(" ")[0]}`}
+                  <EyeIcon weight={following === p.id ? "fill" : "regular"} className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    {following === p.id ? "Stop following" : `Follow ${p.name.split(" ")[0]}`}
+                    {following !== p.id && (
+                      <span className="block text-[0.6875rem] text-muted-foreground">
+                        Your view moves with them: documents, scrolling, artifacts
+                      </span>
+                    )}
+                  </span>
                 </button>
                 {can.changeRole(role, theirRole) && (
                   <button
@@ -154,6 +199,22 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
         <Avatar actor={me} size={32} ring className="ml-1 hidden sm:grid" />
       </div>
 
+      {/* Hide other people's cursors when they distract (the person you follow stays visible). */}
+      <button
+        type="button"
+        onClick={() => setShowCursors(!showCursors)}
+        aria-pressed={!showCursors}
+        aria-label={showCursors ? "Hide other people's cursors" : "Show other people's cursors"}
+        title={showCursors ? "Hide cursors" : "Show cursors"}
+        className={cn(
+          "relative grid size-9 place-items-center rounded-full transition hover:bg-foreground/6",
+          showCursors ? "text-muted-foreground hover:text-foreground" : "bg-foreground/6 text-foreground",
+        )}
+      >
+        <CursorIcon weight={showCursors ? "regular" : "fill"} className="size-[18px]" />
+        {!showCursors && <span className="absolute h-[1.5px] w-5 rotate-45 rounded-full bg-current" aria-hidden />}
+      </button>
+      <FocusButton />
       <SharePopover />
       <button
         type="button"
@@ -176,6 +237,38 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
       </button>
       <SettingsDialog open={settings} onOpenChange={setSettings} />
     </header>
+  );
+}
+
+// Laser focus: "everyone look here". While it's on, everyone else follows you and sees your pointer
+// as a laser; they go back to where they were when you stop.
+function FocusButton() {
+  const { focus, perms, channel, isDemo } = useRoom();
+  const someoneElse = focus.leader;
+  if (isDemo || channel.status !== "live" || !perms.annotate) return null;
+  const label = focus.mine
+    ? "Stop focus"
+    : someoneElse
+      ? `${someoneElse.name.split(" ")[0]} is focusing`
+      : "Everyone look here";
+  return (
+    <button
+      type="button"
+      onClick={focus.mine ? focus.stop : focus.start}
+      disabled={!!someoneElse}
+      title={
+        focus.mine
+          ? "Let everyone go back to where they were"
+          : "Bring everyone to where you are, with your pointer as a laser"
+      }
+      className={cn(
+        "flex h-9 items-center gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium transition disabled:opacity-50",
+        focus.mine ? "bg-red-500 text-white hover:bg-red-600" : "bg-foreground/6 hover:bg-foreground/10",
+      )}
+    >
+      <CrosshairIcon weight={focus.mine ? "fill" : "regular"} className="size-4" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
   );
 }
 

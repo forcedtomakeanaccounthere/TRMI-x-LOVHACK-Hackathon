@@ -8,16 +8,21 @@ import type {
   CreateTextRoomRequest,
   DashboardQuery,
   DashboardResponse,
+  FollowStateResponse,
   ExportSummaryQuery,
   LoginRequest,
   MessageResponse,
+  ParticipantsResponse,
+  Profile,
   RecapData,
   RoomDetail,
   RoomStatusResponse,
   SignupRequest,
   StudySet,
   StudySetsResponse,
+  NotebookResponse,
   StudySourcesResponse,
+  UsersResponse,
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
@@ -81,17 +86,21 @@ export const api = {
 
     login: (data: LoginRequest) => request<AuthSession>("/api/auth/login", json(data)),
 
-    resendVerification: (email: string) =>
-      request<MessageResponse>("/api/auth/resend-verification", json({ email })),
+    resendVerification: (email: string) => request<MessageResponse>("/api/auth/resend-verification", json({ email })),
 
-    refresh: (refresh_token: string) =>
-      request<AuthSession>("/api/auth/refresh", json({ refresh_token })),
+    // Proposed (CHECKLIST.md "Auth: password reset"): emails a link to /forgot-password?token_hash=…
+    forgotPassword: (email: string) => request<MessageResponse>("/api/auth/forgot-password", json({ email })),
+
+    // Proposed: uses the emailed link's token once and sets the new password.
+    resetPassword: (data: { token_hash: string; password: string }) =>
+      request<MessageResponse>("/api/auth/reset-password", json(data)),
+
+    refresh: (refresh_token: string) => request<AuthSession>("/api/auth/refresh", json({ refresh_token })),
 
     me: (token: string) => request<AuthUser>("/api/auth/me", { method: "GET" }, token),
 
     // 204 on success; rejects if the backend could not revoke the session, so callers can retry.
-    logout: (token: string) =>
-      request<unknown>("/api/auth/logout", { method: "POST" }, token).then(() => undefined),
+    logout: (token: string) => request<unknown>("/api/auth/logout", { method: "POST" }, token).then(() => undefined),
   },
 
   createLinkRoom: (data: CreateLinkRoomRequest, token: string) =>
@@ -132,8 +141,21 @@ export const api = {
     request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
-  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
-    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
+  // Attaches another document (room) to a room, so AI requests on the room may use it. Attaching
+  // one that's already there changes nothing.
+  attachSource: (roomId: string, sourceRoomId: string, token: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
+
+  // With the signed-in person's token, so sources only members can read are in scope.
+  // The room's shared notebook: the merged Yjs document (base64), or null before anyone wrote.
+  getNotebook: (roomId: string) =>
+    request<NotebookResponse>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, { method: "GET" }),
+  // Merges a batch of local edits (one Yjs update, base64) into the saved notebook.
+  saveNotebook: (roomId: string, update: string, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, json({ update }), token),
+
+  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body), token),
 
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.
@@ -175,6 +197,24 @@ export const api = {
     request<RoomDetail>(`/api/rooms/${encodeURIComponent(roomId)}/restore`, { method: "POST" }, token),
 
   // Study tools: quiz, flashcards, mind map or infographic from the documents the user picks.
+  // The signed-in user: profile, who they follow and who follows them, and people they've read with.
+  me: {
+    profile: (token: string) => request<Profile>("/api/me/profile", { method: "GET" }, token),
+    following: (token: string) => request<UsersResponse>("/api/me/following", { method: "GET" }, token),
+    followers: (token: string) => request<UsersResponse>("/api/me/followers", { method: "GET" }, token),
+    participants: (token: string) => request<ParticipantsResponse>("/api/me/participants", { method: "GET" }, token),
+  },
+
+  users: {
+    // People on LinkRoom whose name matches, with whether you already follow them.
+    search: (q: string, token: string) =>
+      request<UsersResponse>(`/api/users/search?q=${encodeURIComponent(q)}&limit=20`, { method: "GET" }, token),
+    follow: (id: string, token: string) =>
+      request<FollowStateResponse>(`/api/users/${encodeURIComponent(id)}/follow`, { method: "POST" }, token),
+    unfollow: (id: string, token: string) =>
+      request<FollowStateResponse>(`/api/users/${encodeURIComponent(id)}/follow`, { method: "DELETE" }, token),
+  },
+
   study: {
     // The documents to show in the picker (optionally one project's).
     sources: (token: string, groupId?: string) =>

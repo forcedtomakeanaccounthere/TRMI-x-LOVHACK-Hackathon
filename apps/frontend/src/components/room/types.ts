@@ -69,7 +69,18 @@ export type Annotation = AnnotationBase &
       }
     | { kind: "region"; rect: Rect; color: string }
     | { kind: "ink"; points: Point[]; color: string; width: number }
-    | { kind: "note"; x: number; y: number; body: string; color: string }
+    // moved: dragged by someone, so x/y place it exactly instead of in the margin beside its line.
+    // edited_by / moved_by: the last person to edit or move it (shown when that isn't the author).
+    | {
+        kind: "note";
+        x: number;
+        y: number;
+        body: string;
+        color: string;
+        moved?: boolean;
+        edited_by?: Actor;
+        moved_by?: Actor;
+      }
     // An AI box beside a line (quote) or a lens snapshot (image). Its conversation is threads[id].
     | {
         kind: "ai";
@@ -77,6 +88,8 @@ export type Annotation = AnnotationBase &
         y: number;
         quote: string | null;
         image: string | null;
+        moved?: boolean;
+        moved_by?: Actor;
       }
   );
 
@@ -109,7 +122,11 @@ export type ChatMessage = {
   text: string;
   author: Actor;
   at: string;
+  reply_to?: string; // id of the message this answers
 };
+
+// Emoji reactions on discussion messages: message id → emoji → who reacted.
+export type ChatReactions = Record<string, Record<string, Actor[]>>;
 
 export type ArtifactKind = "summary" | "quiz" | "flashcards" | "mindmap" | "infographic";
 
@@ -157,6 +174,8 @@ export type LedgerPayload =
   | { type: "annot.add"; annotation: Annotation }
   | { type: "annot.remove"; annotation_id: string }
   | { type: "note.edit"; annotation_id: string; body: string }
+  // A comment or AI box dragged to a new spot (fractions of its block, like where it was made).
+  | { type: "annot.move"; annotation_id: string; x: number; y: number }
   | {
       type: "thread.ask";
       thread: string;
@@ -168,6 +187,8 @@ export type LedgerPayload =
       message: Extract<ThreadMessage, { role: "ai" }>;
     }
   | { type: "chat"; message: ChatMessage }
+  // Toggles the actor's reaction: the first one adds it, the next one takes it back.
+  | { type: "chat.react"; message_id: string; emoji: string }
   | { type: "artifact.add"; artifact: Artifact }
   | { type: "artifact.remove"; artifact_id: string }
   | { type: "role.set"; member: string; name: string; role: Role }

@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
 import type { DashboardData } from "./demo-data";
 import { saveGroups, saveProfileOverride, saveRoomMeta } from "./local-prefs";
+import { DEMO_ROOM_ID } from "@/components/room/demo";
 import type { GroupView, Person, RoomView, ViewStatus } from "./types";
 
 export type StatusFilter = ViewStatus | "all";
@@ -50,7 +51,7 @@ type Action =
   | { type: "follow-toggle"; person: Person };
 
 // Optimistic, local updates. Status changes also reach the backend (see `actions` below); groups are
-// saved in this browser and following stays local until their endpoints exist (CHECKLIST.md "Dashboard").
+// saved in this browser; following is saved through the API when the dashboard is live.
 function reducer(state: State, action: Action): State {
   const now = new Date().toISOString();
   const updateRoom = (id: string, patch: (r: RoomView) => Partial<RoomView>) => ({
@@ -97,7 +98,11 @@ function reducer(state: State, action: Action): State {
       const following = state.following.some((p) => p.id === action.person.id)
         ? state.following.filter((p) => p.id !== action.person.id)
         : [action.person, ...state.following];
-      return { ...state, following, profile: { ...state.profile, stats: { ...state.profile.stats, following: following.length } } };
+      return {
+        ...state,
+        following,
+        profile: { ...state.profile, stats: { ...state.profile.stats, following: following.length } },
+      };
     }
   }
 }
@@ -119,6 +124,8 @@ export type RoomActions = {
   moveRoom: (room: RoomView, groupId: string | null) => void;
   // Deletes the group; rooms listed in deleteRoomIds are deleted too, the rest stay without a group.
   deleteGroup: (groupId: string, deleteRoomIds: string[]) => void;
+  // Follows or unfollows; saved through /api/users/:id/follow when live, rolled back if that fails.
+  toggleFollow: (person: Person) => void;
 };
 
 type DashboardContextValue = {
@@ -128,6 +135,8 @@ type DashboardContextValue = {
   source: DataSource;
   // The backend has no paused status yet, so pause and resume exist only in preview data.
   canPause: boolean;
+  // Where a room card opens: preview rooms are made up, so they open the demo room instead of a 404.
+  roomHref: (id: string) => string;
   visibleRooms: RoomView[];
   groupById: Map<string, GroupView>;
 };
@@ -149,12 +158,17 @@ export function DashboardProvider({
   // Group actions need the current rooms and groups without rebuilding every action on each change.
   const roomsRef = useRef(state.rooms);
   const groupsRef = useRef(state.groups);
+  const followingRef = useRef(state.following);
   useEffect(() => {
     roomsRef.current = state.rooms;
     groupsRef.current = state.groups;
-  }, [state.rooms, state.groups]);
+    followingRef.current = state.following;
+  }, [state.rooms, state.groups, state.following]);
   const groupById = useMemo(() => new Map(state.groups.map((g) => [g.id, g])), [state.groups]);
-  const visibleRooms = useMemo(() => filterRooms(state.rooms, state.filters, groupById), [state.rooms, state.filters, groupById]);
+  const visibleRooms = useMemo(
+    () => filterRooms(state.rooms, state.filters, groupById),
+    [state.rooms, state.filters, groupById],
+  );
 
   const actions = useMemo<RoomActions>(() => {
     // Saves a status the screen already shows; on failure puts `before` back and says why.
@@ -180,6 +194,22 @@ export function DashboardProvider({
     };
 
     return {
+      toggleFollow(person) {
+        const wasFollowing = followingRef.current.some((p) => p.id === person.id);
+        dispatch({ type: "follow-toggle", person });
+        if (source !== "live") return;
+        void (async () => {
+          try {
+            const session = await getFreshSession();
+            if (!session) throw new ApiError("Sign in again to follow people.", 401);
+            if (wasFollowing) await api.users.unfollow(person.id, session.access_token);
+            else await api.users.follow(person.id, session.access_token);
+          } catch (err) {
+            dispatch({ type: "follow-toggle", person }); // undo
+            toast.error(err instanceof ApiError ? err.message : "Couldn't update who you follow.");
+          }
+        })();
+      },
       setStatus(room, status) {
         dispatch({ type: "room-status", id: room.id, status });
         if (status !== "paused" && room.status !== "paused") save(room, status);
@@ -224,10 +254,11 @@ export function DashboardProvider({
     };
   }, [source, profileId]);
 
+  const roomHref = (id: string) => (source === "live" ? `/r/${id}` : `/r/${DEMO_ROOM_ID}`);
 
   return (
     <DashboardContext
-      value={{ state, dispatch, actions, source, canPause: source === "preview", visibleRooms, groupById }}
+      value={{ state, dispatch, actions, source, canPause: source === "preview", roomHref, visibleRooms, groupById }}
     >
       {children}
     </DashboardContext>

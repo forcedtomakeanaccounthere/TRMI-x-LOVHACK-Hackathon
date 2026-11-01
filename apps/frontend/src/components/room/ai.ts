@@ -1,5 +1,6 @@
 import type { AiMessage } from "@linkroom/shared";
-import { api, ApiError, type AskRequest } from "@/lib/api";
+import { api, API_URL, ApiError, type AskRequest } from "@/lib/api";
+import { getFreshSession } from "@/lib/session";
 import type { ArtifactBody, ArtifactKind, Citation, DocContent, MindNode } from "./types";
 
 // AI calls go to the backend endpoints proposed in CHECKLIST.md. Until those exist (404) or when the
@@ -76,8 +77,11 @@ const clip = (text: string, n = 260) => (text.length > n ? `${text.slice(0, n).r
 
 export type Answer = { text: string; citations: Citation[]; preview: boolean };
 
-function unavailable(err: unknown) {
-  return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
+// A question falls back to the browser preview only when the backend can't be reached (a network
+// error) or has no /ask (404). Any answer it does give, a 502/503 from the AI service included, is
+// shown as the reason, so "AI features aren't set up" isn't hidden behind "not connected yet".
+function unreachable(err: unknown) {
+  return !(err instanceof ApiError) || err.status === 404;
 }
 
 // What POST /api/rooms/:id/ask gets: the question (up to 500 characters), plus the passage an AI box
@@ -135,7 +139,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
         preview: false,
       };
     }
-    if (!failed.every(unavailable)) throw failed.find((e) => !unavailable(e));
+    if (!failed.every(unreachable)) throw failed.find((e) => !unreachable(e));
   }
 
   if (req.image) {
@@ -145,11 +149,13 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
       preview: true,
     };
   }
+  // Documents the backend doesn't have (the demo room's) were never sent; for the rest, it failed.
+  const why = targets.length ? "Couldn't reach the AI server" : "The AI only answers about documents saved on the server";
   const blocks = docs.filter((d) => req.sources.includes(d.id)).flatMap(blocksOf);
   const found = search(blocks, `${req.question} ${req.quote ?? ""}`);
   if (found.length === 0) {
     return {
-      text: "The AI isn't connected yet, and nothing in the chosen sources matches those words.",
+      text: `${why}, and nothing in the chosen sources matches those words.`,
       citations: [],
       preview: true,
     };
@@ -157,7 +163,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
   const titles = new Map(docs.map((d) => [d.id, d.title]));
   return {
     text: [
-      "The AI isn't connected yet, so here are the passages that match best:",
+      `${why}, so here are the passages that match best:`,
       ...found.map((b) => `“${clip(b.text)}” — ${titles.get(b.doc) ?? "source"}`),
     ].join("\n\n"),
     citations: found.map((b) => ({
@@ -323,19 +329,45 @@ function buildLocally(kind: ArtifactKind, docs: DocContent[]): ArtifactBody {
   }
 }
 
+// The backend makes an artifact only from the room and documents attached to it (room_attachments).
+// Documents added in the workspace live in its ledger, so they're attached here first; attaching
+// one twice changes nothing. A refusal (the room's source limit, a role that can't add sources) is
+// passed on as it is, so its reason is shown rather than a later "not in this room".
+async function attachSources(roomId: string, ids: string[], token: string) {
+  const others = ids.filter((id) => id !== roomId);
+  const results = await Promise.allSettled(others.map((id) => api.attachSource(roomId, id, token)));
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+// `remote`: every chosen document is a backend room. When one isn't (the demo room's bundled
+// documents, a `yt:` video not yet processed) the artifact is built in the browser and marked
+// preview. Backend rooms never fall back to that cut-up text, which hid why the backend wasn't
+// answering: any failure, a refusal, an AI error or the server being unreachable, is passed on so
+// its reason is shown.
 export async function generate(
   roomId: string,
   kind: ArtifactKind,
   docs: DocContent[],
+  remote = true,
 ): Promise<{ body: ArtifactBody; preview: boolean }> {
-  try {
-    const body = await api.generateArtifact(roomId, {
-      kind,
-      sources: docs.map((d) => d.id),
-    });
-    if (looksLike(kind, body)) return { body, preview: false };
-  } catch (err) {
-    if (!unavailable(err)) throw err;
+  if (remote) {
+    try {
+      const sources = docs.map((d) => d.id);
+      // Signed out: only the room itself is in scope, and the backend says so if more was chosen.
+      const token = (await getFreshSession().catch(() => null))?.access_token;
+      if (token) await attachSources(roomId, sources, token);
+      const body = await api.generateArtifact(roomId, { kind, sources }, token);
+      if (looksLike(kind, body)) return { body, preview: false };
+      throw new Error("The AI's answer couldn't be shown. Try again.");
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // fetch failed: the server is down or asleep, the address is wrong, or it refused this site
+        // (CORS: WEB_ORIGIN on the backend must list the frontend's address).
+        throw new Error(`Couldn't reach the server at ${API_URL}. Check that the backend is running and allows this site.`);
+      }
+      throw err;
+    }
   }
   return { body: buildLocally(kind, docs), preview: true };
 }

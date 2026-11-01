@@ -50,12 +50,12 @@ function host(url: string | null) {
   }
 }
 
-export function roomUrl(id: string) {
-  return `${window.location.origin}/r/${id}`;
+export function roomUrl(path: string) {
+  return `${window.location.origin}${path}`;
 }
 
 export function RoomCard({ room, onInvite }: { room: RoomView; onInvite: (room: RoomView) => void }) {
-  const { groupById } = useDashboard();
+  const { groupById, roomHref } = useDashboard();
   const group = room.group_id ? groupById.get(room.group_id) : undefined;
   const dimmed = room.status === "archived" || room.status === "deleted";
   const accent = room.color ?? group?.color ?? null;
@@ -85,7 +85,7 @@ export function RoomCard({ room, onInvite }: { room: RoomView; onInvite: (room: 
         </div>
 
         <Link
-          href={`/r/${room.id}`}
+          href={roomHref(room.id)}
           className="mt-4 block rounded-lg outline-none after:absolute after:inset-0 after:rounded-[1.4rem] focus-visible:ring-2 focus-visible:ring-ring"
         >
           <h3
@@ -155,12 +155,12 @@ function Count({
 }
 
 function RoomMenu({ room, onInvite }: { room: RoomView; onInvite: (room: RoomView) => void }) {
-  const { state, actions, canPause } = useDashboard();
+  const { state, actions, canPause, roomHref } = useDashboard();
   const live = room.status === "running" || room.status === "paused";
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(roomUrl(room.id));
+      await navigator.clipboard.writeText(roomUrl(roomHref(room.id)));
       toast.success("Room link copied");
     } catch {
       toast.error("Couldn't copy the link");
@@ -177,7 +177,7 @@ function RoomMenu({ room, onInvite }: { room: RoomView; onInvite: (room: RoomVie
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56 rounded-2xl p-1.5" data-lenis-prevent>
         <DropdownMenuItem asChild>
-          <Link href={`/r/${room.id}`}>
+          <Link href={roomHref(room.id)}>
             <ArrowSquareOutIcon /> Open room
           </Link>
         </DropdownMenuItem>

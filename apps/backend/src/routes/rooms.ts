@@ -58,6 +58,7 @@ import { roomScope } from "../lib/sources";
 import { ledgerRoutes } from "./ledger";
 import { sourcesRoutes } from "./sources";
 import { artifactsRoutes } from "./artifacts";
+import { notebookRoutes } from "./notebook";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -1240,3 +1241,5 @@ ledgerRoutes(roomsRouter);
 sourcesRoutes(roomsRouter);
 // Studio: POST /:id/artifacts (routes/artifacts.ts), rate-limited like Ask.
 artifactsRoutes(roomsRouter, [askPerIp, askPerRoom]);
+// Shared notebook: GET/POST /:id/notebook (routes/notebook.ts).
+notebookRoutes(roomsRouter);

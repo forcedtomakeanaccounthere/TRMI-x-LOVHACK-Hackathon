@@ -1,4 +1,4 @@
--- Row level security for @mention notifications and push subscriptions (migration 0024). The
+-- Row level security for @mention notifications and push subscriptions (migration 0025). The
 -- backend writes both with the service role; a browser may read only its own rows, never write.
 -- Run with `npm run test:db`. Everything runs in one transaction that is rolled back.
 begin;

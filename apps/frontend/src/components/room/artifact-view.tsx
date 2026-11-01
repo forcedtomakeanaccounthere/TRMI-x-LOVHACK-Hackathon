@@ -2,7 +2,7 @@
 
 import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, DownloadSimpleIcon, XCircleIcon } from "@phosphor-icons/react";
 import { motion } from "motion/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -270,7 +270,27 @@ const COL = 210;
 const ROW = 44;
 const PALETTE = ["#2f5bff", "#8b5cf6", "#14b8a6", "#f97316", "#ec4899", "#eab308"];
 
+// The map pans by dragging it with the mouse (grab cursor), and a plain vertical wheel scrolls it
+// sideways while there's more to see that way, so nobody has to aim for the scrollbar.
 function MindMap({ root }: { root: MindNode }) {
+  const [panEl, setPanEl] = useState<HTMLDivElement | null>(null);
+  const [drag, setDrag] = useState<{ x: number; y: number; left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    if (!panEl) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return; // pinch, or already sideways
+      const max = panEl.scrollWidth - panEl.clientWidth;
+      if (max <= 0) return;
+      const atEdge = (e.deltaY < 0 && panEl.scrollLeft <= 0) || (e.deltaY > 0 && panEl.scrollLeft >= max - 1);
+      if (atEdge) return; // let the dialog scroll on
+      e.preventDefault();
+      panEl.scrollLeft += e.deltaY;
+    };
+    panEl.addEventListener("wheel", onWheel, { passive: false });
+    return () => panEl.removeEventListener("wheel", onWheel);
+  }, [panEl]);
+
   const { items, rows } = layout(root);
   const depth = Math.max(...items.map((i) => i.depth));
   const width = (depth + 1) * COL + 40;
@@ -282,7 +302,27 @@ function MindMap({ root }: { root: MindNode }) {
     return item.depth === 0 ? "#05070d" : PALETTE[siblings.indexOf(top) % PALETTE.length]!;
   };
   return (
-    <div data-lenis-prevent className="overflow-x-auto rounded-2xl bg-card/60 ring-1 ring-(--hairline)">
+    <div
+      ref={setPanEl}
+      data-lenis-prevent
+      onPointerDown={(e) => {
+        if (e.pointerType !== "mouse" || e.button !== 0) return; // touch already pans natively
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setDrag({ x: e.clientX, y: e.clientY, left: e.currentTarget.scrollLeft, top: e.currentTarget.scrollTop });
+      }}
+      onPointerMove={(e) => {
+        if (!drag) return;
+        e.currentTarget.scrollLeft = drag.left - (e.clientX - drag.x);
+        e.currentTarget.scrollTop = drag.top - (e.clientY - drag.y);
+      }}
+      onPointerUp={() => setDrag(null)}
+      onPointerCancel={() => setDrag(null)}
+      title="Drag to move around"
+      className={cn(
+        "max-h-[60dvh] overflow-auto overscroll-contain rounded-2xl bg-card/60 ring-1 ring-(--hairline) select-none",
+        drag ? "cursor-grabbing" : "cursor-grab",
+      )}
+    >
       <div className="relative" style={{ width, height }}>
         <svg className="absolute inset-0" width={width} height={height} aria-hidden>
           {items
