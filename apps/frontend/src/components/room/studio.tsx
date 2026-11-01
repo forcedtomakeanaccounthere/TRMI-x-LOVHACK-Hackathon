@@ -148,7 +148,10 @@ export function ArtifactDialog() {
   const onClose = () => setOpenArtifact(null);
   return (
     <Dialog open={!!artifact} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto rounded-[1.75rem] p-7 sm:max-w-3xl" data-lenis-prevent>
+      <DialogContent
+        className="max-h-[calc(100dvh-1rem)] min-w-0 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-[1.75rem] p-5 sm:max-w-3xl sm:p-7"
+        data-lenis-prevent
+      >
         <DialogTitle className="sr-only">{artifact?.title}</DialogTitle>
         <DialogDescription className="sr-only">Generated artifact</DialogDescription>
         {artifact && <ArtifactView artifact={artifact} />}
@@ -168,7 +171,7 @@ function GenerateDialog({
 }) {
   return (
     <Dialog open={!!kind} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="rounded-[1.75rem] p-6 sm:max-w-md">
+      <DialogContent className="max-h-[calc(100dvh-1rem)] min-w-0 max-w-[calc(100vw-1rem)] overflow-hidden rounded-[1.75rem] p-5 sm:max-w-md sm:p-6">
         {kind && <GenerateForm key={kind} kind={kind} onClose={onClose} onMade={onMade} />}
       </DialogContent>
     </Dialog>
@@ -212,12 +215,12 @@ function GenerateForm({
   };
 
   return (
-    <div>
-      <div className="flex items-center gap-3">
+    <div className="min-w-0">
+      <div className="flex min-w-0 items-center gap-3 pr-7">
         <span className="grid size-11 place-items-center rounded-2xl text-white" style={{ backgroundColor: tint }}>
           <Icon weight="fill" className="size-5" />
         </span>
-        <div>
+        <div className="min-w-0">
           <DialogTitle className="font-display text-[1.75rem] leading-none font-normal">
             New {ARTIFACT_META[kind].label.toLowerCase()}
           </DialogTitle>
@@ -245,7 +248,10 @@ function GenerateForm({
           {chosen.size === docs.length ? "Clear" : "Select all"}
         </button>
       </div>
-      <ul data-lenis-prevent className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+      <ul
+        data-lenis-prevent
+        className="mt-2 max-h-[min(14rem,40dvh)] min-h-0 space-y-1 overflow-y-auto overscroll-contain"
+      >
         {docs.map((d) => {
           const c = contents[d.id];
           return (
@@ -254,7 +260,9 @@ function GenerateForm({
                 <Checkbox checked={chosen.has(d.id)} onCheckedChange={() => toggle(d.id)} />
                 <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{d.title}</span>
                 {typeof c === "object" && c.summary && (
-                  <span className="text-[0.625rem] text-emerald-600 dark:text-emerald-400">AI summary ready</span>
+                  <span className="shrink-0 text-[0.625rem] text-emerald-600 dark:text-emerald-400">
+                    AI summary ready
+                  </span>
                 )}
               </label>
             </li>

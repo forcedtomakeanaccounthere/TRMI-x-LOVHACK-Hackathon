@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   type DocRef,
   type LedgerEvent,
+  type NotebookEntry,
   type Role,
   type RoomSettings,
   type ThreadMessage,
@@ -22,6 +23,7 @@ export type RoomState = {
   chat: ChatMessage[];
   reactions: ChatReactions;
   artifacts: Artifact[];
+  notebook: NotebookEntry[]; // newest first
   roles: Record<string, Role>;
   kicked: Record<string, string>; // member id → name
   settings: RoomSettings;
@@ -46,6 +48,7 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
   const chat: ChatMessage[] = [];
   const reactions: ChatReactions = {};
   const artifacts = new Map<string, Artifact>();
+  const notebook = new Map<string, NotebookEntry>();
   const roles: Record<string, Role> = {};
   const kicked: Record<string, string> = {};
   let settings = DEFAULT_SETTINGS;
@@ -91,6 +94,17 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
         if (byEmoji[e.emoji]!.length === 0) delete byEmoji[e.emoji];
         break;
       }
+      case "notebook.add":
+        notebook.set(e.entry.id, e.entry);
+        break;
+      case "notebook.edit": {
+        const entry = notebook.get(e.entry_id);
+        if (entry) notebook.set(entry.id, { ...entry, text: e.text, edited_by: e.actor });
+        break;
+      }
+      case "notebook.remove":
+        notebook.delete(e.entry_id);
+        break;
       case "artifact.add":
         artifacts.set(e.artifact.id, e.artifact);
         break;
@@ -118,6 +132,7 @@ export function reduceLedger(primary: DocRef, events: LedgerEvent[]): RoomState 
     chat,
     reactions,
     artifacts: [...artifacts.values()].sort(byTime).reverse(),
+    notebook: [...notebook.values()].sort(byTime).reverse(),
     roles,
     kicked,
     settings,

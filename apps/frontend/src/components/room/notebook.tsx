@@ -1,312 +1,554 @@
 "use client";
 
-import type { RecapData } from "@linkroom/shared";
-import { ArrowSquareOutIcon, HighlighterIcon, PlusIcon, SparkleIcon } from "@phosphor-icons/react";
-import { mergeAttributes, Node, type JSONContent } from "@tiptap/core";
-import Collaboration from "@tiptap/extension-collaboration";
-import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor, type NodeViewProps } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
+import {
+  ArrowSquareOutIcon,
+  DownloadSimpleIcon,
+  ImageIcon,
+  NotebookIcon,
+  PencilSimpleIcon,
+  QuotesIcon,
+  TextAlignLeftIcon,
+  TrashIcon,
+  XIcon,
+} from "@phosphor-icons/react";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import * as Y from "yjs";
-import { api, ApiError } from "@/lib/api";
-import { getFreshSession } from "@/lib/session";
-import { Spinner } from "./bits";
-import { NotebookSync } from "./notebook-sync";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { downloadText, fileSafe } from "./ai";
+import { Avatar, timeAgo } from "./bits";
 import { useRoom } from "./store";
-import type { Annotation } from "./types";
+import type { NotebookEntry } from "./types";
 
-// The shared notebook: a document next to the sources that everyone in the room writes in at once
-// (Yjs, kept in step by NotebookSync, saved by apps/backend). Highlights dragged in become quotes
-// that stay linked to their place in the source. The AI can write a first draft from the room's
-// highlights.
+// The room notebook: notes people leave for the room. Typed notes, passages saved from a source
+// (Selection toolbar → Save to notebook; they link back to where they came from) and images. It
+// lives in the room ledger like everything else, so everyone in the room sees the same notebook.
 
-export const QUOTE_MIME = "application/x-linkroom-quote";
+const MAX_TEXT = 4000;
+const MAX_SIDE = 1280; // images are shrunk to fit this before they're added
+const MAX_IMAGE_CHARS = 900_000; // about 650 KB once shrunk; bigger ones are refused
 
-export type QuoteAttrs = { doc: string; block: string; quote: string; author: string | null; color: string | null };
-type Mark = Extract<Annotation, { kind: "highlight" | "underline" }>;
+type Filter = "all" | NotebookEntry["kind"];
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "text", label: "Notes" },
+  { id: "quote", label: "Passages" },
+  { id: "image", label: "Images" },
+];
 
-export const quoteOf = (mark: Mark): QuoteAttrs => ({
-  doc: mark.doc,
-  block: mark.block,
-  quote: mark.quote,
-  author: mark.author.name,
-  color: mark.color,
-});
-
-function parseQuote(raw: string): QuoteAttrs | null {
-  try {
-    const q = JSON.parse(raw) as Partial<QuoteAttrs>;
-    return typeof q.doc === "string" && typeof q.block === "string" && typeof q.quote === "string" && q.quote.trim()
-      ? { doc: q.doc, block: q.block, quote: q.quote, author: q.author ?? null, color: q.color ?? null }
-      : null;
-  } catch {
-    return null;
+// Shrinks an image to a JPEG data URL small enough to share through the ledger.
+async function shrinkImage(file: Blob): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas unavailable");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  for (const quality of [0.82, 0.7, 0.55]) {
+    const url = canvas.toDataURL("image/jpeg", quality);
+    if (url.length <= MAX_IMAGE_CHARS) return url;
   }
+  throw new Error("That image is too large, even after shrinking it");
 }
 
-const dataAttr = (name: keyof QuoteAttrs) => ({
-  default: null,
-  parseHTML: (el: HTMLElement) => el.getAttribute(`data-${name}`),
-  renderHTML: (attrs: Record<string, unknown>) => (attrs[name] ? { [`data-${name}`]: attrs[name] } : {}),
-});
-
-// A quote from a source, linked to where it is: clicking it opens that document at that line.
-const SourceQuote = Node.create({
-  name: "sourceQuote",
-  group: "block",
-  atom: true,
-  draggable: true,
-  selectable: true,
-  addAttributes() {
-    return {
-      doc: dataAttr("doc"),
-      block: dataAttr("block"),
-      quote: dataAttr("quote"),
-      author: dataAttr("author"),
-      color: dataAttr("color"),
-    };
-  },
-  parseHTML() {
-    return [{ tag: "blockquote[data-source-quote]" }];
-  },
-  renderHTML({ HTMLAttributes, node }) {
-    return ["blockquote", mergeAttributes(HTMLAttributes, { "data-source-quote": "" }), (node.attrs.quote as string) ?? ""];
-  },
-  addNodeView() {
-    return ReactNodeViewRenderer(SourceQuoteView);
-  },
-});
-
-function SourceQuoteView({ node }: NodeViewProps) {
-  const { jumpTo, state } = useRoom();
-  const attrs = node.attrs as QuoteAttrs;
-  const title = state.docs.find((d) => d.id === attrs.doc)?.title ?? "source";
-  return (
-    <NodeViewWrapper
-      as="blockquote"
-      data-drag-handle
-      className="my-2 rounded-r-xl border-l-4 bg-foreground/4 py-2 pr-3 pl-3"
-      style={{ borderColor: attrs.color ?? "var(--azure, #2f5bff)" }}
-    >
-      <p className="m-0 text-[0.875rem] leading-relaxed">“{attrs.quote}”</p>
-      <button
-        type="button"
-        contentEditable={false}
-        onClick={() => jumpTo(attrs.doc, attrs.block)}
-        className="mt-1 inline-flex items-center gap-1 text-[0.6875rem] font-medium text-muted-foreground hover:text-foreground"
-      >
-        <ArrowSquareOutIcon className="size-3" />
-        {title}
-        {attrs.author && ` · ${attrs.author}`}
-      </button>
-    </NodeViewWrapper>
-  );
+export function notebookToMarkdown(roomTitle: string, entries: NotebookEntry[], titleOf: (doc: string) => string) {
+  const lines = [`# Notebook · ${roomTitle}`, ""];
+  for (const e of [...entries].reverse()) {
+    lines.push(`**${e.author.name}** · ${new Date(e.at).toLocaleString()}`);
+    if (e.kind === "quote" && e.quote) lines.push(`> ${e.quote.text}`, `> — ${titleOf(e.quote.doc)}`);
+    if (e.kind === "image") lines.push("*(image)*");
+    if (e.text) lines.push(e.text);
+    lines.push("");
+  }
+  return lines.join("\n");
 }
 
-const norm = (text: string) => text.toLowerCase().replace(/\s+/g, " ").trim();
-const paragraph = (text: string): JSONContent => ({ type: "paragraph", content: text.trim() ? [{ type: "text", text: text.trim() }] : [] });
-const heading = (level: 2 | 3, text: string): JSONContent => ({ type: "heading", attrs: { level }, content: [{ type: "text", text }] });
-function bullets(items: string[]): JSONContent[] {
-  const kept = items.map((i) => i.trim()).filter(Boolean);
-  return kept.length ? [{ type: "bulletList", content: kept.map((i) => ({ type: "listItem", content: [paragraph(i)] })) }] : [];
-}
-const section = (title: string, items: string[]) => {
-  const list = bullets(items);
-  return list.length ? [heading(3, title), ...list] : [];
-};
-
-/**
- * A first draft from the room's AI recap of its highlights. A quote the group cared about becomes a
- * linked source quote when it matches one of the room's highlights, and plain text otherwise.
- */
-export function draftContent(recap: RecapData, marks: Mark[]): JSONContent[] {
-  const linked = (quote: string): JSONContent => {
-    const q = norm(quote);
-    const mark = q ? marks.find((m) => norm(m.quote).includes(q) || q.includes(norm(m.quote))) : undefined;
-    return mark
-      ? { type: "sourceQuote", attrs: { ...quoteOf(mark), quote: mark.quote } }
-      : { type: "blockquote", content: [paragraph(quote)] };
-  };
-  const cared = recap.what_the_group_cared_about.filter((c) => c.quote.trim());
-  return [
-    heading(2, "Group notes"),
-    ...(recap.one_line_summary.trim() ? [paragraph(recap.one_line_summary)] : []),
-    ...section("Key points", recap.key_points),
-    ...(cared.length
-      ? [
-          heading(3, "What we highlighted"),
-          ...cared.flatMap((c) => [linked(c.quote), ...(c.why.trim() ? [paragraph(c.who.length ? `${c.who.join(", ")}: ${c.why}` : c.why)] : [])]),
-        ]
-      : []),
-    ...section("Where we disagreed", recap.disagreements),
-    ...section("Open questions", recap.open_questions),
-    ...section("Next steps", recap.next_steps),
-  ];
-}
-
-export function Notebook() {
-  const room = useRoom();
-  const { channel, perms, readOnly, isDemo, state, me, primary } = room;
-  const roomId = primary.id;
-  const editable = perms.annotate && !readOnly;
-  const [doc] = useState(() => new Y.Doc());
-  const [ready, setReady] = useState(false);
-  const [drafting, setDrafting] = useState(false);
-  const warned = useRef(false);
-  const { send, onNotebook } = channel; // both stable for the room's lifetime
+export function NotebookDrawer() {
+  const { notebookOpen, setNotebookOpen, state, primary } = useRoom();
+  const [filter, setFilter] = useState<Filter>("all");
+  const [zoomed, setZoomed] = useState<string | null>(null);
+  const titleOf = (doc: string) => state.docs.find((d) => d.id === doc)?.title ?? "a source";
 
   useEffect(() => {
-    const sync = new NotebookSync(doc, {
-      broadcast: (update, to) => send.notebook(update, to),
-      request: (sv) => send.notebookRequest(sv),
-      save: async (update) => {
-        if (isDemo) return; // the demo room's notebook lives only in the open tabs
-        const token = (await getFreshSession().catch(() => null))?.access_token;
-        await api.saveNotebook(roomId, update, token);
-      },
-      onSaveError: (err) => {
-        const permanent = err instanceof ApiError && err.status < 500 && err.status !== 429;
-        if (!warned.current) {
-          warned.current = true;
-          toast.error(permanent ? err.message : "The notebook couldn't be saved. Retrying…");
-        }
-        return !permanent;
-      },
-    });
-    const off = onNotebook((message) => sync.receive(message));
-    let cancelled = false;
-    (isDemo ? Promise.resolve({ state: null }) : api.getNotebook(roomId))
-      .then((res) => {
-        if (cancelled) return;
-        sync.load(res.state);
-        setReady(true);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        toast.error(err instanceof Error ? `Couldn't load the notebook: ${err.message}` : "Couldn't load the notebook");
-        sync.load(null);
-        setReady(true);
-      });
-    return () => {
-      cancelled = true;
-      off();
-      sync.destroy();
-    };
-  }, [doc, roomId, isDemo, onNotebook, send]);
+    if (!notebookOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !zoomed && setNotebookOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [notebookOpen, zoomed, setNotebookOpen]);
 
-  const editor = useEditor(
-    {
-      immediatelyRender: false,
-      editable,
-      extensions: [
-        StarterKit.configure({ undoRedo: false }), // undo comes from Collaboration, per person
-        Collaboration.configure({ document: doc }),
-        SourceQuote,
-      ],
-      editorProps: {
-        attributes: {
-          class:
-            "min-h-[18rem] px-4 py-3 text-[0.9375rem] leading-relaxed outline-none [&_blockquote:not([data-source-quote])]:border-l-4 [&_blockquote:not([data-source-quote])]:pl-3 [&_blockquote:not([data-source-quote])]:text-muted-foreground [&_h2]:mt-2 [&_h2]:font-display [&_h2]:text-[1.4rem] [&_h3]:mt-4 [&_h3]:font-semibold [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1.5 [&_ul]:list-disc [&_ul]:pl-5",
-        },
-        // A highlight dragged in from the tray becomes a linked quote where it was dropped.
-        handleDrop: (view, event) => {
-          const quote = parseQuote(event.dataTransfer?.getData(QUOTE_MIME) ?? "");
-          if (!quote) return false;
-          event.preventDefault();
-          const pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? view.state.doc.content.size;
-          const node = view.state.schema.nodes.sourceQuote!.create(quote);
-          view.dispatch(view.state.tr.insert(pos, node));
-          return true;
-        },
-      },
-    },
-    [doc, editable],
+  const entries = state.notebook;
+  const shown = filter === "all" ? entries : entries.filter((e) => e.kind === filter);
+  const count = (f: Filter) => (f === "all" ? entries.length : entries.filter((e) => e.kind === f).length);
+
+  return (
+    <>
+      <AnimatePresence>
+        {notebookOpen && (
+          <>
+            <motion.div
+              key="scrim"
+              className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setNotebookOpen(false)}
+            />
+            <motion.aside
+              key="drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Room notebook"
+              className="liquid-glass liquid-glass-strong fixed inset-y-2 right-2 z-50 flex w-[min(30rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-[1.75rem]"
+              initial={{ x: "105%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "105%" }}
+              transition={{ type: "spring", bounce: 0, duration: 0.5 }}
+            >
+              <header className="flex items-start gap-3 border-b border-(--hairline) px-6 pt-5 pb-4">
+                <div className="min-w-0 flex-1">
+                  <div className="eyebrow text-[0.5625rem] text-azure">Room notebook</div>
+                  <h2 className="mt-1.5 font-display text-[1.9rem] leading-none">
+                    Notes left <span className="italic">here</span>
+                  </h2>
+                  <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
+                    Anything worth keeping: a thought, a passage, a picture. Everyone in the room sees it.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={entries.length === 0}
+                  onClick={() =>
+                    downloadText(
+                      `${fileSafe(primary.title)} notebook.md`,
+                      notebookToMarkdown(primary.title, entries, titleOf),
+                    )
+                  }
+                  aria-label="Download the notebook as Markdown"
+                  title="Download (.md)"
+                  className="grid size-9 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/6 hover:text-foreground disabled:opacity-30"
+                >
+                  <DownloadSimpleIcon className="size-[18px]" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotebookOpen(false)}
+                  aria-label="Close notebook"
+                  className="grid size-9 place-items-center rounded-full text-muted-foreground transition hover:bg-foreground/6 hover:text-foreground"
+                >
+                  <XIcon className="size-[18px]" />
+                </button>
+              </header>
+
+              <Composer />
+
+              <div className="flex gap-1 px-6 pt-3" role="tablist" aria-label="Show">
+                {FILTERS.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={filter === f.id}
+                    onClick={() => setFilter(f.id)}
+                    className={cn(
+                      "flex h-7 items-center gap-1.5 rounded-full px-3 text-[0.75rem] font-medium transition",
+                      filter === f.id
+                        ? "bg-ink text-pearl dark:bg-pearl dark:text-ink"
+                        : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                    )}
+                  >
+                    {f.label}
+                    <span className="text-[0.625rem] opacity-60 tabular-nums">{count(f.id)}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div data-lenis-prevent className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-3 pb-6">
+                {shown.length === 0 ? (
+                  <EmptyNotebook filtered={filter !== "all"} />
+                ) : (
+                  <ul className="space-y-3">
+                    <AnimatePresence initial={false}>
+                      {shown.map((e) => (
+                        <EntryCard key={e.id} entry={e} titleOf={titleOf} onZoom={setZoomed} />
+                      ))}
+                    </AnimatePresence>
+                  </ul>
+                )}
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      <Dialog open={!!zoomed} onOpenChange={(o) => !o && setZoomed(null)}>
+        <DialogContent className="w-auto max-w-[min(92vw,64rem)] rounded-[1.5rem] p-2 sm:max-w-[min(92vw,64rem)]">
+          <DialogTitle className="sr-only">Image from the notebook</DialogTitle>
+          <DialogDescription className="sr-only">Full size</DialogDescription>
+          {zoomed && (
+            // eslint-disable-next-line @next/next/no-img-element -- a data URL from the notebook
+            <img src={zoomed} alt="" className="max-h-[85dvh] w-auto rounded-[1.1rem]" />
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
   );
+}
 
-  const marks = state.annotations.filter((a): a is Mark => a.kind === "highlight" || a.kind === "underline");
+function Composer() {
+  const { actions, perms } = useRoom();
+  const [text, setText] = useState("");
+  const [image, setImage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const file = useRef<HTMLInputElement>(null);
 
-  const insertQuote = (mark: Mark) => editor?.chain().focus("end").insertContent({ type: "sourceQuote", attrs: quoteOf(mark) }).run();
+  if (!perms.annotate) {
+    return (
+      <p className="mx-6 mt-4 rounded-2xl bg-foreground/[0.04] px-4 py-3 text-[0.75rem] text-muted-foreground">
+        You can read the notebook. Ask an admin for editor access to add notes.
+      </p>
+    );
+  }
 
-  const draft = async () => {
-    if (!editor) return;
-    setDrafting(true);
+  const attach = async (blob: Blob) => {
+    setBusy(true);
     try {
-      const recap = await api.recap(roomId, me.name);
-      editor.chain().focus("end").insertContent(draftContent(recap, marks)).run();
-      toast.success("Draft added. Edit it together.");
+      setImage(await shrinkImage(blob));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't write a draft");
+      toast.error(err instanceof Error ? err.message : "Couldn't read that image");
     } finally {
-      setDrafting(false);
+      setBusy(false);
+    }
+  };
+
+  const post = () => {
+    const body = text.trim().slice(0, MAX_TEXT);
+    if (!body && !image) return;
+    const ok = actions.addToNotebook({ kind: image ? "image" : "text", text: body, quote: null, image });
+    if (ok) {
+      setText("");
+      setImage(null);
     }
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b border-(--hairline) px-4 py-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="text-[0.875rem] font-semibold">Shared notebook</div>
-          <div className="text-[0.6875rem] text-muted-foreground">
-            {editable ? "Everyone here writes in it at once. Drag a highlight in to quote it." : "Read only for your role."}
+    <div className="px-6 pt-4">
+      <div
+        className="rounded-2xl bg-card/80 ring-1 ring-(--hairline) transition focus-within:ring-azure/40"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          const img = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
+          if (img) {
+            e.preventDefault();
+            void attach(img);
+          }
+        }}
+      >
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              post();
+            }
+          }}
+          onPaste={(e) => {
+            const img = [...e.clipboardData.files].find((f) => f.type.startsWith("image/"));
+            if (img) {
+              e.preventDefault();
+              void attach(img);
+            }
+          }}
+          maxLength={MAX_TEXT}
+          rows={3}
+          placeholder={image ? "Add a caption (optional)…" : "Leave a note for the room…"}
+          className="block w-full resize-none bg-transparent px-4 pt-3 text-[0.875rem] leading-relaxed outline-none placeholder:text-muted-foreground"
+        />
+        {image && (
+          <div className="relative mx-3 mb-2 inline-block">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a local preview */}
+            <img src={image} alt="" className="max-h-36 rounded-xl ring-1 ring-(--hairline)" />
+            <button
+              type="button"
+              onClick={() => setImage(null)}
+              aria-label="Remove image"
+              className="absolute -top-2 -right-2 grid size-6 place-items-center rounded-full bg-ink text-pearl shadow dark:bg-pearl dark:text-ink"
+            >
+              <XIcon className="size-3" />
+            </button>
           </div>
-        </div>
-        {editable && !isDemo && perms.useAi && (
+        )}
+        <div className="flex items-center gap-1 border-t border-(--hairline) px-2 py-1.5">
           <button
             type="button"
-            onClick={draft}
-            disabled={drafting || !editor}
-            title="Write a first draft from the group's highlights"
-            className="flex h-8 items-center gap-1.5 rounded-full bg-ink px-3 text-[0.75rem] font-medium text-pearl disabled:opacity-60 dark:bg-azure"
+            onClick={() => file.current?.click()}
+            disabled={busy}
+            className="flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[0.75rem] text-muted-foreground transition hover:bg-foreground/5 hover:text-foreground disabled:opacity-50"
           >
-            {drafting ? <Spinner /> : <SparkleIcon weight="fill" className="size-3.5" />}
-            Draft with AI
+            <ImageIcon className="size-4" /> {busy ? "Preparing…" : image ? "Change image" : "Image"}
+          </button>
+          <input
+            ref={file}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void attach(f);
+              e.target.value = "";
+            }}
+          />
+          <span className="ml-auto hidden text-[0.625rem] text-muted-foreground sm:inline">Ctrl + Enter</span>
+          <button
+            type="button"
+            onClick={post}
+            disabled={busy || (!text.trim() && !image)}
+            className="ml-2 h-8 rounded-full bg-ink px-4 text-[0.75rem] font-medium text-pearl transition active:scale-95 disabled:opacity-30 dark:bg-pearl dark:text-ink"
+          >
+            Add note
+          </button>
+        </div>
+      </div>
+      <p className="mt-1.5 px-1 text-[0.625rem] text-muted-foreground">
+        To save a passage, select text in a source and choose <span className="font-medium">Save to notebook</span>.
+      </p>
+    </div>
+  );
+}
+
+const KIND = {
+  text: { icon: TextAlignLeftIcon, label: "Note" },
+  quote: { icon: QuotesIcon, label: "Passage" },
+  image: { icon: ImageIcon, label: "Image" },
+} as const;
+
+function EntryCard({
+  entry: e,
+  titleOf,
+  onZoom,
+}: {
+  entry: NotebookEntry;
+  titleOf: (doc: string) => string;
+  onZoom: (src: string) => void;
+}) {
+  const { actions, perms, canRemove, jumpTo, setNotebookOpen } = useRoom();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(e.text);
+  const Kind = KIND[e.kind];
+
+  const save = () => {
+    const body = draft.trim().slice(0, MAX_TEXT);
+    if (body !== e.text && (body || e.kind !== "text")) actions.editNotebook(e.id, body);
+    setEditing(false);
+  };
+
+  const openSource = () => {
+    if (!e.quote) return;
+    jumpTo(e.quote.doc, e.quote.block);
+    // On narrow screens the drawer covers the document, so get out of the way.
+    if (window.innerWidth < 1024) setNotebookOpen(false);
+  };
+
+  return (
+    <motion.li
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.97 }}
+      transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
+      className="group rounded-2xl bg-card/70 p-4 ring-1 ring-(--hairline)"
+    >
+      <div className="flex items-center gap-2">
+        <Avatar actor={e.author} size={22} />
+        <div className="min-w-0 flex-1 text-[0.6875rem] text-muted-foreground">
+          <span className="font-semibold text-foreground/85">{e.author.name}</span> · {timeAgo(e.at)}
+          {e.edited_by && e.edited_by.id !== e.author.id && (
+            <span className="italic"> · edited by {e.edited_by.name}</span>
+          )}
+        </div>
+        {/* Edit and delete appear on hover, in the header, so they take no space of their own. */}
+        {!editing && perms.annotate && (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(e.text);
+              setEditing(true);
+            }}
+            aria-label={e.text || e.kind === "text" ? "Edit" : "Add text"}
+            title={e.text || e.kind === "text" ? "Edit" : "Add text"}
+            className="grid size-6 place-items-center rounded-full text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100"
+          >
+            <PencilSimpleIcon className="size-3.5" />
           </button>
         )}
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {ready && editor ? (
-          <EditorContent editor={editor} />
-        ) : (
-          <div className="grid h-40 place-items-center text-muted-foreground">
-            <Spinner />
-          </div>
+        {!editing && canRemove(e.author.id) && (
+          <button
+            type="button"
+            onClick={() => actions.removeFromNotebook(e.id)}
+            aria-label="Delete"
+            title="Delete"
+            className="grid size-6 place-items-center rounded-full text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-destructive/8 hover:text-destructive focus-visible:opacity-100"
+          >
+            <TrashIcon className="size-3.5" />
+          </button>
         )}
+        <span className="flex items-center gap-1 rounded-full bg-foreground/5 px-2 py-0.5 text-[0.625rem] text-muted-foreground">
+          <Kind.icon className="size-3" /> {Kind.label}
+        </span>
       </div>
 
-      {editable && marks.length > 0 && (
-        <details className="max-h-[40%] shrink-0 overflow-y-auto border-t border-(--hairline) px-3 py-2" open>
-          <summary className="flex cursor-pointer items-center gap-1.5 py-1 text-[0.75rem] font-semibold text-muted-foreground">
-            <HighlighterIcon className="size-3.5" /> Highlights ({marks.length}) · drag one in, or press +
-          </summary>
-          <ul className="mt-1 space-y-1.5">
-            {marks.map((m) => (
-              <li
-                key={m.id}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData(QUOTE_MIME, JSON.stringify(quoteOf(m)));
-                  e.dataTransfer.setData("text/plain", m.quote);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-                className="flex cursor-grab items-start gap-2 rounded-xl border border-(--hairline) bg-card px-2.5 py-1.5 text-[0.75rem] active:cursor-grabbing"
-                style={{ borderLeft: `3px solid ${m.color}` }}
-              >
-                <span className="line-clamp-2 min-w-0 flex-1">“{m.quote}”</span>
-                <button
-                  type="button"
-                  onClick={() => insertQuote(m)}
-                  aria-label="Add to notebook"
-                  className="grid size-6 shrink-0 place-items-center rounded-full hover:bg-foreground/8"
-                >
-                  <PlusIcon className="size-3.5" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </details>
+      {e.kind === "quote" && e.quote && (
+        <button
+          type="button"
+          onClick={openSource}
+          className="mt-3 block w-full rounded-xl border-l-2 border-azure/70 bg-azure/[0.05] py-2 pr-3 pl-3 text-left transition hover:bg-azure/[0.09]"
+        >
+          <span className="block font-display text-[1.05rem] leading-snug text-foreground/90 italic">
+            “{e.quote.text}”
+          </span>
+          <span className="mt-1.5 flex items-center gap-1 text-[0.6875rem] text-azure">
+            <ArrowSquareOutIcon className="size-3" /> {titleOf(e.quote.doc)}
+          </span>
+        </button>
       )}
+
+      {e.kind === "image" && e.image && (
+        <button
+          type="button"
+          onClick={() => onZoom(e.image!)}
+          className="mt-3 block w-full overflow-hidden rounded-xl"
+          aria-label="Open image"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- a data URL from the notebook */}
+          <img
+            src={e.image}
+            alt={e.text || "Image from the notebook"}
+            className="w-full transition duration-500 hover:scale-[1.02]"
+          />
+        </button>
+      )}
+
+      {editing ? (
+        <div className="mt-3">
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(ev) => setDraft(ev.target.value)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) save();
+              if (ev.key === "Escape") {
+                setDraft(e.text);
+                setEditing(false);
+              }
+            }}
+            maxLength={MAX_TEXT}
+            rows={3}
+            className="w-full resize-none rounded-xl bg-background/60 p-2.5 text-[0.875rem] ring-1 ring-(--hairline) outline-none focus:ring-azure/40"
+          />
+          <div className="mt-1.5 flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(e.text);
+                setEditing(false);
+              }}
+              className="h-7 rounded-full px-3 text-[0.75rem] text-muted-foreground hover:bg-foreground/5"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              className="h-7 rounded-full bg-ink px-3 text-[0.75rem] font-medium text-pearl dark:bg-pearl dark:text-ink"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      ) : (
+        e.text && <p className="mt-3 text-[0.875rem] leading-relaxed whitespace-pre-wrap break-words">{e.text}</p>
+      )}
+    </motion.li>
+  );
+}
+
+// A hairline notebook with a pencil, for the empty state.
+function EmptyNotebook({ filtered }: { filtered: boolean }) {
+  return (
+    <div className="flex flex-col items-center pt-8 text-center">
+      <svg
+        viewBox="0 0 160 120"
+        className="h-28 w-auto text-foreground/50"
+        fill="none"
+        stroke="currentColor"
+        aria-hidden
+      >
+        <path
+          className="animate-thread-draw"
+          pathLength={1}
+          strokeWidth="1.2"
+          strokeLinejoin="round"
+          d="M30 20 h80 a6 6 0 0 1 6 6 v74 a6 6 0 0 1 -6 6 h-80 a6 6 0 0 1 -6 -6 v-74 a6 6 0 0 1 6 -6 z"
+        />
+        <path
+          className="animate-thread-draw"
+          style={{ animationDelay: "0.3s" }}
+          pathLength={1}
+          strokeWidth="1"
+          d="M24 34 h-6 M24 52 h-6 M24 70 h-6 M24 88 h-6"
+        />
+        <path
+          className="animate-thread-draw"
+          style={{ animationDelay: "0.5s" }}
+          pathLength={1}
+          strokeWidth="1"
+          d="M40 42 h56 M40 56 h48 M40 70 h52"
+        />
+        <path
+          className="animate-thread-draw text-azure"
+          style={{ animationDelay: "0.8s" }}
+          pathLength={1}
+          strokeWidth="1.2"
+          strokeLinejoin="round"
+          d="M118 40 l14 -14 l8 8 l-14 14 l-11 3 z M128 30 l8 8"
+        />
+      </svg>
+      <div className="mt-4 font-display text-[1.5rem] leading-none">
+        {filtered ? "Nothing of this kind yet" : "No notes yet"}
+      </div>
+      <p className="mt-2 max-w-[28ch] text-[0.75rem] text-muted-foreground">
+        {filtered
+          ? "Try another filter."
+          : "Write the first one above, paste an image, or save a passage from a source."}
+      </p>
     </div>
+  );
+}
+
+export function NotebookButton() {
+  const { state, setNotebookOpen } = useRoom();
+  const n = state.notebook.length;
+  return (
+    <button
+      type="button"
+      onClick={() => setNotebookOpen(true)}
+      aria-label={`Notebook${n ? `, ${n} notes` : ""}`}
+      title="Room notebook"
+      className="relative flex h-9 items-center gap-1.5 rounded-full bg-foreground/6 px-3 text-[0.8125rem] font-medium transition hover:bg-foreground/10"
+    >
+      <NotebookIcon className="size-4" />
+      <span className="hidden md:inline">Notebook</span>
+      {n > 0 && (
+        <span className="grid h-4 min-w-4 place-items-center rounded-full bg-azure px-1 text-[0.625rem] font-semibold text-white tabular-nums">
+          {n}
+        </span>
+      )}
+    </button>
   );
 }

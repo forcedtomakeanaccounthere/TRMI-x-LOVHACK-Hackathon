@@ -24,6 +24,7 @@ import {
   type DocRef,
   INK_COLORS,
   type LedgerEvent,
+  type NotebookEntry,
   type LedgerPayload,
   type Role,
   type ThreadMessage,
@@ -38,7 +39,7 @@ export type NewAnnotation = Annotation extends infer A
     ? Omit<A, "id" | "author" | "at"> & { id?: string }
     : never
   : never;
-export type PanelTab = "chat" | "notebook" | "discussion" | "studio" | "library" | "history";
+export type PanelTab = "chat" | "discussion" | "studio" | "library" | "history";
 
 type Props = {
   roomId: string;
@@ -319,6 +320,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [width, setWidth] = useState(3);
   const [lens, setLens] = useState(false);
   const [tab, setTab] = useState<PanelTab>("chat");
+  // The room notebook opens as a drawer from the top bar.
+  const [notebookOpen, setNotebookOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [focusAnnotation, setFocusAnnotation] = useState<string | null>(null);
   // A request to show a block (from a citation, the history or a comment list); n makes repeats count.
@@ -413,6 +416,20 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     },
     react(messageId: string, emoji: string) {
       emit({ type: "chat.react", message_id: messageId, emoji });
+    },
+    // Notebook entries: a typed note, a passage saved from a source, or an image (with optional text).
+    addToNotebook(entry: Pick<NotebookEntry, "kind" | "text" | "quote" | "image">) {
+      const made = emit({
+        type: "notebook.add",
+        entry: { ...entry, id: nanoid(12), author: actor, at: new Date().toISOString() },
+      });
+      return made.length > 0;
+    },
+    editNotebook(entryId: string, text: string) {
+      emit({ type: "notebook.edit", entry_id: entryId, text });
+    },
+    removeFromNotebook(entryId: string) {
+      emit({ type: "notebook.remove", entry_id: entryId });
     },
     async ask(
       thread: string,
@@ -539,6 +556,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     lens,
     setLens,
     tab,
+    notebookOpen,
+    setNotebookOpen,
     setTab,
     panelOpen,
     setPanelOpen,

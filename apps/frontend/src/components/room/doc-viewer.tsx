@@ -341,6 +341,20 @@ function Scroller({
     setSelection(null);
   };
 
+  // Saves the selected passage as a notebook entry that links back here.
+  const saveToNotebook = (sel: TextSelection) => {
+    const ok = actions.addToNotebook({
+      kind: "quote",
+      text: "",
+      quote: { doc: docId, block: sel.block, text: sel.quote },
+      image: null,
+    });
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    if (ok)
+      toast.success("Saved to the notebook", { action: { label: "Open", onClick: () => room.setNotebookOpen(true) } });
+  };
+
   const openAiBox = (sel: TextSelection) => {
     const el = findBlock(article, sel.block);
     const y = el ? Math.max(0, (sel.rect.top - el.getBoundingClientRect().top) / el.offsetHeight) : 0;
@@ -772,6 +786,7 @@ function Scroller({
               onHighlight={(c) => markSelection(selection.sel, "highlight", c)}
               onUnderline={() => markSelection(selection.sel, "underline")}
               onComment={() => commentOn(selection.sel)}
+              onSave={() => saveToNotebook(selection.sel)}
               onAsk={() => openAiBox(selection.sel)}
             />
           )}

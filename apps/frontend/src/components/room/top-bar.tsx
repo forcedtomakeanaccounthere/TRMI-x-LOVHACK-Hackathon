@@ -22,6 +22,7 @@ import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./bits";
 import { can, roleOf } from "./ledger";
+import { NotebookButton } from "./notebook";
 import { SettingsDialog } from "./settings-dialog";
 import { useRoom } from "./store";
 
@@ -215,6 +216,7 @@ export function TopBar({ onToggleSources, onTogglePanel }: { onToggleSources: ()
         {!showCursors && <span className="absolute h-[1.5px] w-5 rotate-45 rounded-full bg-current" aria-hidden />}
       </button>
       <FocusButton />
+      <NotebookButton />
       <SharePopover />
       <button
         type="button"

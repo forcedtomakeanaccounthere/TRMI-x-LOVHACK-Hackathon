@@ -166,6 +166,19 @@ export type Artifact = {
   body: ArtifactBody;
 };
 
+// The room notebook: notes people leave for the room. A typed note, a passage saved from a source
+// (it links back to where it came from), or an image; each can carry text.
+export type NotebookEntry = {
+  id: string;
+  kind: "text" | "quote" | "image";
+  text: string; // the note, or a caption for a quote or image
+  quote: { doc: string; block: string; text: string } | null;
+  image: string | null; // a JPEG data URL, shrunk before it's added
+  author: Actor;
+  at: string;
+  edited_by?: Actor;
+};
+
 // Every change to a room is one of these. They are never edited: the room's state is the result of
 // replaying them, and the history panel lists them as they are.
 export type LedgerPayload =
@@ -189,6 +202,9 @@ export type LedgerPayload =
   | { type: "chat"; message: ChatMessage }
   // Toggles the actor's reaction: the first one adds it, the next one takes it back.
   | { type: "chat.react"; message_id: string; emoji: string }
+  | { type: "notebook.add"; entry: NotebookEntry }
+  | { type: "notebook.edit"; entry_id: string; text: string }
+  | { type: "notebook.remove"; entry_id: string }
   | { type: "artifact.add"; artifact: Artifact }
   | { type: "artifact.remove"; artifact_id: string }
   | { type: "role.set"; member: string; name: string; role: Role }

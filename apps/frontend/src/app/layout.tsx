@@ -51,7 +51,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <SmoothScroll>
           <TooltipProvider>{children}</TooltipProvider>
         </SmoothScroll>
-        <Toaster position="top-right" />
+        {/* Below the top bars (landing nav, dashboard, room), so a toast never covers their buttons. */}
+        <Toaster position="top-right" offset={{ top: 76 }} mobileOffset={{ top: 72 }} />
       </body>
     </html>
   );
