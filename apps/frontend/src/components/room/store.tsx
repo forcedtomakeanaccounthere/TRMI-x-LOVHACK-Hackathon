@@ -1,13 +1,36 @@
 "use client";
 
 import { nanoid } from "nanoid";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
+import {
+  AI_POLL_MS,
+  AI_WAITING,
+  loadAiStatuses,
+  loadDoc,
+  loadSavedHighlights,
+  removeSavedHighlight,
+  saveHighlight,
+} from "./docs";
 import type { Identity } from "./identity";
-import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
+import {
+  can,
+  loadLedger,
+  mergeEvents,
+  reduceLedger,
+  type RoomState,
+  roleOf,
+  saveLedger,
+} from "./ledger";
 import {
   type Annotation,
   type ArtifactKind,
@@ -40,7 +63,12 @@ type Props = {
   children: React.ReactNode;
 };
 
-function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">) {
+function useRoomValue({
+  roomId,
+  primary,
+  bundled,
+  me,
+}: Omit<Props, "children">) {
   const isDemo = roomId === DEMO_ROOM_ID;
   const primaryRef: DocRef = {
     id: primary.id,
@@ -82,10 +110,16 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [savedHighlights, setSavedHighlights] = useState<Annotation[]>([]);
   const state: RoomState = (() => {
     const s = reduceLedger(primaryRef, mergeEvents(seed, events));
-    const removed = new Set(events.flatMap((e) => (e.type === "annot.remove" ? [e.annotation_id] : [])));
+    const removed = new Set(
+      events.flatMap((e) =>
+        e.type === "annot.remove" ? [e.annotation_id] : [],
+      ),
+    );
     const have = new Set(s.annotations.map((a) => a.id));
     const docIds = new Set(s.docs.map((d) => d.id));
-    const extra = savedHighlights.filter((a) => !have.has(a.id) && !removed.has(a.id) && docIds.has(a.doc));
+    const extra = savedHighlights.filter(
+      (a) => !have.has(a.id) && !removed.has(a.id) && docIds.has(a.doc),
+    );
     return { ...s, annotations: [...s.annotations, ...extra] };
   })();
 
@@ -97,7 +131,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [activeDoc, setActiveDoc] = useState(primary.id);
   const [following, setFollowing] = useState<string | null>(null);
 
-  const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
+  const receive = (incoming: LedgerEvent[]) =>
+    setEvents((prev) => mergeEvents(prev, incoming));
 
   const channel = useRoomChannel(
     roomId,
@@ -107,7 +142,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       onEvents: receive,
       allEvents: () => eventsRef.current,
       onKicked: () => setKickedOut(true),
-      onPresenceChange: (change) => setPresenceFeed((prev) => [...prev.slice(-80), change]),
+      onPresenceChange: (change) =>
+        setPresenceFeed((prev) => [...prev.slice(-80), change]),
     },
   );
 
@@ -125,13 +161,61 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const requested = useRef(new Set<string>());
   useEffect(() => {
     for (const doc of state.docs) {
-      if (contents[doc.id] || doc.kind === "video" || requested.current.has(doc.id)) continue;
+      if (
+        contents[doc.id] ||
+        doc.kind === "video" ||
+        requested.current.has(doc.id)
+      )
+        continue;
       requested.current.add(doc.id);
       loadDoc(doc.id)
-        .then((c) => setContents((prev) => ({ ...prev, [doc.id]: c ?? "missing" })))
+        .then((c) =>
+          setContents((prev) => ({ ...prev, [doc.id]: c ?? "missing" })),
+        )
         .catch(() => setContents((prev) => ({ ...prev, [doc.id]: "missing" })));
     }
   }, [state.docs, contents]);
+
+  // A document still being indexed shows "AI pending…" until its status changes, so its status is
+  // checked again every few seconds until it is ready or failed. Reloaded in full then, since a
+  // video room's doc is written at the end.
+  const waitingKey = Object.values(contents)
+    .filter(
+      (c): c is DocContent =>
+        typeof c === "object" && AI_WAITING.has(c.ai_status ?? ""),
+    )
+    .map((c) => c.id)
+    .join(" ");
+  useEffect(() => {
+    if (isDemo || !waitingKey) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      const ids = waitingKey.split(" ");
+      const statuses = await loadAiStatuses(ids).catch(() => null);
+      if (cancelled || !statuses) return;
+      for (const id of ids) {
+        const status = statuses[id];
+        if (!status || AI_WAITING.has(status)) {
+          setContents((prev) => {
+            const c = prev[id];
+            return typeof c === "object" && status && c.ai_status !== status
+              ? { ...prev, [id]: { ...c, ai_status: status } }
+              : prev;
+          });
+          continue;
+        }
+        loadDoc(id)
+          .then((c) => {
+            if (!cancelled && c) setContents((prev) => ({ ...prev, [id]: c }));
+          })
+          .catch(() => {});
+      }
+    }, AI_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isDemo, waitingKey]);
 
   // Reload saved highlights only when the set of documents changes.
   const docKey = state.docs
@@ -149,7 +233,9 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     };
   }, [isDemo, docKey]);
 
-  const loaded = Object.values(contents).filter((c): c is DocContent => typeof c === "object");
+  const loaded = Object.values(contents).filter(
+    (c): c is DocContent => typeof c === "object",
+  );
 
   // A removed document can't stay open.
   useEffect(() => {
@@ -159,7 +245,9 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
 
   // Sources included in AI answers and artifacts (everything unless unticked).
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const included = state.docs.filter((d) => !excluded.has(d.id) && d.kind !== "video").map((d) => d.id);
+  const included = state.docs
+    .filter((d) => !excluded.has(d.id) && d.kind !== "video")
+    .map((d) => d.id);
   const toggleSource = (id: string) =>
     setExcluded((prev) => {
       const next = new Set(prev);
@@ -171,7 +259,9 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- Permissions ---
   const ownerId = primary.created_by;
   const role: Role =
-    isDemo && !ownerId ? (state.roles[me.id] ?? "owner") : roleOf({ id: me.id, signedIn: me.signedIn }, ownerId, state);
+    isDemo && !ownerId
+      ? (state.roles[me.id] ?? "owner")
+      : roleOf({ id: me.id, signedIn: me.signedIn }, ownerId, state);
   const readOnly = primary.status !== "running";
   const perms = {
     annotate: can.annotate(role) && !readOnly,
@@ -204,7 +294,11 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- Writing to the ledger ---
   // A closed or archived room is read only: its documents, marks, notes, threads and artifacts stay as
   // they are. Only the room's settings, roles and kicks still change.
-  const ADMIN_EVENTS = new Set<LedgerPayload["type"]>(["role.set", "member.kick", "settings.update"]);
+  const ADMIN_EVENTS = new Set<LedgerPayload["type"]>([
+    "role.set",
+    "member.kick",
+    "settings.update",
+  ]);
   const emit = (...payloads: LedgerPayload[]) => {
     if (readOnly) payloads = payloads.filter((p) => ADMIN_EVENTS.has(p.type));
     if (payloads.length === 0) return [];
@@ -222,8 +316,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
 
   const actor = { id: me.id, name: me.name, color: me.color };
   // Who may delete a mark, note, AI box or artifact: its author or a manager, while the room is open.
-  const canRemove = (authorId: string) => !readOnly && (authorId === me.id || perms.manage);
-  const realDoc = (id: string) => !isDemo && !id.startsWith("yt:") && !bundled.some((d) => d.id === id);
+  const canRemove = (authorId: string) =>
+    !readOnly && (authorId === me.id || perms.manage);
+  const realDoc = (id: string) =>
+    !isDemo && !id.startsWith("yt:") && !bundled.some((d) => d.id === id);
 
   const actions = {
     addDoc(doc: DocRef) {
@@ -245,7 +341,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         at: new Date().toISOString(),
       } as Annotation;
       if (!emit({ type: "annot.add", annotation }).length) return annotation;
-      if ((annotation.kind === "highlight" || annotation.kind === "underline") && realDoc(annotation.doc)) {
+      if (
+        (annotation.kind === "highlight" || annotation.kind === "underline") &&
+        realDoc(annotation.doc)
+      ) {
         void saveHighlight(annotation);
       }
       return annotation;
@@ -255,7 +354,11 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       if (!emit({ type: "annot.remove", annotation_id: id }).length) return;
       // Text marks are also rows in highlights (for recaps and new browsers): the browser that saved
       // one removes its row too.
-      if (target && (target.kind === "highlight" || target.kind === "underline") && realDoc(target.doc)) {
+      if (
+        target &&
+        (target.kind === "highlight" || target.kind === "underline") &&
+        realDoc(target.doc)
+      ) {
         void removeSavedHighlight(target.id, target.doc);
       }
     },
@@ -291,9 +394,16 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         },
       });
       if (!askEvent) return;
-      const history = (state.threads[thread] ?? []).slice(-8).map((m) => ({ role: m.role, text: m.text }));
+      const history = (state.threads[thread] ?? [])
+        .slice(-8)
+        .map((m) => ({ role: m.role, text: m.text }));
       const docs = loaded.filter((d) => opts.sources.includes(d.id));
-      const answer = (reply: { text: string; citations: Citation[]; preview: boolean; failed?: boolean }) =>
+      const answer = (reply: {
+        text: string;
+        citations: Citation[];
+        preview: boolean;
+        failed?: boolean;
+      }) =>
         emit({
           type: "thread.answer",
           thread,
@@ -301,14 +411,22 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
             id: nanoid(10),
             role: "ai",
             ...reply,
-            reply_to: askEvent!.type === "thread.ask" ? askEvent!.message.id : "",
+            reply_to:
+              askEvent!.type === "thread.ask" ? askEvent!.message.id : "",
             at: new Date().toISOString(),
           },
         });
       try {
         answer(
           await askAi(
-            { question, sources: opts.sources, quote: opts.quote, image: opts.image, history, name: me.name },
+            {
+              question,
+              sources: opts.sources,
+              quote: opts.quote,
+              image: opts.image,
+              history,
+              name: me.name,
+            },
             docs,
             opts.sources.filter(realDoc),
           ),
@@ -316,9 +434,15 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       } catch (err) {
         // A refusal (still indexing, rate limited, …) is answered too, so the thread isn't left waiting
         // for everyone and anyone can ask again.
-        const reason = err instanceof Error ? err.message : "The AI couldn't answer";
+        const reason =
+          err instanceof Error ? err.message : "The AI couldn't answer";
         toast.error(reason);
-        answer({ text: `Couldn't answer: ${reason}`, citations: [], preview: false, failed: true });
+        answer({
+          text: `Couldn't answer: ${reason}`,
+          citations: [],
+          preview: false,
+          failed: true,
+        });
       }
     },
     async generate(kind: ArtifactKind, sources: string[], title: string) {
@@ -419,7 +543,10 @@ export function useAwaitingAnswer(thread: ThreadMessage[]) {
   const [expired, setExpired] = useState<number | null>(null);
   useEffect(() => {
     if (askedAt === null) return;
-    const timer = setTimeout(() => setExpired(askedAt), Math.max(0, askedAt + ANSWER_TIMEOUT_MS - Date.now()));
+    const timer = setTimeout(
+      () => setExpired(askedAt),
+      Math.max(0, askedAt + ANSWER_TIMEOUT_MS - Date.now()),
+    );
     return () => clearTimeout(timer);
   }, [askedAt]);
   return askedAt !== null && expired !== askedAt;
@@ -438,7 +565,8 @@ export function useNameOf() {
     if (id === me.id) return me.name;
     const peer = channel.peers.find((p) => p.id === id);
     if (peer) return peer.name;
-    for (let i = events.length - 1; i >= 0; i--) if (events[i]!.actor.id === id) return events[i]!.actor.name;
+    for (let i = events.length - 1; i >= 0; i--)
+      if (events[i]!.actor.id === id) return events[i]!.actor.name;
     return "Someone";
   };
 }

@@ -4,17 +4,40 @@ import type { Annotation, DocContent, DocRef } from "./types";
 
 // Loads documents and their saved highlights from Supabase (public read for rooms that aren't deleted).
 
-const COLUMNS = "id, kind, source_url, title, content_html, pdf_path, source_meta, created_by, created_at, status";
+const COLUMNS =
+  "id, kind, source_url, title, content_html, pdf_path, source_meta, created_by, created_at, status";
 
 export async function loadDoc(id: string): Promise<DocContent | null> {
   const supabase = getSupabase();
   const [{ data, error }, ai] = await Promise.all([
     supabase.from("rooms").select(COLUMNS).eq("id", id).maybeSingle(),
-    supabase.from("room_ai").select("status, summary").eq("room_id", id).maybeSingle(),
+    supabase
+      .from("room_ai")
+      .select("status, summary")
+      .eq("room_id", id)
+      .maybeSingle(),
   ]);
   if (error) throw error;
   if (!data) return null;
   return toContent(data, ai.data);
+}
+
+// AI states that change on their own as the backend indexes a room.
+export const AI_WAITING = new Set(["pending", "indexing", "summarizing"]);
+export const AI_POLL_MS = 4000;
+
+/** The AI status of each room, by id. */
+export async function loadAiStatuses(
+  ids: string[],
+): Promise<Record<string, string>> {
+  const { data, error } = await getSupabase()
+    .from("room_ai")
+    .select("room_id, status")
+    .in("room_id", ids);
+  if (error) throw error;
+  return Object.fromEntries(
+    (data ?? []).map((row) => [row.room_id as string, row.status as string]),
+  );
 }
 
 export function toContent(
@@ -28,13 +51,16 @@ export function toContent(
     kind: room.kind,
     title:
       room.title?.trim() ||
-      (room.source_meta && "file_name" in room.source_meta ? room.source_meta.file_name : undefined) ||
+      (room.source_meta && "file_name" in room.source_meta
+        ? room.source_meta.file_name
+        : undefined) ||
       "Untitled",
     source_url: room.source_url,
     content_html: room.content_html,
     pdf_url:
       room.kind === "pdf" && room.pdf_path
-        ? getSupabase().storage.from("pdfs").getPublicUrl(room.pdf_path).data.publicUrl
+        ? getSupabase().storage.from("pdfs").getPublicUrl(room.pdf_path).data
+            .publicUrl
         : null,
     status: RoomStatus.catch("running").parse(row.status),
     created_by: room.created_by,
@@ -55,10 +81,14 @@ export function refOf(doc: DocContent): DocRef {
 
 // Highlights saved by the original highlight flow (or by another browser before the ledger existed),
 // shown alongside the ledger's marks.
-export async function loadSavedHighlights(docId: string): Promise<Annotation[]> {
+export async function loadSavedHighlights(
+  docId: string,
+): Promise<Annotation[]> {
   const { data, error } = await getSupabase()
     .from("highlights")
-    .select("id, block_id, start_offset, end_offset, quote, author_name, author_color, created_at")
+    .select(
+      "id, block_id, start_offset, end_offset, quote, author_name, author_color, created_at",
+    )
     .eq("room_id", docId);
   if (error || !data) return [];
   return data.map((h) => ({
@@ -92,7 +122,9 @@ const KEYS = "linkroom-highlight-keys";
 function readKeys(): Record<string, string> {
   try {
     const parsed = JSON.parse(localStorage.getItem(KEYS) ?? "{}") as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, string>)
+      : {};
   } catch {
     return {};
   }
@@ -121,13 +153,20 @@ function forgetRemoveKey(id: string) {
 }
 
 export async function hashRemoveKey(key: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(key),
+  );
+  return Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 // Text highlights also go to the highlights table so the backend recap sees them. Best effort: the
 // ledger already has the mark, and the insert is refused for rooms that aren't running.
-export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" | "underline" }>) {
+export async function saveHighlight(
+  a: Extract<Annotation, { kind: "highlight" | "underline" }>,
+) {
   const key = newRemoveKey();
   rememberRemoveKey(a.id, key);
   const { error } = await getSupabase()
@@ -143,7 +182,8 @@ export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" |
       author_color: a.color,
       remove_key_hash: await hashRemoveKey(key),
     });
-  if (error) console.warn("[room] highlight not saved to the database", error.message);
+  if (error)
+    console.warn("[room] highlight not saved to the database", error.message);
 }
 
 // Erasing a text mark removes its row too, so recaps and browsers that load the room later don't
@@ -152,8 +192,16 @@ export async function saveHighlight(a: Extract<Annotation, { kind: "highlight" |
 export async function removeSavedHighlight(id: string, docId: string) {
   const key = removeKeyFor(id);
   if (!key) return;
-  const { error } = await getSupabase().rpc("remove_highlight", { p_id: id, p_room: docId, p_key: key });
-  if (error) console.warn("[room] highlight not removed from the database", error.message);
+  const { error } = await getSupabase().rpc("remove_highlight", {
+    p_id: id,
+    p_room: docId,
+    p_key: key,
+  });
+  if (error)
+    console.warn(
+      "[room] highlight not removed from the database",
+      error.message,
+    );
   else forgetRemoveKey(id);
 }
 
@@ -175,7 +223,9 @@ export function youtubeId(url: string): string | null {
 
 export async function youtubeTitle(url: string): Promise<string | null> {
   try {
-    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`);
+    const res = await fetch(
+      `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`,
+    );
     if (!res.ok) return null;
     const body = (await res.json()) as { title?: string };
     return body.title ?? null;
