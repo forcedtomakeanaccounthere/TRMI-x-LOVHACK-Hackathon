@@ -15,6 +15,7 @@ import {
   RemoveDrawingRequest,
   Drawing as DrawingSchema,
   ExportSummaryQuery,
+  OriginalFileResponse,
   CatchupRequest,
   CatchupResponse,
   ExplainRequest,
@@ -674,6 +675,17 @@ export const openApiDocument = createDocument({
             },
           },
           "404": failure("Summary not ready yet"),
+        },
+      },
+    },
+    "/api/rooms/{id}/original": {
+      get: {
+        tags: ["Rooms"],
+        summary: "Get a short-lived download link for the file a room was made from",
+        requestParams: { path: roomId },
+        responses: {
+          "200": reply("A signed link that downloads the original under its file name", OriginalFileResponse),
+          "404": failure("Unknown or deleted room, a room with no file (link, text, video), or a missing file"),
         },
       },
     },

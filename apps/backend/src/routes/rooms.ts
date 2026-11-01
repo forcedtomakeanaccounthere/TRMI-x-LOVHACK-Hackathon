@@ -20,6 +20,7 @@ import {
   CreateDrawingRequest,
   RemoveDrawingRequest,
   ExportSummaryQuery,
+  type OriginalFileResponse,
   type Drawing,
   DashboardQuery,
   RecapData,
@@ -1053,6 +1054,47 @@ roomsRouter.get("/:id/summary/export", optionalAuth, async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(txt);
   }
+});
+
+// GET /api/rooms/:id/original: a short-lived signed link that downloads the file the room was made
+// from, under its original name. Anyone who can read the room can download it, like the summary
+// export. File rooms keep the original in the private "files" bucket, PDF rooms in "pdfs"; rooms made
+// from a link, text or a video have no file.
+roomsRouter.get("/:id/original", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const { data: room, error } = await supabaseAdmin()
+    .from("rooms")
+    .select("kind, status, pdf_path, source_meta")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const meta = room.source_meta as { format?: string; file_name?: string } | null;
+  let bucket: string;
+  let path: string;
+  if (room.kind === "file" && meta?.format) {
+    bucket = FILES_BUCKET;
+    path = `${id}.${meta.format}`;
+  } else if (room.kind === "pdf" && room.pdf_path) {
+    bucket = "pdfs";
+    path = room.pdf_path as string;
+  } else {
+    throw new HttpError(404, "This room has no original file");
+  }
+  const fileName = meta?.file_name?.trim() || path;
+
+  const ttl = env.ORIGINAL_URL_TTL_SECONDS;
+  const { data: signed, error: signError } = await supabaseAdmin()
+    .storage.from(bucket)
+    .createSignedUrl(path, ttl, { download: fileName });
+  // A room whose file is gone (removed by hand, or a failed upload) has nothing to download.
+  if (signError || !signed?.signedUrl) {
+    console.error(`[rooms] could not sign ${bucket}/${path}:`, signError);
+    throw new HttpError(404, "The original file isn't available");
+  }
+  res.set("Cache-Control", "no-store");
+  res.json({ url: signed.signedUrl, file_name: fileName, expires_in: ttl } satisfies OriginalFileResponse);
 });
 
 // GET /api/rooms/:id/drawings

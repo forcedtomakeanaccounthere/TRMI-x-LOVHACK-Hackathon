@@ -577,6 +577,14 @@ export const ExportSummaryQuery = z.object({
 });
 export type ExportSummaryQuery = z.infer<typeof ExportSummaryQuery>;
 
+// GET /api/rooms/:id/original: a short-lived link that downloads the file a room was made from.
+export const OriginalFileResponse = z.object({
+  url: z.string().url(),
+  file_name: z.string(),
+  expires_in: z.number().int().positive(), // seconds
+});
+export type OriginalFileResponse = z.infer<typeof OriginalFileResponse>;
+
 // --- Study tools (apps/backend /api/study, apps/ai /study) ---
 // A quiz, flashcards, a mind map or an infographic made by the AI from one or more documents (rooms).
 // Output shapes must match apps/ai/app/schemas.py. source_id is the room an item came from, or null.
