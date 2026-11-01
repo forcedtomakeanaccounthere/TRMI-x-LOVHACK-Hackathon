@@ -212,6 +212,25 @@ export type RoomMember = z.infer<typeof RoomMember>;
 export const RoomMembersResponse = z.object({ members: z.array(RoomMember), settings: RoomSettings });
 export type RoomMembersResponse = z.infer<typeof RoomMembersResponse>;
 
+// --- Attached sources (GET/POST/DELETE /api/rooms/:id/sources, table room_attachments) ---
+
+export const MAX_ROOM_SOURCES = 20;
+export const AddSourceRequest = z.object({ source_room_id: z.string().min(1).max(64) });
+export const AttachedSource = z.object({
+  id: z.string(), // the attached room
+  kind: RoomKind,
+  title: z.string(),
+  source_url: z.string().nullable(),
+  format: z.string().nullable(),
+  status: z.string(),
+  position: z.number().int(),
+  added_by: z.string().nullable(),
+  added_by_name: z.string().nullable(),
+});
+export type AttachedSource = z.infer<typeof AttachedSource>;
+export const RoomSourcesResponse = z.object({ sources: z.array(AttachedSource) });
+export type RoomSourcesResponse = z.infer<typeof RoomSourcesResponse>;
+
 // Guests prove who they are with a secret their browser keeps: the first write from a guest id
 // stores its hash, and later requests must send the same key (headers X-Guest-Id, X-Guest-Key).
 export const GUEST_ID_HEADER = "x-guest-id";

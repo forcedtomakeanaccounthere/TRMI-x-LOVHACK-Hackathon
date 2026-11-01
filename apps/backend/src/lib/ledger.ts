@@ -150,6 +150,15 @@ export function assertParticipant(access: Access) {
   }
 }
 
+/** Throws unless the caller may read the room's ledger: removed people and, where guests aren't allowed, guests can't. */
+export function assertReader(access: Access) {
+  if (access.kicked) throw new HttpError(403, "You were removed from this room.");
+  const isOwner = access.identity?.id === access.ownerId;
+  if (!access.settings.allowGuests && !access.identity?.signedIn && !isOwner) {
+    throw new HttpError(403, "This room is for signed-in members only.");
+  }
+}
+
 // --- Checking events ---
 
 type Authored = "annotation" | "artifact" | "doc";

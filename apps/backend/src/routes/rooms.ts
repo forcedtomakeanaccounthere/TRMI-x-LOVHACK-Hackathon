@@ -54,6 +54,7 @@ import { supabaseAdmin } from "../lib/supabase";
 import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
 import { ledgerRoutes } from "./ledger";
+import { sourcesRoutes } from "./sources";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -1157,3 +1158,5 @@ roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) =>
 
 // The workspace ledger: GET/POST /:id/events and GET /:id/members (routes/ledger.ts).
 ledgerRoutes(roomsRouter);
+// Attached documents: GET/POST /:id/sources, DELETE /:id/sources/:sourceId (routes/sources.ts).
+sourcesRoutes(roomsRouter);

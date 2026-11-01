@@ -4,17 +4,19 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(26);
 
 insert into rooms (id, kind, title) values ('ledg0001', 'link', 'Ledger room');
 insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
 values ('ledg0001', 'e1', 'chat', 'guest-abcd1234', 'Gus', '{"type": "chat"}', now());
 insert into room_members (room_id, member_id, name, role) values ('ledg0001', 'guest-abcd1234', 'Gus', 'viewer');
 insert into room_settings (room_id) values ('ledg0001');
+insert into rooms (id, kind, title) values ('ledg0002', 'link', 'Attached'), ('ledg0003', 'link', 'Also attached');
+insert into room_attachments (room_id, source_room_id, position) values ('ledg0001', 'ledg0002', 0), ('ledg0001', 'ledg0003', 1);
 
 select ok(relrowsecurity, format('RLS is enabled on %s', relname))
 from pg_class
-where oid in ('public.room_events'::regclass, 'public.room_members'::regclass, 'public.room_settings'::regclass)
+where oid in ('public.room_events'::regclass, 'public.room_members'::regclass, 'public.room_settings'::regclass, 'public.room_attachments'::regclass)
 order by relname;
 
 -- Defaults match the frontend's DEFAULT_SETTINGS.
@@ -62,6 +64,11 @@ select throws_ok(
   '23514', null, 'guests can''t default to admin'
 );
 
+select throws_ok(
+  $$insert into room_attachments (room_id, source_room_id, position) values ('ledg0002', 'ledg0002', 0)$$,
+  '23514', null, 'a room is not attached to itself'
+);
+
 -- Browsers (anon and authenticated) can't reach any of it.
 set local role anon;
 select throws_ok($$select 1 from room_events$$, '42501', null, 'anon cannot read the ledger');
@@ -72,6 +79,7 @@ select throws_ok(
 );
 select throws_ok($$select 1 from room_members$$, '42501', null, 'anon cannot read members (or guest key hashes)');
 select throws_ok($$update room_settings set allow_guests = false$$, '42501', null, 'anon cannot change settings');
+select throws_ok($$select 1 from room_attachments$$, '42501', null, 'anon cannot read attachments');
 
 set local role authenticated;
 select throws_ok($$select 1 from room_events$$, '42501', null, 'a signed-in browser cannot read the ledger either');
@@ -82,10 +90,18 @@ select throws_ok(
 select throws_ok($$delete from room_events$$, '42501', null, 'a signed-in browser cannot delete events');
 
 reset role;
+-- Deleting an attached room removes only that attachment.
+delete from rooms where id = 'ledg0003';
+select results_eq(
+  $$select source_room_id from room_attachments where room_id = 'ledg0001'$$,
+  $$values ('ledg0002')$$,
+  'deleting an attached room detaches it'
+);
 -- Deleting a room takes its ledger with it.
 delete from rooms where id = 'ledg0001';
 select is_empty($$select 1 from room_events where room_id = 'ledg0001'$$, 'events go with the room');
 select is_empty($$select 1 from room_members where room_id = 'ledg0001'$$, 'members go with the room');
+select is_empty($$select 1 from room_attachments where room_id = 'ledg0001'$$, 'attachments go with the room');
 
 select * from finish();
 rollback;

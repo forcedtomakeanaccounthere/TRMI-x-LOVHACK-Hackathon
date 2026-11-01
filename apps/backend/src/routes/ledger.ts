@@ -14,6 +14,7 @@ import { env } from "../env";
 import {
   ADD_TYPE,
   assertParticipant,
+  assertReader,
   authoredRef,
   checkEvent,
   project,
@@ -41,15 +42,6 @@ const eventsPerIp = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many changes at once. Try again in a minute." },
 });
-
-/** Throws unless the caller may read the room's ledger: removed people and, where guests aren't allowed, guests can't. */
-function assertReader(access: Access) {
-  if (access.kicked) throw new HttpError(403, "You were removed from this room.");
-  const isOwner = access.identity?.id === access.ownerId;
-  if (!access.settings.allowGuests && !access.identity?.signedIn && !isOwner) {
-    throw new HttpError(403, "This room is for signed-in members only.");
-  }
-}
 
 /**
  * A guest's first write claims its id: the hash of its key is stored, and later requests must send
