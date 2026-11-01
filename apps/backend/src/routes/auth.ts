@@ -1,7 +1,9 @@
 import {
+  ForgotPasswordRequest,
   LoginRequest,
   RefreshRequest,
   ResendVerificationRequest,
+  ResetPasswordRequest,
   SignupRequest,
   type AuthSession,
   type MessageResponse,
@@ -11,7 +13,7 @@ import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { env, webOrigin } from "../env";
-import { sendVerificationEmail } from "../lib/mailer";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/mailer";
 import { supabaseAdmin, supabaseAuth } from "../lib/supabase";
 import { requireAuth, toAuthUser } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -143,6 +145,63 @@ authRouter.post("/resend-verification", authLimiter, async (req, res) => {
   }
 
   res.json({ message: "If that account needs verifying, we sent a new email." } satisfies MessageResponse);
+});
+
+// POST /api/auth/forgot-password  { email }
+// Emails a verified account a link to the frontend's /forgot-password page, where a new password is
+// set. The reply is the same for unknown, unverified and verified addresses, so it can't be used to
+// discover accounts.
+const RESET_SENT = "If that email has an account, we sent a link to reset its password.";
+
+authRouter.post("/forgot-password", authLimiter, async (req, res) => {
+  const { email } = ForgotPasswordRequest.parse(req.body);
+
+  // A recovery link is made without creating a user for an unknown address.
+  const { data, error } = await supabaseAdmin().auth.admin.generateLink({ type: "recovery", email });
+  if (error && error.code !== "user_not_found") console.warn("[auth] reset link failed", error.code ?? error.message);
+  if (!error && data.user.email_confirmed_at) {
+    const link = `${webOrigin}/forgot-password?${new URLSearchParams({ token_hash: data.properties.hashed_token })}`;
+    try {
+      await sendPasswordResetEmail(email, link, typeof data.user.user_metadata?.name === "string" ? data.user.user_metadata.name : undefined);
+    } catch (err) {
+      console.error("[auth] could not send the password reset email", err);
+      throw new HttpError(502, "Could not send the reset email. Please try again.");
+    }
+  }
+
+  res.json({ message: RESET_SENT } satisfies MessageResponse);
+});
+
+// POST /api/auth/reset-password  { token_hash, password }
+// Uses the emailed link's token once, sets the new password, then signs the account out everywhere
+// so a session someone else may hold stops working. The frontend then sends the person to sign in.
+// A bad token's message says "expired": /forgot-password looks for it to offer a new link.
+const EXPIRED_LINK = "This reset link has expired or was already used. Ask for a new one.";
+
+authRouter.post("/reset-password", authLimiter, async (req, res) => {
+  const { token_hash, password } = ResetPasswordRequest.parse(req.body);
+
+  const { data, error } = await supabaseAuth().auth.verifyOtp({ token_hash, type: "recovery" });
+  if (error || !data.user || !data.session) {
+    if (error && error.code !== "otp_expired") console.warn("[auth] reset token refused", error.code ?? error.message);
+    throw new HttpError(400, EXPIRED_LINK);
+  }
+
+  const { error: updateError } = await supabaseAdmin().auth.admin.updateUserById(data.user.id, { password });
+  if (updateError) {
+    if (updateError.code === "weak_password") throw new HttpError(400, updateError.message);
+    if (updateError.code === "same_password") throw new HttpError(400, "Choose a password you haven't used here before.");
+    console.error("[auth] could not set the new password", updateError);
+    throw new HttpError(500, "Could not change your password. Please try again.");
+  }
+
+  // The password has changed either way; a sign-out that fails is logged, not reported.
+  const { error: signOutError } = await supabaseAdmin().auth.admin.signOut(data.session.access_token, "global");
+  if (signOutError && !isAuthSessionMissingError(signOutError)) {
+    console.error("[auth] could not sign the account out after a reset", signOutError.code ?? signOutError.message);
+  }
+
+  res.json({ message: "Your password was changed. Sign in with the new one." } satisfies MessageResponse);
 });
 
 // POST /api/auth/login  { email, password }
