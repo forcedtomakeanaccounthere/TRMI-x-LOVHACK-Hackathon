@@ -11,9 +11,11 @@ cd /app/apps/ai
 uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port "$AI_PORT" &
 ai_pid=$!
 
-# The backend resumes indexing at startup, so give apps/ai a moment to come up first.
+# The backend resumes indexing at startup, so it starts only once apps/ai answers /health.
+ai_ready=0
 for _ in $(seq 1 60); do
   if node -e "fetch('http://127.0.0.1:${AI_PORT}/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"; then
+    ai_ready=1
     break
   fi
   if ! kill -0 "$ai_pid" 2>/dev/null; then
@@ -22,6 +24,12 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
+if [ "$ai_ready" != 1 ]; then
+  echo "[start] apps/ai didn't answer /health within 60 s; stopping" >&2
+  kill -TERM "$ai_pid" 2>/dev/null || true
+  wait "$ai_pid" 2>/dev/null || true
+  exit 1
+fi
 
 cd /app/apps/backend
 node dist/index.js &

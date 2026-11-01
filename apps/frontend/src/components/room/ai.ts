@@ -152,11 +152,13 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
       preview: true,
     };
   }
+  // Documents the backend doesn't have (the demo room's) were never sent; for the rest, it failed.
+  const why = targets.length ? "Couldn't reach the AI server" : "The AI only answers about documents saved on the server";
   const blocks = docs.filter((d) => req.sources.includes(d.id)).flatMap(blocksOf);
   const found = search(blocks, `${req.question} ${req.quote ?? ""}`);
   if (found.length === 0) {
     return {
-      text: "Couldn't reach the AI server, and nothing in the chosen sources matches those words.",
+      text: `${why}, and nothing in the chosen sources matches those words.`,
       citations: [],
       preview: true,
     };
@@ -164,7 +166,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
   const titles = new Map(docs.map((d) => [d.id, d.title]));
   return {
     text: [
-      "Couldn't reach the AI server, so here are the passages that match best:",
+      `${why}, so here are the passages that match best:`,
       ...found.map((b) => `“${clip(b.text)}” — ${titles.get(b.doc) ?? "source"}`),
     ].join("\n\n"),
     citations: found.map((b) => ({

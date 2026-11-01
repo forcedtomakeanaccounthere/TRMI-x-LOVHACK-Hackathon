@@ -156,5 +156,6 @@ describe("ask", () => {
     expect(lens.preview).toBe(true);
     expect(lens.text).toMatch(/saved in this box/);
     expect(demo.preview).toBe(true);
+    expect(demo.text).not.toMatch(/Couldn't reach/);
   });
 });
