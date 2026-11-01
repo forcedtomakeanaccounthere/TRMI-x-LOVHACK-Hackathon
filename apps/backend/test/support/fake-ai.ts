@@ -105,6 +105,17 @@ export const DEFAULT_HANDLERS: Record<string, FakeAiHandler> = {
       { start: 4, duration: 5, text: "Fake transcript second segment" },
     ],
   }),
+  "/huddle-notes": (body) => {
+    const segments = (body.segments as { id: string; speaker: string; text: string }[]) ?? [];
+    const firstIds = segments.slice(0, 2).map((s) => s.id);
+    return {
+      summary: "Fake huddle notes summary",
+      key_points: firstIds.length ? [{ text: "Key point 1", segment_ids: firstIds }] : [],
+      decisions: firstIds.length ? [{ text: "Decision 1", segment_ids: [firstIds[0]] }] : [],
+      action_items: firstIds.length ? [{ text: "Action item 1", owner: "Sam", segment_ids: [firstIds[0]] }] : [],
+      open_questions: firstIds.length ? [{ text: "Open question 1", segment_ids: [firstIds[0]] }] : [],
+    };
+  },
 };
 
 async function readJson(req: IncomingMessage): Promise<Body> {

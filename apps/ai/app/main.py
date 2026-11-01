@@ -6,7 +6,17 @@ from fastapi import Depends, FastAPI, Request
 
 from app.config import get_settings
 from app.context import RequestIdFilter, request_id
-from app.routers import answer, embed, extras, moderate, recap, study, summary, transcript
+from app.routers import (
+    answer,
+    embed,
+    extras,
+    huddle_notes,
+    moderate,
+    recap,
+    study,
+    summary,
+    transcript,
+)
 from app.schemas import HealthResponse
 from app.security import require_internal
 from app.services.providers import configured_providers
@@ -25,6 +35,7 @@ get_settings()
 app = FastAPI(title="LinkRoom AI")
 
 app.include_router(recap.router, dependencies=[Depends(require_internal)])
+app.include_router(huddle_notes.router, dependencies=[Depends(require_internal)])
 app.include_router(embed.router, dependencies=[Depends(require_internal)])
 app.include_router(summary.router, dependencies=[Depends(require_internal)])
 app.include_router(answer.router, dependencies=[Depends(require_internal)])

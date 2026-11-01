@@ -18,12 +18,14 @@ import {
   assertReader,
   authoredRef,
   checkEvent,
+  claimGuest,
   project,
   roomAccess,
   type Access,
   type MemberRow,
   type RuleContext,
 } from "../lib/ledger";
+import { onMembershipEvents } from "../lib/huddles";
 import { supabaseAdmin } from "../lib/supabase";
 import { optionalAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -43,41 +45,7 @@ const eventsPerIp = rateLimit({
   message: { error: "Too many changes at once. Try again in a minute." },
 });
 
-/**
- * A guest's first write claims its id: the hash of its key is stored, and later requests must send
- * the same key. Done before anything is written, and checked again after, so two browsers racing for
- * the same id can't both win.
- */
-async function claimGuest(access: Access, name: string) {
-  const me = access.identity!;
-  if (me.signedIn || access.member?.key_hash) return;
-  const db = supabaseAdmin();
-  if (!access.member) {
-    const { error } = await db
-      .from("room_members")
-      .upsert(
-        { room_id: access.roomId, member_id: me.id, name, key_hash: me.keyHash },
-        { onConflict: "room_id,member_id", ignoreDuplicates: true },
-      );
-    if (error) throw error;
-  } else {
-    const { error } = await db
-      .from("room_members")
-      .update({ key_hash: me.keyHash })
-      .eq("room_id", access.roomId)
-      .eq("member_id", me.id)
-      .is("key_hash", null);
-    if (error) throw error;
-  }
-  const { data, error } = await db
-    .from("room_members")
-    .select("key_hash")
-    .eq("room_id", access.roomId)
-    .eq("member_id", me.id)
-    .single();
-  if (error) throw error;
-  if (data.key_hash !== me.keyHash) throw new HttpError(403, "That guest id belongs to someone else.");
-}
+
 
 // Who added each annotation, artifact and document the batch points at (the actor of its add event).
 async function loadAuthors(roomId: string, events: LedgerEvent[]) {
@@ -257,6 +225,10 @@ export function ledgerRoutes(router: Router) {
       if (result) outcome = result;
     }
     if (!outcome) throw new HttpError(503, "The room is busy. Try again in a moment.");
+
+    const acceptedSet = new Set(outcome.accepted);
+    const acceptedEvents = events.filter((e) => acceptedSet.has(e.id));
+    void onMembershipEvents(id, acceptedEvents);
 
     res.json({ accepted: [...accepted, ...outcome.accepted], rejected: [...rejected, ...outcome.rejected] } satisfies PostEventsResponse);
   });

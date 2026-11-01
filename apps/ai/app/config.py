@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Whole fallback chain for one recap. Below apps/backend's 120 s timeout, so the backend gets
     # our 502 instead of giving up first while we keep spending tokens.
     recap_deadline_seconds: float = 100.0
+    huddle_notes_deadline_seconds: float = 100.0
 
     # Each *_model may be a comma-separated list, tried in order before moving to the next provider.
     # Defaults are models that worked on free tiers (checked 2026-10-31), fastest-answering first:
