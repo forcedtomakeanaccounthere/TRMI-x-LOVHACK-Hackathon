@@ -221,16 +221,14 @@ function Scroller({
     }
   }, [jump, docId, scrollToBlock, version > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Follow mode: go where the leader is reading.
+  // Follow mode: go where the leader is reading. Which document is open comes from the leader's
+  // presence (RoomProvider); a scroll only moves within it, since the last scroll may be from a
+  // document they have left (a video sends none).
   const leaderScroll = following ? channel.scrolls[following] : undefined;
   useEffect(() => {
-    if (!leaderScroll) return;
-    if (leaderScroll.doc !== docId) {
-      room.setActiveDoc(leaderScroll.doc);
-      return;
-    }
+    if (!leaderScroll || leaderScroll.doc !== docId) return;
     scrollToBlock(leaderScroll.block, leaderScroll.ratio);
-  }, [leaderScroll, docId, scrollToBlock]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leaderScroll, docId, scrollToBlock]);
 
   // Tell the room where you're reading.
   useEffect(() => {
