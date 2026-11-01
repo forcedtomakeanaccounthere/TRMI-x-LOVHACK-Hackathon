@@ -154,6 +154,30 @@ describe("moving boxes, replies and reactions", () => {
   });
 });
 
+describe("notebook", () => {
+  it("keeps entries newest first, applies edits with who made them, and drops removed ones", () => {
+    const bo = { id: "u-bo", name: "Bo", color: "#14b8a6" };
+    const entry = (id: string, kind: "text" | "quote" | "image") => ({
+      id,
+      kind,
+      text: "",
+      quote: kind === "quote" ? { doc: "room1", block: "b2", text: "Liberty is to faction" } : null,
+      image: null,
+      author: ana,
+      at: "x",
+    });
+    const state = reduceLedger(primary, [
+      ev({ type: "notebook.add", entry: { ...entry("n1", "text"), text: "first" } }),
+      ev({ type: "notebook.add", entry: entry("n2", "quote") }),
+      ev({ type: "notebook.add", entry: entry("n3", "image") }),
+      { ...ev({ type: "notebook.edit", entry_id: "n1", text: "first, edited" }), actor: bo },
+      ev({ type: "notebook.remove", entry_id: "n3" }),
+    ]);
+    expect(state.notebook.map((e) => e.id)).toEqual(["n2", "n1"]);
+    expect(state.notebook[1]).toMatchObject({ text: "first, edited", edited_by: bo });
+  });
+});
+
 describe("roles", () => {
   const base = { roles: {}, settings: DEFAULT_SETTINGS };
 

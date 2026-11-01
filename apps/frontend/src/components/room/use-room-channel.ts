@@ -52,12 +52,6 @@ type Handlers = {
 
 export type ChannelStatus = "solo" | "connecting" | "live";
 
-// The shared notebook's live edits (Yjs updates, base64), and a newcomer's request for what it lacks
-// (its state vector). Ephemeral: the merged notebook is saved by apps/backend.
-export type NotebookMessage = { type: "update"; update: string } | { type: "request"; from: string; sv: string };
-// Supabase Realtime caps a message's size; a larger catch-up is left to the saved copy.
-const MAX_NOTEBOOK_MESSAGE_CHARS = 200_000;
-
 // Asks peers for the events this browser lacks, by listing the ids it has. A list too long for one
 // realtime message (ids: null) means "send me everything".
 export type SyncRequest = { from: string; ids: string[] | null; to?: string; reply?: boolean };
@@ -122,12 +116,6 @@ function createSender() {
       for (const batch of chunkEvents(events)) broadcast("ledger", { events: batch });
     },
     kick: (member: string) => broadcast("kick", { member }),
-    notebook: (update: string, to?: string) => {
-      if (id && update.length <= MAX_NOTEBOOK_MESSAGE_CHARS) broadcast("nb", { from: id, to, update });
-    },
-    notebookRequest: (sv: string) => {
-      if (id) broadcast("nb-req", { from: id, sv });
-    },
   };
 }
 
@@ -148,7 +136,6 @@ export function useRoomChannel(
   const [scrolls, setScrolls] = useState<Record<string, RemoteScroll>>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
   const focusingRef = useRef(new Set<string>());
-  const notebookListeners = useRef(new Set<(message: NotebookMessage) => void>());
   const handlersRef = useRef(handlers);
   const viewRef = useRef(view);
 
@@ -261,15 +248,6 @@ export function useRoomChannel(
             });
           }
         })
-        .on("broadcast", { event: "nb" }, ({ payload }) => {
-          const p = payload as { to?: string; update: string };
-          if (p.to && p.to !== meId) return;
-          for (const listener of notebookListeners.current) listener({ type: "update", update: p.update });
-        })
-        .on("broadcast", { event: "nb-req" }, ({ payload }) => {
-          const p = payload as { from: string; sv: string };
-          for (const listener of notebookListeners.current) listener({ type: "request", from: p.from, sv: p.sv });
-        })
         .on("broadcast", { event: "status" }, ({ payload }) => {
           emitRoomStatus((payload ?? {}) as RoomStatusMessage);
         })
@@ -351,13 +329,5 @@ export function useRoomChannel(
     send.attach(status === "live" ? channelRef.current : null, meId);
   }, [send, status, meId]);
 
-  // The notebook listens here for live edits and catch-up requests; returns the unsubscribe function.
-  const [onNotebook] = useState(() => (listener: (message: NotebookMessage) => void) => {
-    notebookListeners.current.add(listener);
-    return () => {
-      notebookListeners.current.delete(listener);
-    };
-  });
-
-  return { status, peers, cursors, scrolls, send, onNotebook };
+  return { status, peers, cursors, scrolls, send };
 }

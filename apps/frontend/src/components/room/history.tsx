@@ -9,6 +9,7 @@ import {
   GearSixIcon,
   HighlighterIcon,
   type Icon,
+  NotebookIcon,
   PenNibIcon,
   ScanIcon,
   ShieldCheckIcon,
@@ -35,6 +36,7 @@ const FILTERS = [
   { id: "sources", label: "Sources" },
   { id: "marks", label: "Annotations" },
   { id: "ai", label: "AI" },
+  { id: "notebook", label: "Notebook" },
   { id: "people", label: "People" },
 ] as const;
 type Filter = (typeof FILTERS)[number]["id"];
@@ -53,6 +55,10 @@ const groupOf = (e: LedgerEvent): Filter | null => {
     case "artifact.add":
     case "artifact.remove":
       return "ai";
+    case "notebook.add":
+    case "notebook.edit":
+    case "notebook.remove":
+      return "notebook";
     case "role.set":
     case "member.kick":
     case "settings.update":
@@ -78,6 +84,14 @@ export function History() {
     for (const d of state.docs) m.set(d.id, d.title);
     return m;
   }, [events, state.docs]);
+  // Who added each notebook entry, and what it was, for lines about editing or removing it.
+  const notebookEntries = useMemo(() => {
+    const m = new Map<string, { kind: string; author: { id: string; name: string } }>();
+    for (const e of events)
+      if (e.type === "notebook.add") m.set(e.entry.id, { kind: e.entry.kind, author: e.entry.author });
+    return m;
+  }, [events]);
+
   const annotationDoc = useMemo(() => {
     const m = new Map<string, { doc: string; block: string; kind: string; author: { id: string; name: string } }>();
     for (const e of events)
@@ -228,6 +242,60 @@ export function History() {
             </>
           ),
         };
+      case "notebook.add": {
+        const n = e.entry;
+        return {
+          icon: NotebookIcon,
+          tint: "#0ea5e9",
+          text:
+            n.kind === "quote" && n.quote ? (
+              <>
+                saved a passage from {t(n.quote.doc)} to the notebook: “{n.quote.text.slice(0, 60)}
+                {n.quote.text.length > 60 ? "…" : ""}”
+              </>
+            ) : n.kind === "image" ? (
+              <>added an image to the notebook</>
+            ) : (
+              <>
+                wrote in the notebook: “{n.text.slice(0, 60)}
+                {n.text.length > 60 ? "…" : ""}”
+              </>
+            ),
+          jump: n.kind === "quote" && n.quote ? { doc: n.quote.doc, block: n.quote.block } : undefined,
+        };
+      }
+      case "notebook.edit": {
+        const n = notebookEntries.get(e.entry_id);
+        return {
+          icon: NotebookIcon,
+          tint: "#64748b",
+          text:
+            n && n.author.id !== e.actor.id ? (
+              <>
+                edited <Owner name={n.author.name} />
+                notebook entry
+              </>
+            ) : (
+              <>edited their notebook entry</>
+            ),
+        };
+      }
+      case "notebook.remove": {
+        const n = notebookEntries.get(e.entry_id);
+        return {
+          icon: TrashIcon,
+          tint: "#94a3b8",
+          text:
+            n && n.author.id !== e.actor.id ? (
+              <>
+                removed <Owner name={n.author.name} />
+                notebook entry
+              </>
+            ) : (
+              <>removed a notebook entry</>
+            ),
+        };
+      }
       case "artifact.add":
         return {
           icon: SparkleIcon,

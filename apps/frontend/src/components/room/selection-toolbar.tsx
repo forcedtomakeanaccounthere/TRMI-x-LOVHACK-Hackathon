@@ -1,6 +1,6 @@
 "use client";
 
-import { ChatCircleTextIcon, CopyIcon, SparkleIcon, TextUnderlineIcon } from "@phosphor-icons/react";
+import { ChatCircleTextIcon, CopyIcon, NotebookIcon, SparkleIcon, TextUnderlineIcon } from "@phosphor-icons/react";
 import { motion } from "motion/react";
 import { useLayoutEffect, useState } from "react";
 import { toast } from "sonner";
@@ -15,11 +15,12 @@ type Props = {
   onHighlight: (color: string) => void;
   onUnderline: () => void;
   onComment: () => void;
+  onSave: () => void;
   onAsk: () => void;
 };
 
 // Floats above selected text: copy, highlight (in any ink), underline, comment and ask the AI.
-export function SelectionToolbar({ selection, at, onHighlight, onUnderline, onComment, onAsk }: Props) {
+export function SelectionToolbar({ selection, at, onHighlight, onUnderline, onComment, onSave, onAsk }: Props) {
   const { perms } = useRoom();
   const item =
     "flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[0.75rem] font-medium text-pearl/85 hover:bg-white/10 hover:text-pearl active:scale-95 transition";
@@ -92,6 +93,15 @@ export function SelectionToolbar({ selection, at, onHighlight, onUnderline, onCo
           </button>
           <button type="button" className={item} onClick={onComment}>
             <ChatCircleTextIcon className="size-4" /> Comment
+          </button>
+          <button
+            type="button"
+            className={item}
+            onClick={onSave}
+            aria-label="Save to notebook"
+            title="Save to notebook"
+          >
+            <NotebookIcon className="size-4" />
           </button>
         </>
       )}

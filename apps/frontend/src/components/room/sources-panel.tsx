@@ -142,7 +142,7 @@ export function SourcesPanel({ onCollapse }: { onCollapse?: () => void }) {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem variant="destructive" onSelect={() => actions.removeDoc(d.id)}>
-                        Remove from room
+                        Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
