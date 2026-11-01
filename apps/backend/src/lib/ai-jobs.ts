@@ -1,8 +1,4 @@
-import {
-  EmbedResponse,
-  RoomSummary,
-  type RoomAiStatus,
-} from "@linkroom/shared";
+import { EmbedResponse, RoomSummary, type RoomAiStatus } from "@linkroom/shared";
 import { HttpError } from "../middleware/error";
 import { callAi } from "./ai";
 import { chunkRoom, embeddingText, type Chunk } from "./chunk";
@@ -11,11 +7,7 @@ import { summaryToDocHtml } from "./youtube";
 
 // The t{n} transcript paragraphs a YouTube room was made from (room_sources, 0013).
 async function transcriptHtml(roomId: string) {
-  const { data, error } = await supabaseAdmin()
-    .from("room_sources")
-    .select("data")
-    .eq("room_id", roomId)
-    .single();
+  const { data, error } = await supabaseAdmin().from("room_sources").select("data").eq("room_id", roomId).single();
   if (error) throw error;
   return ((data.data as { html?: string }).html ?? "") as string;
 }
@@ -50,8 +42,7 @@ type IndexResult = { chunks: number; embedded: boolean; summarized: boolean };
  * room_ai.status goes "indexing", then "summarizing", then "ready" with the summary.
  */
 export async function indexRoom(roomId: string): Promise<IndexResult> {
-  if (running.has(roomId))
-    return { chunks: 0, embedded: false, summarized: false };
+  if (running.has(roomId)) return { chunks: 0, embedded: false, summarized: false };
   running.add(roomId);
   try {
     const db = supabaseAdmin();
@@ -65,17 +56,10 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
     if (error) throw error;
 
     // A YouTube room is chunked from its transcript, which keeps the times, not from the doc it shows.
-    const chunks = chunkRoom(
-      room.kind === "youtube"
-        ? { ...room, content_html: await transcriptHtml(roomId) }
-        : room,
-    );
+    const chunks = chunkRoom(room.kind === "youtube" ? { ...room, content_html: await transcriptHtml(roomId) } : room);
     const embeddings = chunks.length ? await embedChunks(roomId, chunks) : null;
 
-    const { error: deleteError } = await db
-      .from("chunks")
-      .delete()
-      .eq("room_id", roomId);
+    const { error: deleteError } = await db.from("chunks").delete().eq("room_id", roomId);
     if (deleteError) throw deleteError;
     for (let i = 0; i < chunks.length; i += INSERT_BATCH) {
       const rows = chunks.slice(i, i + INSERT_BATCH).map((chunk) => ({
@@ -94,12 +78,7 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
     }
 
     await saveState(roomId, "summarizing");
-    const summarized = await summarizeRoom(
-      roomId,
-      (room.title as string | null) ?? "",
-      chunks,
-      room.kind as string,
-    );
+    const summarized = await summarizeRoom(roomId, (room.title as string | null) ?? "", chunks, room.kind as string);
     return { chunks: chunks.length, embedded: Boolean(embeddings), summarized };
   } finally {
     running.delete(roomId);
@@ -111,12 +90,7 @@ export async function indexRoom(roomId: string): Promise<IndexResult> {
  * saved, so a summary that can't be made doesn't fail the room: it is "ready" (searchable, Q&A
  * works) with no summary and the reason in room_ai.error. Returns whether a summary was saved.
  */
-export async function summarizeRoom(
-  roomId: string,
-  title: string,
-  chunks: Chunk[],
-  kind = "link",
-) {
+export async function summarizeRoom(roomId: string, title: string, chunks: Chunk[], kind = "link") {
   let summary: RoomSummary;
   try {
     summary = await callAi(
@@ -127,9 +101,7 @@ export async function summarizeRoom(
           block_ids,
           content,
           // Headings are context for the model, so a very long one is cut to what apps/ai accepts.
-          heading_path: heading_path
-            .slice(0, MAX_SUMMARY_HEADINGS)
-            .map((h) => h.slice(0, MAX_SUMMARY_HEADING_CHARS)),
+          heading_path: heading_path.slice(0, MAX_SUMMARY_HEADINGS).map((h) => h.slice(0, MAX_SUMMARY_HEADING_CHARS)),
           page,
         })),
       },
@@ -138,21 +110,14 @@ export async function summarizeRoom(
     );
   } catch (err) {
     console.warn(`[ai-jobs] no summary for room ${roomId}:`, errorMessage(err));
-    const reason =
-      err instanceof HttpError ? err.message : "Something went wrong.";
-    await saveState(roomId, "ready", {
-      summary: null,
-      error: `The summary couldn't be made. ${reason}`,
-    });
+    const reason = err instanceof HttpError ? err.message : "Something went wrong.";
+    await saveState(roomId, "ready", { summary: null, error: `The summary couldn't be made. ${reason}` });
     return false;
   }
   // A video room reads as the detailed doc written from its transcript. Saved before "ready", so the
   // page that reloads on that Realtime event gets the doc.
   if (kind === "youtube") {
-    const { error } = await supabaseAdmin()
-      .from("rooms")
-      .update({ content_html: summaryToDocHtml(summary) })
-      .eq("id", roomId);
+    const { error } = await supabaseAdmin().from("rooms").update({ content_html: summaryToDocHtml(summary) }).eq("id", roomId);
     if (error) throw error;
   }
   await saveState(roomId, "ready", { summary });
@@ -166,11 +131,8 @@ export async function summarizeRoom(
 async function embedChunks(roomId: string, chunks: Chunk[]) {
   try {
     const batches: Chunk[][] = [];
-    for (let i = 0; i < chunks.length; i += EMBED_BATCH)
-      batches.push(chunks.slice(i, i + EMBED_BATCH));
-    const results: { model: string; vectors: number[][] }[] = new Array(
-      batches.length,
-    );
+    for (let i = 0; i < chunks.length; i += EMBED_BATCH) batches.push(chunks.slice(i, i + EMBED_BATCH));
+    const results: { model: string; vectors: number[][] }[] = new Array(batches.length);
     // A few batches in flight at once: a long document no longer waits on each batch in turn.
     let next = 0;
     let failed = false;
@@ -185,10 +147,7 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
             EmbedResponse,
             EMBED_TIMEOUT_MS,
           );
-          if (res.vectors.length !== batch.length)
-            throw new Error(
-              `got ${res.vectors.length} vectors for ${batch.length}`,
-            );
+          if (res.vectors.length !== batch.length) throw new Error(`got ${res.vectors.length} vectors for ${batch.length}`);
           results[n] = res;
         } catch (err) {
           failed = true; // the other workers stop sending: these vectors would be thrown away
@@ -196,22 +155,13 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
         }
       }
     };
-    await Promise.all(
-      Array.from(
-        { length: Math.min(EMBED_CONCURRENCY, batches.length) },
-        worker,
-      ),
-    );
+    await Promise.all(Array.from({ length: Math.min(EMBED_CONCURRENCY, batches.length) }, worker));
     const model = results[0]!.model;
     const changed = results.find((r) => r.model !== model);
-    if (changed)
-      throw new Error(`model changed from ${model} to ${changed.model}`);
+    if (changed) throw new Error(`model changed from ${model} to ${changed.model}`);
     return { model, vectors: results.flatMap((r) => r.vectors) };
   } catch (err) {
-    console.warn(
-      `[ai-jobs] no embeddings for room ${roomId}, keyword search only:`,
-      errorMessage(err),
-    );
+    console.warn(`[ai-jobs] no embeddings for room ${roomId}, keyword search only:`, errorMessage(err));
     return null;
   }
 }
@@ -247,8 +197,7 @@ export async function resumeIndexing(): Promise<number> {
 
     const rooms = (data as { room_id: string }[]).map((row) => row.room_id);
     if (!rooms.length) break;
-    if (!resumed)
-      console.log("[ai-jobs] resuming indexing for rooms left waiting");
+    if (!resumed) console.log("[ai-jobs] resuming indexing for rooms left waiting");
     for (const roomId of rooms) {
       await indexRoom(roomId).catch((err: unknown) => markFailed(roomId, err));
     }
@@ -280,17 +229,11 @@ export async function restartStuckIndexing(now = Date.now()): Promise<number> {
     .lt("updated_at", waitingBefore)
     .limit(RESUME_BATCH);
   if (error) throw error;
-  const stuck = (
-    data as { room_id: string; status: string; updated_at: string }[]
-  ).filter(
-    (row) =>
-      !running.has(row.room_id) &&
-      (row.status !== "summarizing" || row.updated_at < summarizingBefore),
+  const stuck = (data as { room_id: string; status: string; updated_at: string }[]).filter(
+    (row) => !running.has(row.room_id) && (row.status !== "summarizing" || row.updated_at < summarizingBefore),
   );
   for (const { room_id } of stuck) {
-    console.warn(
-      `[ai-jobs] room ${room_id} was left waiting, indexing it again`,
-    );
+    console.warn(`[ai-jobs] room ${room_id} was left waiting, indexing it again`);
     await indexRoom(room_id).catch((err: unknown) => markFailed(room_id, err));
   }
   return stuck.length;
@@ -303,9 +246,7 @@ export function startIndexingSweep() {
     if (busy) return;
     busy = true;
     restartStuckIndexing()
-      .catch((err: unknown) =>
-        console.error("[ai-jobs] could not check for stuck rooms:", err),
-      )
+      .catch((err: unknown) => console.error("[ai-jobs] could not check for stuck rooms:", err))
       .finally(() => {
         busy = false;
       });
@@ -320,14 +261,9 @@ export function startIndexingSweep() {
  */
 export function startIndexingIfWaiting(roomId: string) {
   void (async () => {
-    const { data, error } = await supabaseAdmin()
-      .from("room_ai")
-      .select("status")
-      .eq("room_id", roomId)
-      .maybeSingle();
+    const { data, error } = await supabaseAdmin().from("room_ai").select("status").eq("room_id", roomId).maybeSingle();
     if (error) throw error;
-    if (data && WAITING.includes(data.status as RoomAiStatus))
-      await indexRoom(roomId);
+    if (data && WAITING.includes(data.status as RoomAiStatus)) await indexRoom(roomId);
   })().catch((err: unknown) => markFailed(roomId, err));
 }
 
@@ -336,14 +272,9 @@ export async function markFailed(roomId: string, err: unknown) {
   console.error(`[ai-jobs] indexing room ${roomId} failed:`, err);
   try {
     // A short reason for the room's page; details stay in the log.
-    await saveState(roomId, "failed", {
-      error: err instanceof HttpError ? err.message : "Indexing failed",
-    });
+    await saveState(roomId, "failed", { error: err instanceof HttpError ? err.message : "Indexing failed" });
   } catch (saveError) {
-    console.error(
-      `[ai-jobs] could not record the failure for room ${roomId}:`,
-      saveError,
-    );
+    console.error(`[ai-jobs] could not record the failure for room ${roomId}:`, saveError);
   }
 }
 
@@ -351,20 +282,10 @@ export async function markFailed(roomId: string, err: unknown) {
 async function saveState(
   roomId: string,
   status: RoomAiStatus,
-  {
-    error = null,
-    summary,
-  }: { error?: string | null; summary?: RoomSummary | null } = {},
+  { error = null, summary }: { error?: string | null; summary?: RoomSummary | null } = {},
 ) {
-  const row = {
-    room_id: roomId,
-    status,
-    error: error?.slice(0, 500) ?? null,
-    ...(summary !== undefined && { summary }),
-  };
-  const { error: dbError } = await supabaseAdmin()
-    .from("room_ai")
-    .upsert(row, { onConflict: "room_id" });
+  const row = { room_id: roomId, status, error: error?.slice(0, 500) ?? null, ...(summary !== undefined && { summary }) };
+  const { error: dbError } = await supabaseAdmin().from("room_ai").upsert(row, { onConflict: "room_id" });
   if (dbError) throw dbError;
 }
 
