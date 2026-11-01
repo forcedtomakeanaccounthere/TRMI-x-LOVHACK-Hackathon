@@ -37,6 +37,7 @@ import {
   FollowStateResponse as FollowStateResponseSchema,
   GroupsResponse as GroupsResponseSchema,
   InvitesResponse as InvitesResponseSchema,
+  ForgotPasswordRequest,
   LoginRequest,
   MessageResponse as MessageResponseSchema,
   MentionAck as MentionAckSchema,
@@ -52,6 +53,7 @@ import {
   RecapRequest,
   RefreshRequest,
   ResendVerificationRequest,
+  ResetPasswordRequest,
   RoomDetail as RoomDetailSchema,
   RoomGroup as RoomGroupSchema,
   RoomInvite as RoomInviteSchema,
@@ -185,6 +187,31 @@ export const openApiDocument = createDocument({
           ...invalidInput,
           ...tooManyAttempts,
           "502": failure("The verification email could not be sent"),
+        },
+      },
+    },
+    "/api/auth/forgot-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Email a password reset link (to /forgot-password) to a verified account",
+        requestBody: body(ForgotPasswordRequest),
+        responses: {
+          "200": reply("Sent, if the email has a verified account (the same reply either way)", MessageResponse),
+          ...invalidInput,
+          ...tooManyAttempts,
+          "502": failure("The reset email could not be sent"),
+        },
+      },
+    },
+    "/api/auth/reset-password": {
+      post: {
+        tags: ["Auth"],
+        summary: "Set a new password with the reset link's token, and sign the account out everywhere",
+        requestBody: body(ResetPasswordRequest),
+        responses: {
+          "200": reply("Password changed", MessageResponse),
+          "400": failure("Invalid input, an expired or used link (the message says \"expired\"), or a weak or reused password"),
+          ...tooManyAttempts,
         },
       },
     },

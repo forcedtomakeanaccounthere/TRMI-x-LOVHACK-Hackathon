@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mentionEmail, verificationEmail } from "../../src/lib/mailer";
+import { mentionEmail, passwordResetEmail, verificationEmail } from "../../src/lib/mailer";
 
 const LINK = "https://api.linkroom.app/api/auth/verify?token_hash=abc&type=email";
 
@@ -43,5 +43,22 @@ describe("mentionEmail", () => {
     const { text } = mentionEmail({ ...opts, body: "a".repeat(400) });
     expect(text).toContain(`${"a".repeat(280)}…`);
     expect(text).not.toContain("a".repeat(281));
+  });
+});
+
+describe("passwordResetEmail", () => {
+  const RESET = "https://linkroom.app/forgot-password?token_hash=abc";
+
+  it("puts the reset link first, and says ignoring it keeps the password", () => {
+    const { subject, html, text } = passwordResetEmail(RESET, "Ana");
+    expect(subject).toBe("Reset your LinkRoom password");
+    expect(html.match(/href="([^"]+)"/)?.[1]).toBe(RESET);
+    expect(text).toContain(RESET);
+    expect(text).toMatch(/^Hi Ana,/);
+    expect(text).toMatch(/ignore this email/);
+  });
+
+  it("escapes the name", () => {
+    expect(passwordResetEmail(RESET, "<b>x</b>").html).not.toContain("<b>x</b>");
   });
 });

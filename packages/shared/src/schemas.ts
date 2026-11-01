@@ -479,6 +479,18 @@ export type LoginRequest = z.infer<typeof LoginRequest>;
 export const ResendVerificationRequest = z.object({ email: Email });
 export type ResendVerificationRequest = z.infer<typeof ResendVerificationRequest>;
 
+// POST /api/auth/forgot-password: emails a link to /forgot-password?token_hash=… to a verified account.
+export const ForgotPasswordRequest = z.object({ email: Email });
+export type ForgotPasswordRequest = z.infer<typeof ForgotPasswordRequest>;
+
+// POST /api/auth/reset-password: uses the emailed link's token once to set a new password, with the
+// same length rules as signup (Supabase hashes at most 72 bytes).
+export const ResetPasswordRequest = z.object({
+  token_hash: z.string().min(1).max(512),
+  password: z.string().min(8, "Password must be at least 8 characters").max(72),
+});
+export type ResetPasswordRequest = z.infer<typeof ResetPasswordRequest>;
+
 export const RefreshRequest = z.object({ refresh_token: z.string().min(1) });
 export type RefreshRequest = z.infer<typeof RefreshRequest>;
 
