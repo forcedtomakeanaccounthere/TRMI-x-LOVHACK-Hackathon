@@ -379,7 +379,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         toast.error("Pick at least one source that has loaded");
         return null;
       }
-      const { body, preview } = await generate(roomId, kind, docs);
+      let made: Awaited<ReturnType<typeof generate>>;
+      try {
+        made = await generate(roomId, kind, docs, realDoc(roomId) && docs.every((d) => realDoc(d.id)));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't make that");
+        return null;
+      }
+      const { body, preview } = made;
       const artifact = {
         id: nanoid(10),
         title,

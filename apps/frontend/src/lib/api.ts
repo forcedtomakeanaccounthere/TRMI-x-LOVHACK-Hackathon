@@ -119,6 +119,11 @@ export const api = {
     request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
+  // Attaches another document (room) to a room, so AI requests on the room may use it. Attaching
+  // one that's already there changes nothing.
+  attachSource: (roomId: string, sourceRoomId: string, token: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
+
   generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
     request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
 
