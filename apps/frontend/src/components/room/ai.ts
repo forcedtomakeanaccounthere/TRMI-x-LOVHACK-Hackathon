@@ -1,5 +1,6 @@
 import type { AiMessage } from "@linkroom/shared";
 import { api, ApiError, type AskRequest } from "@/lib/api";
+import { getFreshSession } from "@/lib/session";
 import type { ArtifactBody, ArtifactKind, Citation, DocContent, MindNode } from "./types";
 
 // AI calls go to the backend endpoints proposed in CHECKLIST.md. Until those exist (404) or when the
@@ -75,10 +76,6 @@ export function search(blocks: Block[], query: string, k = 3): Block[] {
 const clip = (text: string, n = 260) => (text.length > n ? `${text.slice(0, n).replace(/\s+\S*$/, "")}…` : text);
 
 export type Answer = { text: string; citations: Citation[]; preview: boolean };
-
-function unavailable(err: unknown) {
-  return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
-}
 
 // A question falls back to the browser preview only when the backend can't be reached (a network
 // error) or has no /ask (404). Any answer it does give, a 502/503 from the AI service included, is
@@ -332,19 +329,38 @@ function buildLocally(kind: ArtifactKind, docs: DocContent[]): ArtifactBody {
   }
 }
 
+// The backend makes an artifact only from the room and documents attached to it (room_attachments).
+// Documents added in the workspace live in its ledger, so they're attached here first; attaching
+// one twice changes nothing. A refusal (the room's source limit, a role that can't add sources) is
+// passed on as it is, so its reason is shown rather than a later "not in this room".
+async function attachSources(roomId: string, ids: string[], token: string) {
+  const others = ids.filter((id) => id !== roomId);
+  const results = await Promise.allSettled(others.map((id) => api.attachSource(roomId, id, token)));
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+// `remote`: the documents are backend rooms (not the demo room's). An artifact the backend can't
+// be reached for is built in the browser and marked preview; any answer it gives, a refusal or an
+// AI failure, is passed on so the reason is shown.
 export async function generate(
   roomId: string,
   kind: ArtifactKind,
   docs: DocContent[],
+  remote = true,
 ): Promise<{ body: ArtifactBody; preview: boolean }> {
-  try {
-    const body = await api.generateArtifact(roomId, {
-      kind,
-      sources: docs.map((d) => d.id),
-    });
-    if (looksLike(kind, body)) return { body, preview: false };
-  } catch (err) {
-    if (!unavailable(err)) throw err;
+  if (remote) {
+    try {
+      const sources = docs.map((d) => d.id);
+      // Signed out: only the room itself is in scope, and the backend says so if more was chosen.
+      const token = (await getFreshSession().catch(() => null))?.access_token;
+      if (token) await attachSources(roomId, sources, token);
+      const body = await api.generateArtifact(roomId, { kind, sources }, token);
+      if (looksLike(kind, body)) return { body, preview: false };
+      throw new Error("The AI's answer couldn't be shown. Try again.");
+    } catch (err) {
+      if (err instanceof ApiError || !(err instanceof TypeError)) throw err;
+    }
   }
   return { body: buildLocally(kind, docs), preview: true };
 }

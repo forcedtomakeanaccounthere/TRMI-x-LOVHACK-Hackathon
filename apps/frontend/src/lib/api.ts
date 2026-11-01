@@ -119,8 +119,14 @@ export const api = {
     request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
-  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
-    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
+  // Attaches another document (room) to a room, so AI requests on the room may use it. Attaching
+  // one that's already there changes nothing.
+  attachSource: (roomId: string, sourceRoomId: string, token: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
+
+  // With the signed-in person's token, so sources only members can read are in scope.
+  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body), token),
 
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.

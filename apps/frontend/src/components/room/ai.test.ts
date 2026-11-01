@@ -1,7 +1,11 @@
 import type { AiMessage } from "@linkroom/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/lib/api";
-import { ask, backendBody, toCitations } from "./ai";
+import { ask, backendBody, generate, toCitations } from "./ai";
+
+vi.mock("@/lib/session", () => ({
+  getFreshSession: async () => ({ access_token: "token", expires_at: 9e9 }),
+}));
 import type { DocContent } from "./types";
 
 const doc = (id: string, title = id): DocContent => ({
@@ -157,5 +161,46 @@ describe("ask", () => {
     expect(lens.text).toMatch(/saved in this box/);
     expect(demo.preview).toBe(true);
     expect(demo.text).not.toMatch(/Couldn't reach/);
+  });
+});
+
+describe("generate", () => {
+  const attach = vi.spyOn(api, "attachSource");
+  const make = vi.spyOn(api, "generateArtifact");
+  const cards = { kind: "flashcards", cards: [{ front: "What is an encoder?", back: "A sensor that measures motion." }] };
+  beforeEach(() => {
+    attach.mockReset();
+    make.mockReset();
+    attach.mockResolvedValue({});
+  });
+
+  it("attaches the other chosen documents to the room, then asks the backend", async () => {
+    make.mockResolvedValue(cards);
+    const result = await generate("main", "flashcards", [doc("main"), doc("other")]);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledWith("main", "other", "token");
+    expect(make).toHaveBeenCalledWith("main", { kind: "flashcards", sources: ["main", "other"] }, "token");
+    expect(result).toEqual({ body: cards, preview: false });
+  });
+
+  it("passes on a refused attachment instead of asking for the artifact", async () => {
+    attach.mockRejectedValue(new ApiError("A room can have up to 20 sources", 409));
+    await expect(generate("main", "flashcards", [doc("main"), doc("other")])).rejects.toThrow(/up to 20 sources/);
+    expect(make).not.toHaveBeenCalled();
+  });
+
+  it("shows the backend's refusal or AI failure instead of a browser preview", async () => {
+    make.mockRejectedValue(new ApiError("Some of the chosen sources aren't in this room", 404));
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/aren't in this room/);
+    make.mockRejectedValue(new ApiError("The AI couldn't answer right now. Try again in a moment.", 502));
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/couldn't answer/);
+  });
+
+  it("builds a preview only when the backend can't be reached, or for the demo room", async () => {
+    make.mockRejectedValue(new TypeError("Failed to fetch"));
+    expect((await generate("main", "flashcards", [doc("main")])).preview).toBe(true);
+    make.mockReset();
+    expect((await generate("demo", "flashcards", [doc("demo")], false)).preview).toBe(true);
+    expect(make).not.toHaveBeenCalled();
   });
 });
