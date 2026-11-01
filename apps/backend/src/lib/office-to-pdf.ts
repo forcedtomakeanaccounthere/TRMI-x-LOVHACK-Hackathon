@@ -72,7 +72,13 @@ export async function findLibreOffice(): Promise<string | null> {
  * Builds a minimal valid PDF buffer for testing fallback when LibreOffice is not installed.
  */
 function createMinimalTestPdf(text: string): Buffer {
-  const lines = text.split("\n").map((line) => `(${line.replace(/[\\()]/g, "\\$&")}) Tj`);
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 30)
+    .map((line) => `(${line.replace(/[\\()]/g, "\\$&")}) Tj`);
+  if (lines.length === 0) lines.push("(Converted Document) Tj");
   const stream = `BT /F1 12 Tf 14 TL 72 720 Td ${lines.join(" T* ")} ET`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
@@ -107,8 +113,22 @@ export async function convertOfficeToPdf(buffer: Buffer, format: OfficeFormat): 
 
   if (!libreofficeBin) {
     // If running in test mode without LibreOffice on the host system, provide a minimal PDF
-    if (process.env.NODE_ENV === "test" || process.env.VITEST) {
-      return createMinimalTestPdf(`Converted ${format.toUpperCase()} Document`);
+    if (process.env.NODE_ENV === "test" || process.env.VITEST || process.env.ALLOW_OFFICE_MOCK === "1") {
+      let extractedText = `Converted ${format.toUpperCase()} Document`;
+      try {
+        if (format === "docx") {
+          const { htmlToText } = await import("./extract");
+          const { docxToHtml } = await import("./files");
+          extractedText = htmlToText(await docxToHtml(buffer));
+        } else if (format === "pptx") {
+          const { htmlToText } = await import("./extract");
+          const { pptxToHtml } = await import("./files");
+          extractedText = htmlToText(await pptxToHtml(buffer));
+        }
+      } catch {
+        // use fallback text
+      }
+      return createMinimalTestPdf(extractedText || `Converted ${format.toUpperCase()} Document`);
     }
     throw new HttpError(500, "LibreOffice is not installed on this server to convert documents.");
   }

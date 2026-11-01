@@ -60,6 +60,8 @@ jobs:
       - run: npm ci
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+      - name: Install LibreOffice
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-nogui fonts-dejavu-core fonts-liberation
       # The Supabase CLI comes from devDependencies. Applies supabase/migrations and supabase/config.toml.
       # Services the tests don't use are skipped to start faster.
       - run: npx supabase start -x realtime,imgproxy,postgres-meta,studio,edge-runtime,logflare,vector,supavisor

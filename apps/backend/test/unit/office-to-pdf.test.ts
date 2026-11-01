@@ -15,7 +15,7 @@ describe("convertOfficeToPdf (lib/office-to-pdf.ts)", () => {
     expect(Buffer.isBuffer(pdfBuf)).toBe(true);
     expect(pdfBuf.length).toBeGreaterThan(0);
     expect(isPdf(pdfBuf)).toBe(true);
-  });
+  }, 20_000);
 
   it("converts PPTX to a valid PDF buffer", async () => {
     const pptxBuf = await makePptx([["Slide 1 Title", "Subtitle"], ["Slide 2 Content"]]);
@@ -24,7 +24,7 @@ describe("convertOfficeToPdf (lib/office-to-pdf.ts)", () => {
     expect(Buffer.isBuffer(pdfBuf)).toBe(true);
     expect(pdfBuf.length).toBeGreaterThan(0);
     expect(isPdf(pdfBuf)).toBe(true);
-  });
+  }, 20_000);
 
   it("converts PPT to a valid PDF buffer", async () => {
     const fakePptBuf = Buffer.from("fake-ppt-content");
@@ -33,7 +33,7 @@ describe("convertOfficeToPdf (lib/office-to-pdf.ts)", () => {
     expect(Buffer.isBuffer(pdfBuf)).toBe(true);
     expect(pdfBuf.length).toBeGreaterThan(0);
     expect(isPdf(pdfBuf)).toBe(true);
-  });
+  }, 20_000);
 
   it("allows setting a custom test converter", async () => {
     const mockPdf = Buffer.from("%PDF-1.4 mock pdf data");
