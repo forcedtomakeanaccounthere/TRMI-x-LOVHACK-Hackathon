@@ -16,7 +16,7 @@ function table(name: string) {
   const builder: Record<string, unknown> = {
     then: (resolve: (r: Result) => unknown) => resolve({ data: null, error: null, ...results[key]?.shift() }),
   };
-  for (const method of ["select", "eq", "single", "maybeSingle", "delete", "insert", "upsert", "update", "in", "neq", "gt", "order", "limit"]) {
+  for (const method of ["select", "eq", "single", "maybeSingle", "delete", "insert", "upsert", "update", "in", "neq", "gt", "order", "limit", "lt"]) {
     builder[method] = (...args: unknown[]) => {
       log.push([method, ...args]);
       writes.push(`${name}.${method}`);
@@ -32,8 +32,19 @@ vi.mock("../../src/lib/supabase", () => ({ supabaseAdmin: () => ({ from: table }
 const callAi = vi.fn();
 vi.mock("../../src/lib/ai", () => ({ callAi: (...args: unknown[]) => callAi(...args) }));
 
-const { EMBED_BATCH, indexRoom, markFailed, RESUME_BATCH, resumeIndexing, startIndexing, startIndexingIfWaiting } =
-  await import("../../src/lib/ai-jobs");
+const {
+  EMBED_BATCH,
+  EMBED_CONCURRENCY,
+  indexRoom,
+  markFailed,
+  RESUME_BATCH,
+  restartStuckIndexing,
+  resumeIndexing,
+  STALE_SUMMARIZING_MS,
+  STALE_WAITING_MS,
+  startIndexing,
+  startIndexingIfWaiting,
+} = await import("../../src/lib/ai-jobs");
 
 const called = (name: string, method: string) => (calls[name] ?? []).filter(([m]) => m === method).map(([, ...a]) => a);
 const statuses = () => called("room_ai", "upsert").map(([row]) => (row as { status: string }).status);
@@ -300,6 +311,89 @@ describe("resumeIndexing", () => {
   it("throws when the waiting rooms can't be read", async () => {
     results.room_ai = [{ error: new Error("database down") }];
     await expect(resumeIndexing()).rejects.toThrow("database down");
+  });
+});
+
+describe("embedding in parallel", () => {
+  it("keeps several /embed requests in flight and the vectors in chunk order", async () => {
+    const n = EMBED_BATCH * (EMBED_CONCURRENCY + 1) + 3;
+    results.rooms = [{ data: roomWith(n) }];
+    let inFlight = 0;
+    let peak = 0;
+    callAi.mockImplementation(async (path: string, body: { texts: string[] }) => {
+      if (path !== "/embed") return SUMMARY;
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      // Each vector carries its chunk's number (the text starts with it), to check the order.
+      return { model: "embed-model", vectors: body.texts.map((t) => [Number(/(\d{4}) x/.exec(t)![1]), 0]) };
+    });
+
+    expect(await indexRoom("room0001")).toEqual({ chunks: n, embedded: true, summarized: true });
+    expect(peak).toBe(EMBED_CONCURRENCY);
+    expect(inserted().map((row) => (row.embedding as number[])[0])).toEqual(Array.from({ length: n }, (_, i) => i));
+  });
+
+  it("stops sending batches once one fails, and saves the chunks without vectors", async () => {
+    results.rooms = [{ data: roomWith(EMBED_BATCH * 10) }];
+    callAi.mockImplementation(async (path: string) => {
+      if (path === "/embed") throw new HttpError(502, "down");
+      return SUMMARY;
+    });
+
+    expect((await indexRoom("room0001")).embedded).toBe(false);
+    expect(callAi.mock.calls.filter(([path]) => path === "/embed").length).toBe(EMBED_CONCURRENCY);
+    expect(inserted().every((row) => row.embedding === null)).toBe(true);
+  });
+});
+
+describe("restartStuckIndexing", () => {
+  const now = Date.parse("2026-11-01T10:00:00Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("indexes again rooms left waiting, giving a summary more time", async () => {
+    results.room_ai = [
+      {
+        data: [
+          { room_id: "stuck0001", status: "pending", updated_at: ago(STALE_WAITING_MS + 1) },
+          { room_id: "stuck0002", status: "indexing", updated_at: ago(STALE_WAITING_MS + 1) },
+          { room_id: "slow00001", status: "summarizing", updated_at: ago(STALE_WAITING_MS + 1) },
+          { room_id: "stuck0003", status: "summarizing", updated_at: ago(STALE_SUMMARIZING_MS + 1) },
+        ],
+      },
+      { data: [] },
+    ];
+    results.rooms = [{ data: roomWith(1) }, { data: roomWith(1) }, { data: roomWith(1) }];
+
+    expect(await restartStuckIndexing(now)).toBe(3);
+    expect(called("rooms", "eq").map(([, id]) => id)).toEqual(["stuck0001", "stuck0002", "stuck0003"]);
+    // Only rooms whose row hasn't changed since the cutoff are read.
+    expect(called("room_ai", "lt")[0]).toEqual(["updated_at", ago(STALE_WAITING_MS)]);
+  });
+
+  it("reads past a full page of rooms it skips, so they don't hide stuck ones", async () => {
+    const fresh = Array.from({ length: RESUME_BATCH }, (_, i) => ({
+      room_id: `slow${String(i).padStart(5, "0")}`,
+      status: "summarizing",
+      updated_at: ago(STALE_WAITING_MS + 1),
+    }));
+    results.room_ai = [
+      { data: fresh },
+      { data: [{ room_id: "stuck0001", status: "indexing", updated_at: ago(STALE_WAITING_MS + 1) }] },
+      { data: [] },
+    ];
+    results.rooms = [{ data: roomWith(1) }];
+
+    expect(await restartStuckIndexing(now)).toBe(1);
+    expect(called("rooms", "eq").map(([, id]) => id)).toEqual(["stuck0001"]);
+    expect(called("room_ai", "gt").map(([, after]) => after)).toEqual(["", fresh.at(-1)!.room_id, "stuck0001"]);
+  });
+
+  it("does nothing when no room is stuck", async () => {
+    results.room_ai = [{ data: [] }];
+    expect(await restartStuckIndexing(now)).toBe(0);
+    expect(callAi).not.toHaveBeenCalled();
   });
 });
 

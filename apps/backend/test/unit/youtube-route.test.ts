@@ -73,6 +73,15 @@ describe("POST /api/rooms/youtube", () => {
     expect(inserts.rooms).toBeUndefined();
   });
 
+  it("asks for a pasted transcript when apps/ai fails or can't be reached", async () => {
+    const { HttpError } = await import("../../src/middleware/error");
+    callAi.mockRejectedValue(new HttpError(502, "The AI couldn't answer right now. Try again in a moment."));
+    const res = await post({ url: `https://youtu.be/${ID}` });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/couldn't fetch this video's transcript.*Paste the transcript instead/);
+    expect(inserts.rooms).toBeUndefined();
+  });
+
   it("refuses a link that isn't a YouTube video", async () => {
     expect((await post({ url: "https://example.com/watch?v=abc" })).status).toBe(400);
   });

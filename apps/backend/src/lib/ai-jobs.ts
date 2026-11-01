@@ -16,6 +16,7 @@ async function transcriptHtml(roomId: string) {
 // Progress is written to room_ai, which reaches the room's page over Realtime.
 
 export const EMBED_BATCH = 64; // chunks per POST /embed
+export const EMBED_CONCURRENCY = 4; // POST /embed requests in flight at once for one room
 const EMBED_TIMEOUT_MS = 60_000; // per batch; apps/ai gives the provider 30 s
 const INSERT_BATCH = 100; // chunks per insert, so one request stays well under PostgREST's limits
 // apps/ai gives a summary 540 s in all (map calls, then the reduce call), so it answers first.
@@ -129,22 +130,36 @@ export async function summarizeRoom(roomId: string, title: string, chunks: Chunk
  */
 async function embedChunks(roomId: string, chunks: Chunk[]) {
   try {
-    const vectors: number[][] = [];
-    let model: string | null = null;
-    for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
-      const batch = chunks.slice(i, i + EMBED_BATCH);
-      const res = await callAi(
-        "/embed",
-        { texts: batch.map(embeddingText), input_type: "passage" },
-        EmbedResponse,
-        EMBED_TIMEOUT_MS,
-      );
-      if (res.vectors.length !== batch.length) throw new Error(`got ${res.vectors.length} vectors for ${batch.length}`);
-      if (model && res.model !== model) throw new Error(`model changed from ${model} to ${res.model}`);
-      model = res.model;
-      vectors.push(...res.vectors);
-    }
-    return { model: model!, vectors };
+    const batches: Chunk[][] = [];
+    for (let i = 0; i < chunks.length; i += EMBED_BATCH) batches.push(chunks.slice(i, i + EMBED_BATCH));
+    const results: { model: string; vectors: number[][] }[] = new Array(batches.length);
+    // A few batches in flight at once: a long document no longer waits on each batch in turn.
+    let next = 0;
+    let failed = false;
+    const worker = async () => {
+      while (!failed && next < batches.length) {
+        const n = next++;
+        const batch = batches[n]!;
+        try {
+          const res = await callAi(
+            "/embed",
+            { texts: batch.map(embeddingText), input_type: "passage" },
+            EmbedResponse,
+            EMBED_TIMEOUT_MS,
+          );
+          if (res.vectors.length !== batch.length) throw new Error(`got ${res.vectors.length} vectors for ${batch.length}`);
+          results[n] = res;
+        } catch (err) {
+          failed = true; // the other workers stop sending: these vectors would be thrown away
+          throw err;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(EMBED_CONCURRENCY, batches.length) }, worker));
+    const model = results[0]!.model;
+    const changed = results.find((r) => r.model !== model);
+    if (changed) throw new Error(`model changed from ${model} to ${changed.model}`);
+    return { model, vectors: results.flatMap((r) => r.vectors) };
   } catch (err) {
     console.warn(`[ai-jobs] no embeddings for room ${roomId}, keyword search only:`, errorMessage(err));
     return null;
@@ -191,6 +206,64 @@ export async function resumeIndexing(): Promise<number> {
   }
   if (resumed) console.log(`[ai-jobs] resumed indexing for ${resumed} room(s)`);
   return resumed;
+}
+
+// A waiting room whose row hasn't changed for this long has lost its job (a crash, a dropped
+// promise) and is started again. "summarizing" gets longer: apps/ai may take 540 s on a summary.
+export const STALE_WAITING_MS = 3 * 60_000;
+export const STALE_SUMMARIZING_MS = 12 * 60_000;
+const SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * Restarts rooms stuck "pending", "indexing" or "summarizing" with no job running here, so a lost
+ * job doesn't leave a room waiting until the next restart. Returns how many were restarted.
+ */
+export async function restartStuckIndexing(now = Date.now()): Promise<number> {
+  const waitingBefore = new Date(now - STALE_WAITING_MS).toISOString();
+  const summarizingBefore = new Date(now - STALE_SUMMARIZING_MS).toISOString();
+  let restarted = 0;
+  // Paged by room id, like resumeIndexing, so rooms skipped below never hide stuck ones behind them.
+  let after = "";
+  for (;;) {
+    const { data, error } = await supabaseAdmin()
+      .from("room_ai")
+      .select("room_id, status, updated_at, rooms!inner(status)")
+      .in("status", WAITING)
+      .neq("rooms.status", "deleted")
+      .lt("updated_at", waitingBefore)
+      .gt("room_id", after)
+      .order("room_id")
+      .limit(RESUME_BATCH);
+    if (error) throw error;
+    const rows = data as { room_id: string; status: string; updated_at: string }[];
+    if (!rows.length) break;
+    const stuck = rows.filter(
+      (row) => !running.has(row.room_id) && (row.status !== "summarizing" || row.updated_at < summarizingBefore),
+    );
+    for (const { room_id } of stuck) {
+      console.warn(`[ai-jobs] room ${room_id} was left waiting, indexing it again`);
+      await indexRoom(room_id).catch((err: unknown) => markFailed(room_id, err));
+    }
+    restarted += stuck.length;
+    after = rows.at(-1)!.room_id;
+  }
+  return restarted;
+}
+
+/** Checks for stuck rooms every minute. Call once at startup, after resumeIndexing. */
+export function startIndexingSweep() {
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    restartStuckIndexing()
+      .catch((err: unknown) => console.error("[ai-jobs] could not check for stuck rooms:", err))
+      .finally(() => {
+        busy = false;
+      });
+  }, SWEEP_INTERVAL_MS);
+  timer.unref();
+  return timer;
 }
 
 /**

@@ -137,9 +137,12 @@ function PageSkeleton() {
 export function VideoBody({ doc }: { doc: DocRef }) {
   const { actions, perms } = useRoom();
   const [busy, setBusy] = useState(false);
+  // Shown when the captions can't be fetched: the transcript can be pasted from YouTube instead.
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState("");
   const id = doc.source_url ? youtubeId(doc.source_url) : null;
 
-  const process = async () => {
+  const process = async (transcript?: string) => {
     const session = await getFreshSession();
     if (!session) {
       toast.error("Sign in to process videos");
@@ -147,7 +150,7 @@ export function VideoBody({ doc }: { doc: DocRef }) {
     }
     setBusy(true);
     try {
-      const { id: roomId } = await api.createYoutubeRoom(doc.source_url!, session.access_token);
+      const { id: roomId } = await api.createYoutubeRoom(doc.source_url!, session.access_token, transcript);
       actions.addDoc({
         id: roomId,
         kind: "youtube",
@@ -156,7 +159,9 @@ export function VideoBody({ doc }: { doc: DocRef }) {
         format: null,
       });
       toast.success("Transcript ready");
+      setPasting(false);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 422 && !transcript) setPasting(true);
       toast.error(
         err instanceof ApiError && err.status === 404
           ? "Video transcripts aren't on the backend yet (POST /api/rooms/youtube). The video stays attached."
@@ -198,12 +203,35 @@ export function VideoBody({ doc }: { doc: DocRef }) {
           </div>
           <button
             type="button"
-            onClick={process}
+            onClick={() => process()}
             disabled={busy}
             className="flex h-10 items-center gap-2 rounded-full bg-ink px-5 text-[0.8125rem] font-medium text-pearl active:scale-[0.98] disabled:opacity-60 dark:bg-azure"
           >
             {busy ? <Spinner /> : <SparkleIcon weight="fill" className="size-4" />}
             Process into document
+          </button>
+        </div>
+      )}
+      {perms.addSources && pasting && (
+        <div className="liquid-glass space-y-3 rounded-2xl p-5">
+          <div className="text-[0.8125rem] text-muted-foreground">
+            Paste the transcript instead. On YouTube: ⋯ under the video → Show transcript, then copy it.
+          </div>
+          <textarea
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            rows={6}
+            placeholder={"0:00\nFirst line…\n0:07\nNext line…"}
+            className="w-full resize-y rounded-xl border border-border bg-transparent p-3 text-[0.8125rem] outline-none focus:border-azure"
+          />
+          <button
+            type="button"
+            onClick={() => process(pasted)}
+            disabled={busy || !pasted.trim()}
+            className="flex h-10 items-center gap-2 rounded-full bg-ink px-5 text-[0.8125rem] font-medium text-pearl active:scale-[0.98] disabled:opacity-60 dark:bg-azure"
+          >
+            {busy ? <Spinner /> : <SparkleIcon weight="fill" className="size-4" />}
+            Use pasted transcript
           </button>
         </div>
       )}

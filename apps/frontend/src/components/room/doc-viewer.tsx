@@ -221,16 +221,14 @@ function Scroller({
     }
   }, [jump, docId, scrollToBlock, version > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Follow mode: go where the leader is reading.
+  // Follow mode: go where the leader is reading. Which document is open comes from the leader's
+  // presence (RoomProvider); a scroll only moves within it, since the last scroll may be from a
+  // document they have left (a video sends none).
   const leaderScroll = following ? channel.scrolls[following] : undefined;
   useEffect(() => {
-    if (!leaderScroll) return;
-    if (leaderScroll.doc !== docId) {
-      room.setActiveDoc(leaderScroll.doc);
-      return;
-    }
+    if (!leaderScroll || leaderScroll.doc !== docId) return;
     scrollToBlock(leaderScroll.block, leaderScroll.ratio);
-  }, [leaderScroll, docId, scrollToBlock]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leaderScroll, docId, scrollToBlock]);
 
   // Tell the room where you're reading.
   useEffect(() => {
@@ -243,6 +241,17 @@ function Scroller({
     lenis.on("scroll", onScroll);
     return () => lenis.off("scroll", onScroll);
   }, [scroller, docId, channel.send]);
+
+  // Someone who starts following you is sent where you are now, without waiting for you to scroll.
+  const followers = channel.peers
+    .filter((p) => p.following === me.id)
+    .map((p) => p.id)
+    .join(" ");
+  useEffect(() => {
+    if (!followers || !scroller) return;
+    const top = topBlock(scroller);
+    if (top) channel.send.scroll(docId, top.block, top.ratio);
+  }, [followers, scroller, docId, channel.send]);
 
   // Keyboard: tool shortcuts, Escape to put tools down.
   useEffect(() => {
