@@ -1,11 +1,10 @@
 "use client";
 
-import { roomChannel } from "@linkroom/shared";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
-import { getSupabase } from "@/lib/supabase";
+import { ROOM_STATUS_EVENT, type RoomStatusDetail } from "./use-room-channel";
 
 const ACTIVITY_THROTTLE_MS = 30_000;
 const PRESENCE_HEARTBEAT_MS = 60_000;
@@ -63,14 +62,7 @@ export function RoomActivityTracker({ roomId }: { roomId: string }) {
     sendActivity();
 
     // Parent window event listeners
-    const events = [
-      "pointerdown",
-      "pointermove",
-      "keydown",
-      "wheel",
-      "touchmove",
-      "scroll",
-    ] as const;
+    const events = ["pointerdown", "pointermove", "keydown", "wheel", "touchmove", "scroll"] as const;
     const handleInteraction = () => {
       sendActivity();
     };
@@ -96,25 +88,22 @@ export function RoomActivityTracker({ roomId }: { roomId: string }) {
     };
     window.addEventListener("message", handleMessage);
 
-    // 3. Listen for Realtime status updates (auto-pause / auto-archive / owner resume)
-    const channel = getSupabase()
-      .channel(roomChannel(roomId))
-      .on("broadcast", { event: "status" }, ({ payload }) => {
-        const { status, reason } = (payload ?? {}) as { status?: string; reason?: string };
-        if (status === "paused") {
-          isPausedRef.current = true;
-          const msg =
-            reason === "idle_2h"
-              ? "Room paused due to 2 hours of inactivity."
-              : "Room paused because participants left.";
-          toast.warning(msg);
-        } else if (status === "running") {
-          isPausedRef.current = false;
-          toast.success("Room resumed.");
-          sendPresence();
-        }
-      })
-      .subscribe();
+    // 3. Realtime status updates (auto-pause / auto-archive / owner resume). They arrive on the room's
+    // channel, which useRoomChannel owns (one channel per topic), and reach us as a window event.
+    const handleStatus = (event: Event) => {
+      const { status, reason } = (event as CustomEvent<RoomStatusDetail>).detail;
+      if (status === "paused") {
+        isPausedRef.current = true;
+        const msg =
+          reason === "idle_2h" ? "Room paused due to 2 hours of inactivity." : "Room paused because participants left.";
+        toast.warning(msg);
+      } else if (status === "running") {
+        isPausedRef.current = false;
+        toast.success("Room resumed.");
+        sendPresence();
+      }
+    };
+    window.addEventListener(ROOM_STATUS_EVENT, handleStatus);
 
     // 4. Tab visibility change: re-check presence and activity when tab becomes active
     const handleVisibilityChange = () => {
@@ -133,7 +122,7 @@ export function RoomActivityTracker({ roomId }: { roomId: string }) {
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("message", handleMessage);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      getSupabase().removeChannel(channel);
+      window.removeEventListener(ROOM_STATUS_EVENT, handleStatus);
     };
   }, [roomId]);
 

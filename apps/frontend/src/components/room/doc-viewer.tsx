@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { ArrowSquareOutIcon, DownloadSimpleIcon, EyeIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { ReactLenis, type LenisRef } from "lenis/react";
 import { AnimatePresence, motion } from "motion/react";
@@ -9,12 +10,15 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { blockOf, findBlock, readSelection, type TextSelection, toAnchor, topBlock } from "./anchors";
 import { Spinner, timeAgo } from "./bits";
-import { HtmlBody, PdfBody, VideoBody } from "./doc-body";
+import { HtmlBody, VideoBody } from "./doc-body";
 import { captureRegion } from "./lens";
 import { type Box, type Geometry, blockBox, hitTest, Overlay } from "./overlay";
 import { SelectionToolbar } from "./selection-toolbar";
 import { useRoom } from "./store";
 import { TOOL_KEYS, ToolDock } from "./tool-dock";
+
+// pdf.js touches browser-only APIs when it loads, so the PDF viewer never renders on the server.
+const PdfBody = dynamic(() => import("./pdf-body"), { ssr: false });
 import type { Annotation, DocRef, Point } from "./types";
 
 type Draft =
