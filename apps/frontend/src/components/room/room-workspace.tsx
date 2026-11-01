@@ -7,6 +7,7 @@ import {
   FilesIcon,
   type Icon,
   MagicWandIcon,
+  NotebookIcon,
   SparkleIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -22,6 +23,7 @@ import { History } from "./history";
 import { type Identity, saveGuest, savedGuest, signedInIdentity } from "./identity";
 import { GateShell, JoinGate } from "./join-gate";
 import { Library } from "./library";
+import { Notebook } from "./notebook";
 import { SourcesPanel } from "./sources-panel";
 import { type PanelTab, RoomProvider, useRoom } from "./store";
 import { ArtifactDialog, Studio } from "./studio";
@@ -96,6 +98,7 @@ function Gatekeeper({ path }: { path: string }) {
 
 const TABS: { id: PanelTab; label: string; icon: Icon }[] = [
   { id: "chat", label: "AI chat", icon: SparkleIcon },
+  { id: "notebook", label: "Notebook", icon: NotebookIcon },
   { id: "discussion", label: "Discussion", icon: ChatsCircleIcon },
   { id: "studio", label: "Studio", icon: MagicWandIcon },
   { id: "library", label: "Library", icon: BooksIcon },
@@ -248,7 +251,8 @@ function Panel() {
                 )}
               >
                 <Icon weight={on ? "fill" : "regular"} className={cn("size-4", on && id === "chat" && "text-azure")} />
-                <span className={cn(on ? "inline" : "hidden xl:inline", "max-[420px]:hidden")}>{label}</span>
+                {/* Six tabs share the panel: only the open one is labelled until the screen is wide. */}
+                <span className={cn(on ? "inline" : "hidden 2xl:inline", "max-[420px]:hidden")}>{label}</span>
                 {on && (
                   <motion.span
                     layoutId="panel-tab"
@@ -263,6 +267,7 @@ function Panel() {
       </div>
       <div className="min-h-0 flex-1">
         {tab === "chat" && <AiChat />}
+        {tab === "notebook" && <Notebook />}
         {tab === "discussion" && <Discussion />}
         {tab === "studio" && <Studio />}
         {tab === "library" && <Library />}

@@ -15,7 +15,8 @@ export const state = {
 export function resetState() {
   state.results = {
     rooms: [{ data: { status: "running" } }],
-    room_ai: [{ data: { status: "ready" } }],
+    // One row per room asked about (POST /ask reads room_ai with .in()).
+    room_ai: [{ data: [{ room_id: "room0001", status: "ready" }] }],
   };
   state.inserts = {};
   state.rpc = [];
@@ -32,7 +33,7 @@ function table(name: string) {
       return resolve({ data: null, error: null, ...state.results[name]?.shift() });
     },
   };
-  for (const method of ["select", "eq", "gt", "order", "limit", "maybeSingle", "single"]) builder[method] = () => builder;
+  for (const method of ["select", "eq", "in", "gt", "order", "limit", "maybeSingle", "single"]) builder[method] = () => builder;
   builder.insert = (row: Record<string, unknown>) => {
     (state.inserts[name] ??= []).push(row);
     inserted = row;

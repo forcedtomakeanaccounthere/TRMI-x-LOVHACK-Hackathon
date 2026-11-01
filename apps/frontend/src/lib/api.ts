@@ -20,14 +20,15 @@ import type {
   SignupRequest,
   StudySet,
   StudySetsResponse,
+  NotebookResponse,
   StudySourcesResponse,
   UsersResponse,
   UpdateRoomRequest,
 } from "@linkroom/shared";
 
 // What the room workspace asks the AI: the question plus the documents, passage, snapshot and recent
-// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, which answers
-// one document per call from `question` (and `name`) only.
+// turns it is about. components/room/ai.ts turns this into calls to POST /api/rooms/:id/ask, one per
+// document, with the passage, turns and snapshot as their own fields.
 export type AskRequest = {
   question: string;
   sources: string[]; // room ids of the documents to answer from
@@ -37,7 +38,7 @@ export type AskRequest = {
   name?: string; // shown as "asked by"
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 // Carries the HTTP status so callers can branch, e.g. 403 = email not verified on login.
 export class ApiError extends Error {
@@ -109,16 +110,39 @@ export const api = {
   },
 
   // Proposed (CHECKLIST.md "Link rooms workspace"): turns a video's transcript into t{n} blocks.
-  createYoutubeRoom: (url: string, token: string) =>
-    request<CreateRoomResponse>("/api/rooms/youtube", json({ url }), token),
+  // `transcript`: pasted by the creator when the captions can't be fetched (a 422 says so).
+  createYoutubeRoom: (url: string, token: string, transcript?: string) =>
+    request<CreateRoomResponse>("/api/rooms/youtube", json(transcript ? { url, transcript } : { url }), token),
 
   // Answers a question about one room's document, with citations into its blocks.
-  ask: (roomId: string, body: { question: string; name?: string }) =>
+  ask: (
+    roomId: string,
+    body: {
+      question: string;
+      name?: string;
+      quote?: string;
+      history?: { role: "user" | "ai"; text: string }[];
+      image?: string;
+    },
+  ) =>
     request<AiMessage>(`/api/rooms/${encodeURIComponent(roomId)}/ask`, json(body)),
 
   // Proposed: a summary, quiz, flashcards, mind map or infographic from the chosen documents.
-  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }) =>
-    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body)),
+  // Attaches another document (room) to a room, so AI requests on the room may use it. Attaching
+  // one that's already there changes nothing.
+  attachSource: (roomId: string, sourceRoomId: string, token: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/sources`, json({ source_room_id: sourceRoomId }), token),
+
+  // With the signed-in person's token, so sources only members can read are in scope.
+  // The room's shared notebook: the merged Yjs document (base64), or null before anyone wrote.
+  getNotebook: (roomId: string) =>
+    request<NotebookResponse>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, { method: "GET" }),
+  // Merges a batch of local edits (one Yjs update, base64) into the saved notebook.
+  saveNotebook: (roomId: string, update: string, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/notebook`, json({ update }), token),
+
+  generateArtifact: (roomId: string, body: { kind: string; sources: string[] }, token?: string) =>
+    request<unknown>(`/api/rooms/${encodeURIComponent(roomId)}/artifacts`, json(body), token),
 
   // `name` is shown as "Recapped by …". 422 = nothing highlighted yet, 429 = wait (Retry-After),
   // 409 = a recap is already on its way.

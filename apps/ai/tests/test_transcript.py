@@ -13,6 +13,7 @@ from youtube_transcript_api._errors import (
 )
 
 from app.config import get_settings
+from app.schemas import TranscriptResponse, TranscriptSegment
 from app.services.transcript import (
     NoTranscript,
     TranscriptError,
@@ -177,6 +178,51 @@ def test_gives_up_after_the_deadline(youtube, monkeypatch):
         return time.perf_counter() - started
 
     assert asyncio.run(timed()) < 0.6
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("YouTube answered 429"), RequestBlocked(VIDEO), TranscriptsDisabled(VIDEO)],
+)
+def test_any_failure_but_an_unplayable_video_tries_ytdlp(client, auth, youtube, monkeypatch, error):
+    youtube.error = error
+    fallback = TranscriptResponse(
+        language="en",
+        is_generated=True,
+        segments=[TranscriptSegment(start=0, duration=1, text="Hi")],
+    )
+    monkeypatch.setattr("app.services.transcript._fetch_with_ytdlp", lambda *a: fallback)
+    res = post(client, auth)
+    assert res.status_code == 200
+    assert res.json()["segments"] == [{"start": 0.0, "duration": 1.0, "text": "Hi"}]
+
+
+def test_an_unplayable_video_does_not_try_ytdlp(client, auth, youtube, monkeypatch):
+    youtube.error = VideoUnavailable(VIDEO)
+    monkeypatch.setattr(
+        "app.services.transcript._fetch_with_ytdlp", lambda *a: pytest.fail("called")
+    )
+    assert post(client, auth).status_code == 404
+
+
+def test_ytdlp_gets_what_is_left_of_the_shared_deadline(youtube, monkeypatch):
+    monkeypatch.setenv("TRANSCRIPT_TIMEOUT_SECONDS", "0.2")
+    get_settings.cache_clear()
+    youtube.error = RuntimeError("network")
+
+    def slow_ytdlp(*a):
+        time.sleep(1.0)
+
+    monkeypatch.setattr("app.services.transcript._fetch_with_ytdlp", slow_ytdlp)
+
+    async def timed():
+        started = time.perf_counter()
+        with pytest.raises(TranscriptError, match="failed"):
+            await fetch_transcript(VIDEO, ["en"])
+        return time.perf_counter() - started
+
+    # Both tries share 2 x 0.2 s.
+    assert asyncio.run(timed()) < 0.7
 
 
 def test_every_youtube_request_has_a_timeout(youtube, monkeypatch):

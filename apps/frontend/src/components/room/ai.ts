@@ -1,5 +1,6 @@
 import type { AiMessage } from "@linkroom/shared";
-import { api, ApiError, type AskRequest } from "@/lib/api";
+import { api, API_URL, ApiError, type AskRequest } from "@/lib/api";
+import { getFreshSession } from "@/lib/session";
 import type { ArtifactBody, ArtifactKind, Citation, DocContent, MindNode } from "./types";
 
 // AI calls go to the backend endpoints proposed in CHECKLIST.md. Until those exist (404) or when the
@@ -76,24 +77,26 @@ const clip = (text: string, n = 260) => (text.length > n ? `${text.slice(0, n).r
 
 export type Answer = { text: string; citations: Citation[]; preview: boolean };
 
-function unavailable(err: unknown) {
-  return !(err instanceof ApiError) || err.status === 404 || err.status >= 500;
+// A question falls back to the browser preview only when the backend can't be reached (a network
+// error) or has no /ask (404). Any answer it does give, a 502/503 from the AI service included, is
+// shown as the reason, so "AI features aren't set up" isn't hidden behind "not connected yet".
+function unreachable(err: unknown) {
+  return !(err instanceof ApiError) || err.status === 404;
 }
 
-// The backend's /ask takes one question of up to 500 characters about one room. The passage an AI box
-// is about and the previous question go into that text, so follow-ups and "explain this" keep their
-// context.
+// What POST /api/rooms/:id/ask gets: the question (up to 500 characters), plus the passage an AI box
+// is about, its earlier turns and a lens snapshot as their own fields, so follow-ups and "explain
+// this" keep their context and a snapshot reaches a vision model.
 const ASK_MAX = 500;
-export function backendQuestion(req: Pick<AskRequest, "question" | "quote" | "history">): string {
-  let text = req.question.trim().slice(0, ASK_MAX);
-  const add = (extra: string) => {
-    if (text.length + extra.length <= ASK_MAX) text += extra;
-    else if (ASK_MAX - text.length > 40) text += `${extra.slice(0, ASK_MAX - text.length - 2)}…"`;
+export function backendBody(req: AskRequest): Parameters<typeof api.ask>[1] {
+  const history = req.history?.filter((m) => m.text.trim()).slice(-8);
+  return {
+    question: req.question.trim().slice(0, ASK_MAX),
+    ...(req.name && { name: req.name }),
+    ...(req.quote?.trim() && { quote: req.quote }),
+    ...(history?.length && { history }),
+    ...(req.image && { image: req.image }),
   };
-  if (req.quote?.trim()) add(`\n\nAbout this passage: "${req.quote.replace(/\s+/g, " ").trim()}"`);
-  const earlier = req.history?.filter((m) => m.role === "user").at(-1)?.text;
-  if (earlier && earlier !== req.question) add(`\n\nEarlier question: "${earlier.replace(/\s+/g, " ").trim()}"`);
-  return text;
 }
 
 // The backend cites block ids; the first one is where the citation jumps.
@@ -105,13 +108,16 @@ export function toCitations(doc: string, message: Pick<AiMessage, "citations">):
 }
 
 // Asks the backend about each chosen document that is a backend room (`remote`), one call per
-// document, and joins the answers. What it can't answer (a snapshot, the demo room's bundled
-// documents, the backend being down) gets the browser preview below, marked as such.
+// document, and joins the answers. A lens snapshot goes only to the first one (the document it was
+// taken from), so one picture isn't sent to the vision model once per source. What the backend
+// can't answer (the demo room's bundled documents, the backend being down) gets the browser preview
+// below, marked as such.
 export async function ask(req: AskRequest, docs: DocContent[], remote: string[]): Promise<Answer> {
-  const targets = req.image ? [] : req.sources.filter((id) => remote.includes(id));
+  const backendDocs = req.sources.filter((id) => remote.includes(id));
+  const targets = req.image ? backendDocs.slice(0, 1) : backendDocs;
   if (targets.length > 0) {
-    const question = backendQuestion(req);
-    const results = await Promise.allSettled(targets.map((id) => api.ask(id, { question, name: req.name })));
+    const body = backendBody(req);
+    const results = await Promise.allSettled(targets.map((id) => api.ask(id, body)));
     const answered = results.flatMap((r, i) => (r.status === "fulfilled" ? [{ id: targets[i]!, message: r.value }] : []));
     const failed = results.flatMap((r) => (r.status === "rejected" ? [r.reason as unknown] : []));
     if (failed.length === 0 || answered.length > 0) {
@@ -133,21 +139,23 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
         preview: false,
       };
     }
-    if (!failed.every(unavailable)) throw failed.find((e) => !unavailable(e));
+    if (!failed.every(unreachable)) throw failed.find((e) => !unreachable(e));
   }
 
   if (req.image) {
     return {
-      text: "The AI lens needs the backend's /ask endpoint with image input, which isn't live yet. Your snapshot is saved in this box, so the answer can be added once it is.",
+      text: "The AI lens couldn't reach the backend, so this snapshot wasn't read. It's saved in this box: ask again once the AI is back.",
       citations: [],
       preview: true,
     };
   }
+  // Documents the backend doesn't have (the demo room's) were never sent; for the rest, it failed.
+  const why = targets.length ? "Couldn't reach the AI server" : "The AI only answers about documents saved on the server";
   const blocks = docs.filter((d) => req.sources.includes(d.id)).flatMap(blocksOf);
   const found = search(blocks, `${req.question} ${req.quote ?? ""}`);
   if (found.length === 0) {
     return {
-      text: "The AI isn't connected yet, and nothing in the chosen sources matches those words.",
+      text: `${why}, and nothing in the chosen sources matches those words.`,
       citations: [],
       preview: true,
     };
@@ -155,7 +163,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
   const titles = new Map(docs.map((d) => [d.id, d.title]));
   return {
     text: [
-      "The AI isn't connected yet, so here are the passages that match best:",
+      `${why}, so here are the passages that match best:`,
       ...found.map((b) => `“${clip(b.text)}” — ${titles.get(b.doc) ?? "source"}`),
     ].join("\n\n"),
     citations: found.map((b) => ({
@@ -321,19 +329,45 @@ function buildLocally(kind: ArtifactKind, docs: DocContent[]): ArtifactBody {
   }
 }
 
+// The backend makes an artifact only from the room and documents attached to it (room_attachments).
+// Documents added in the workspace live in its ledger, so they're attached here first; attaching
+// one twice changes nothing. A refusal (the room's source limit, a role that can't add sources) is
+// passed on as it is, so its reason is shown rather than a later "not in this room".
+async function attachSources(roomId: string, ids: string[], token: string) {
+  const others = ids.filter((id) => id !== roomId);
+  const results = await Promise.allSettled(others.map((id) => api.attachSource(roomId, id, token)));
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+// `remote`: every chosen document is a backend room. When one isn't (the demo room's bundled
+// documents, a `yt:` video not yet processed) the artifact is built in the browser and marked
+// preview. Backend rooms never fall back to that cut-up text, which hid why the backend wasn't
+// answering: any failure, a refusal, an AI error or the server being unreachable, is passed on so
+// its reason is shown.
 export async function generate(
   roomId: string,
   kind: ArtifactKind,
   docs: DocContent[],
+  remote = true,
 ): Promise<{ body: ArtifactBody; preview: boolean }> {
-  try {
-    const body = await api.generateArtifact(roomId, {
-      kind,
-      sources: docs.map((d) => d.id),
-    });
-    if (looksLike(kind, body)) return { body, preview: false };
-  } catch (err) {
-    if (!unavailable(err)) throw err;
+  if (remote) {
+    try {
+      const sources = docs.map((d) => d.id);
+      // Signed out: only the room itself is in scope, and the backend says so if more was chosen.
+      const token = (await getFreshSession().catch(() => null))?.access_token;
+      if (token) await attachSources(roomId, sources, token);
+      const body = await api.generateArtifact(roomId, { kind, sources }, token);
+      if (looksLike(kind, body)) return { body, preview: false };
+      throw new Error("The AI's answer couldn't be shown. Try again.");
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // fetch failed: the server is down or asleep, the address is wrong, or it refused this site
+        // (CORS: WEB_ORIGIN on the backend must list the frontend's address).
+        throw new Error(`Couldn't reach the server at ${API_URL}. Check that the backend is running and allows this site.`);
+      }
+      throw err;
+    }
   }
   return { body: buildLocally(kind, docs), preview: true };
 }

@@ -17,6 +17,17 @@ export async function loadDoc(id: string): Promise<DocContent | null> {
   return toContent(data, ai.data);
 }
 
+// AI states that change on their own as the backend indexes a room.
+export const AI_WAITING = new Set(["pending", "indexing", "summarizing"]);
+export const AI_POLL_MS = 4000;
+
+/** The AI status of each room, by id. */
+export async function loadAiStatuses(ids: string[]): Promise<Record<string, string>> {
+  const { data, error } = await getSupabase().from("room_ai").select("room_id, status").in("room_id", ids);
+  if (error) throw error;
+  return Object.fromEntries((data ?? []).map((row) => [row.room_id as string, row.status as string]));
+}
+
 export function toContent(
   row: Record<string, unknown>,
   ai?: { status?: unknown; summary?: unknown } | null,

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { getSupabase } from "@/lib/supabase";
 import type { Identity } from "./identity";
 import { chunkEvents } from "./ledger";
+import { emitRoomStatus, type RoomStatusMessage } from "./room-status-bus";
 import type { LedgerEvent } from "./types";
 
 // One realtime channel per room (CHECKLIST Phase 3): presence for who's here, broadcast for cursors,
@@ -18,6 +19,8 @@ export type Peer = {
   signedIn: boolean;
   following: string | null;
   doc: string | null;
+  // Leading a laser focus: everyone else is taken to where this person is until they stop.
+  focusing: boolean;
   artifact: string | null; // the artifact they have open, so followers can open it too
 };
 
@@ -49,11 +52,11 @@ type Handlers = {
 
 export type ChannelStatus = "solo" | "connecting" | "live";
 
-// The backend broadcasts room lifecycle changes ({ status, reason }) on this same channel. supabase-js
-// keeps one channel per topic, so other components can't open room:{id} a second time; this hook
-// re-sends those broadcasts as a window event instead (see room-activity-tracker.tsx).
-export const ROOM_STATUS_EVENT = "linkroom-room-status";
-export type RoomStatusDetail = { status?: string; reason?: string };
+// The shared notebook's live edits (Yjs updates, base64), and a newcomer's request for what it lacks
+// (its state vector). Ephemeral: the merged notebook is saved by apps/backend.
+export type NotebookMessage = { type: "update"; update: string } | { type: "request"; from: string; sv: string };
+// Supabase Realtime caps a message's size; a larger catch-up is left to the saved copy.
+const MAX_NOTEBOOK_MESSAGE_CHARS = 200_000;
 
 // Asks peers for the events this browser lacks, by listing the ids it has. A list too long for one
 // realtime message (ids: null) means "send me everything".
@@ -119,6 +122,12 @@ function createSender() {
       for (const batch of chunkEvents(events)) broadcast("ledger", { events: batch });
     },
     kick: (member: string) => broadcast("kick", { member }),
+    notebook: (update: string, to?: string) => {
+      if (id && update.length <= MAX_NOTEBOOK_MESSAGE_CHARS) broadcast("nb", { from: id, to, update });
+    },
+    notebookRequest: (sv: string) => {
+      if (id) broadcast("nb-req", { from: id, sv });
+    },
   };
 }
 
@@ -130,7 +139,7 @@ const removing = new Map<string, Promise<unknown>>();
 export function useRoomChannel(
   roomId: string,
   me: Identity | null,
-  view: { doc: string; following: string | null; artifact: string | null },
+  view: { doc: string; following: string | null; focusing: boolean; artifact: string | null },
   handlers: Handlers,
 ) {
   const [status, setStatus] = useState<ChannelStatus>("connecting");
@@ -138,6 +147,8 @@ export function useRoomChannel(
   const [cursors, setCursors] = useState<Record<string, RemoteCursor>>({});
   const [scrolls, setScrolls] = useState<Record<string, RemoteScroll>>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const focusingRef = useRef(new Set<string>());
+  const notebookListeners = useRef(new Set<(message: NotebookMessage) => void>());
   const handlersRef = useRef(handlers);
   const viewRef = useRef(view);
 
@@ -189,7 +200,8 @@ export function useRoomChannel(
           const next = new Map<string, Peer>();
           for (const [key, metas] of Object.entries(state)) {
             const meta = metas.at(-1);
-            if (meta && key !== meId) next.set(key, { ...meta, id: key });
+            if (meta && key !== meId)
+              next.set(key, { ...meta, id: key, focusing: meta.focusing === true, artifact: meta.artifact ?? null });
           }
           const at = new Date().toISOString();
           for (const [id, peer] of next)
@@ -201,6 +213,7 @@ export function useRoomChannel(
             }
           }
           known = next;
+          focusingRef.current = new Set([...next.values()].filter((p) => p.focusing).map((p) => p.id));
           setPeers([...next.values()]);
         })
         .on("broadcast", { event: "cursor" }, ({ payload }) => {
@@ -248,11 +261,20 @@ export function useRoomChannel(
             });
           }
         })
-        .on("broadcast", { event: "kick" }, ({ payload }) => {
-          if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
+        .on("broadcast", { event: "nb" }, ({ payload }) => {
+          const p = payload as { to?: string; update: string };
+          if (p.to && p.to !== meId) return;
+          for (const listener of notebookListeners.current) listener({ type: "update", update: p.update });
+        })
+        .on("broadcast", { event: "nb-req" }, ({ payload }) => {
+          const p = payload as { from: string; sv: string };
+          for (const listener of notebookListeners.current) listener({ type: "request", from: p.from, sv: p.sv });
         })
         .on("broadcast", { event: "status" }, ({ payload }) => {
-          window.dispatchEvent(new CustomEvent<RoomStatusDetail>(ROOM_STATUS_EVENT, { detail: payload ?? {} }));
+          emitRoomStatus((payload ?? {}) as RoomStatusMessage);
+        })
+        .on("broadcast", { event: "kick" }, ({ payload }) => {
+          if ((payload as { member: string }).member === meId) handlersRef.current.onKicked();
         })
         .subscribe(async (s) => {
           if (s === "SUBSCRIBED") {
@@ -264,6 +286,7 @@ export function useRoomChannel(
               signedIn: meSignedIn,
               following: viewRef.current.following,
               doc: viewRef.current.doc,
+              focusing: viewRef.current.focusing,
               artifact: viewRef.current.artifact,
             } satisfies Peer);
             void channel.send({
@@ -275,6 +298,7 @@ export function useRoomChannel(
             setStatus("solo");
           }
         });
+
       return channel;
     };
 
@@ -293,7 +317,7 @@ export function useRoomChannel(
     };
   }, [roomId, meId, meName, meColor, meSignedIn]);
 
-  // Keep presence current when you switch documents, open an artifact or start following someone.
+  // Keep presence current when you switch documents, open an artifact, follow someone or lead a focus.
   useEffect(() => {
     const channel = channelRef.current;
     if (!channel || status !== "live" || !meId) return;
@@ -304,17 +328,19 @@ export function useRoomChannel(
       signedIn: meSignedIn,
       following: view.following,
       doc: view.doc,
+      focusing: view.focusing,
       artifact: view.artifact,
     } satisfies Peer);
-  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.artifact]);
+  }, [status, meId, meName, meColor, meSignedIn, view.doc, view.following, view.focusing, view.artifact]);
 
-  // Cursors that haven't moved for 5 s fade out.
+  // Cursors that haven't moved for 5 s fade out, except a focus leader's laser, which stays put.
   useEffect(() => {
     const timer = setInterval(() => {
       setCursors((prev) => {
         const cutoff = Date.now() - 5000;
-        const stale = Object.values(prev).some((c) => c.at < cutoff);
-        return stale ? Object.fromEntries(Object.entries(prev).filter(([, c]) => c.at >= cutoff)) : prev;
+        const keep = (c: RemoteCursor) => c.at >= cutoff || focusingRef.current.has(c.id);
+        const stale = Object.values(prev).some((c) => !keep(c));
+        return stale ? Object.fromEntries(Object.entries(prev).filter(([, c]) => keep(c))) : prev;
       });
     }, 1000);
     return () => clearInterval(timer);
@@ -325,5 +351,13 @@ export function useRoomChannel(
     send.attach(status === "live" ? channelRef.current : null, meId);
   }, [send, status, meId]);
 
-  return { status, peers, cursors, scrolls, send };
+  // The notebook listens here for live edits and catch-up requests; returns the unsubscribe function.
+  const [onNotebook] = useState(() => (listener: (message: NotebookMessage) => void) => {
+    notebookListeners.current.add(listener);
+    return () => {
+      notebookListeners.current.delete(listener);
+    };
+  });
+
+  return { status, peers, cursors, scrolls, send, onNotebook };
 }

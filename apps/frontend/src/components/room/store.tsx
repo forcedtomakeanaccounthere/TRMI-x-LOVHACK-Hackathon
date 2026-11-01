@@ -5,7 +5,15 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { toast } from "sonner";
 import { ask as askAi, generate } from "./ai";
 import { DEMO_CREATED_AT, DEMO_ROOM_ID } from "./demo";
-import { loadDoc, loadSavedHighlights, removeSavedHighlight, saveHighlight } from "./docs";
+import {
+  AI_POLL_MS,
+  AI_WAITING,
+  loadAiStatuses,
+  loadDoc,
+  loadSavedHighlights,
+  removeSavedHighlight,
+  saveHighlight,
+} from "./docs";
 import type { Identity } from "./identity";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
@@ -30,7 +38,7 @@ export type NewAnnotation = Annotation extends infer A
     ? Omit<A, "id" | "author" | "at"> & { id?: string }
     : never
   : never;
-export type PanelTab = "chat" | "discussion" | "studio" | "library" | "history";
+export type PanelTab = "chat" | "notebook" | "discussion" | "studio" | "library" | "history";
 
 type Props = {
   roomId: string;
@@ -114,13 +122,15 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       // the choice lasts for this page only
     }
   };
+  // Laser focus: leading one pulls everyone to where you are until you stop.
+  const [focusing, setFocusing] = useState(false);
 
   const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
 
   const channel = useRoomChannel(
     roomId,
     me,
-    { doc: activeDoc, following, artifact: openArtifact },
+    { doc: activeDoc, following, focusing, artifact: openArtifact },
     {
       onEvents: receive,
       allEvents: () => eventsRef.current,
@@ -129,27 +139,69 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     },
   );
 
-  // Follow mode: go where the leader goes. Their document comes from presence (so a switch shows up
-  // before they scroll) and so does the artifact they have open; scrolling is handled by the viewer.
+  // Follow mode: open the document the leader has open (from presence, so it works before they
+  // scroll) and the artifact they're viewing, and stop following someone who left.
   const leader = following ? channel.peers.find((p) => p.id === following) : undefined;
   const leaderDoc = leader?.doc ?? null;
   const leaderArtifact = leader?.artifact ?? null;
-  const leaderHere = !!leader;
+  const leaderGone = !!following && channel.status === "live" && !leader;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the leader's presence
+    if (leaderGone) setFollowing(null);
+    else if (leaderDoc) setActiveDoc(leaderDoc);
+  }, [leaderGone, leaderDoc]);
   useEffect(() => {
     if (!following) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
     setOpenArtifact(leaderArtifact);
   }, [following, leaderArtifact]);
+
+  // --- Laser focus ---
+  // Someone leading a focus takes everyone else to their document and scroll position (follow mode,
+  // locked) and shows their pointer as a laser. Each person's own place is remembered and they go
+  // back to it when the focus ends or they leave it. One leader at a time: the earliest id wins.
+  const viewPos = useRef<{ doc: string; block: string; ratio: number } | null>(null);
+  const reportView = (doc: string, block: string, ratio: number) => {
+    viewPos.current = { doc, block, ratio };
+  };
+  const focusLeader = focusing
+    ? undefined
+    : channel.peers.filter((p) => p.focusing).sort((a, b) => a.id.localeCompare(b.id))[0];
+  const [leftFocus, setLeftFocus] = useState<string | null>(null); // the leader whose focus you left
+  const activeFocus = focusLeader && focusLeader.id !== leftFocus ? focusLeader : undefined;
+  const returnTo = useRef<{ doc: string; block: string | null; ratio: number } | null>(null);
+  const focusedOn = useRef<string | null>(null);
+  const activeDocRef = useRef(activeDoc);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the leader's presence
-    if (following && leaderDoc) setActiveDoc(leaderDoc);
-  }, [following, leaderDoc]);
-  // The leader left the room: stop following (after a moment, so a reconnect doesn't end it).
+    activeDocRef.current = activeDoc;
+  });
+  const focusId = activeFocus?.id ?? null;
   useEffect(() => {
-    if (!following || leaderHere) return;
-    const timer = setTimeout(() => setFollowing(null), 4000);
-    return () => clearTimeout(timer);
-  }, [following, leaderHere]);
+    const before = focusedOn.current;
+    if (focusId === before) return;
+    focusedOn.current = focusId;
+    if (focusId) {
+      if (!before) {
+        const doc = activeDocRef.current;
+        const pos = viewPos.current?.doc === doc ? viewPos.current : null;
+        returnTo.current = { doc, block: pos?.block ?? null, ratio: pos?.ratio ?? 0 };
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the focus leader's presence
+      setFollowing(focusId);
+      return;
+    }
+    // The focus ended (or you left it): back to where you were.
+    const back = returnTo.current;
+    returnTo.current = null;
+    setFollowing(null);
+    if (back?.block) jumpTo(back.doc, back.block, back.ratio);
+    else if (back) setActiveDoc(back.doc);
+  }, [focusId]);
+  // A new focus by the same person can be joined again.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset once that focus is over
+    if (leftFocus && !focusLeader) setLeftFocus(null);
+  }, [leftFocus, focusLeader]);
 
   // A kick also lands in the ledger, so it holds after a reload or a missed broadcast.
   useEffect(() => {
@@ -172,6 +224,46 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         .catch(() => setContents((prev) => ({ ...prev, [doc.id]: "missing" })));
     }
   }, [state.docs, contents]);
+
+  // A document still being indexed shows "AI pending…" until its status changes, so its status is
+  // checked again every few seconds until it is ready or failed. Reloaded in full then, since a
+  // video room's doc is written at the end.
+  // Only sources still in the room: a removed one is no longer checked.
+  const waitingKey = state.docs
+    .map((d) => contents[d.id])
+    .filter((c): c is DocContent => typeof c === "object" && AI_WAITING.has(c.ai_status ?? ""))
+    .map((c) => c.id)
+    .join(" ");
+  useEffect(() => {
+    if (isDemo || !waitingKey) return;
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      const ids = waitingKey.split(" ");
+      const statuses = await loadAiStatuses(ids).catch(() => null);
+      if (cancelled || !statuses) return;
+      for (const id of ids) {
+        const status = statuses[id];
+        // No row: the room was deleted (its row is hidden then), so it has no AI status to wait for.
+        if (!status || AI_WAITING.has(status)) {
+          setContents((prev) => {
+            const c = prev[id];
+            const next = status ?? null;
+            return typeof c === "object" && c.ai_status !== next ? { ...prev, [id]: { ...c, ai_status: next } } : prev;
+          });
+          continue;
+        }
+        loadDoc(id)
+          .then((c) => {
+            if (!cancelled && c) setContents((prev) => ({ ...prev, [id]: c }));
+          })
+          .catch(() => {});
+      }
+    }, AI_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isDemo, waitingKey]);
 
   // Reload saved highlights only when the set of documents changes.
   const docKey = state.docs
@@ -233,13 +325,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [jump, setJump] = useState<{
     doc: string;
     block: string;
+    ratio: number;
     n: number;
   } | null>(null);
-  const jumpTo = (doc: string, block: string) => {
+  function jumpTo(doc: string, block: string, ratio = 0) {
     setActiveDoc(doc);
     setFollowing(null);
-    setJump((prev) => ({ doc, block, n: (prev?.n ?? 0) + 1 }));
-  };
+    setJump((prev) => ({ doc, block, ratio, n: (prev?.n ?? 0) + 1 }));
+  }
 
   // --- Writing to the ledger ---
   // A closed or archived room is read only: its documents, marks, notes, threads and artifacts stay as
@@ -376,7 +469,14 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
         toast.error("Pick at least one source that has loaded");
         return null;
       }
-      const { body, preview } = await generate(roomId, kind, docs);
+      let made: Awaited<ReturnType<typeof generate>>;
+      try {
+        made = await generate(roomId, kind, docs, realDoc(roomId) && docs.every((d) => realDoc(d.id)));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't make that");
+        return null;
+      }
+      const { body, preview } = made;
       const artifact = {
         id: nanoid(10),
         title,
@@ -446,6 +546,17 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     setFocusAnnotation,
     jump,
     jumpTo,
+    reportView,
+    focus: {
+      leader: activeFocus, // someone else's focus you're in
+      mine: focusing,
+      start: () => {
+        setFollowing(null);
+        setFocusing(true);
+      },
+      stop: () => setFocusing(false),
+      leave: () => activeFocus && setLeftFocus(activeFocus.id),
+    },
     channel,
     presenceFeed,
     kickedOut,

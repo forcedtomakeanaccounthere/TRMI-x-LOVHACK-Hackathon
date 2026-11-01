@@ -1,7 +1,11 @@
 import type { AiMessage } from "@linkroom/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "@/lib/api";
-import { ask, backendQuestion, toCitations } from "./ai";
+import { ask, backendBody, generate, toCitations } from "./ai";
+
+vi.mock("@/lib/session", () => ({
+  getFreshSession: async () => ({ access_token: "token", expires_at: 9e9 }),
+}));
 import type { DocContent } from "./types";
 
 const doc = (id: string, title = id): DocContent => ({
@@ -37,22 +41,37 @@ const cite = (quote: string, block_ids: string[], page: number | null = null) =>
   end_sec: null,
 });
 
-describe("backendQuestion", () => {
-  it("adds the passage and the previous question as context", () => {
-    const q = backendQuestion({
+describe("backendBody", () => {
+  it("sends the passage, the earlier turns and the snapshot as their own fields", () => {
+    expect(
+      backendBody({
+        question: "  Why? ",
+        sources: ["a"],
+        quote: "The sky is blue.",
+        history: [
+          { role: "user", text: "What colour is the sky?" },
+          { role: "ai", text: " " },
+          { role: "ai", text: "Blue." },
+        ],
+        image: "data:image/jpeg;base64,x",
+        name: "Ana",
+      }),
+    ).toEqual({
       question: "Why?",
-      quote: "  The   sky is blue. ",
+      name: "Ana",
+      quote: "The sky is blue.",
       history: [
         { role: "user", text: "What colour is the sky?" },
         { role: "ai", text: "Blue." },
       ],
+      image: "data:image/jpeg;base64,x",
     });
-    expect(q).toBe('Why?\n\nAbout this passage: "The sky is blue."\n\nEarlier question: "What colour is the sky?"');
   });
 
-  it("stays within the backend's 500 characters", () => {
-    expect(backendQuestion({ question: "Explain", quote: "x".repeat(2000) }).length).toBeLessThanOrEqual(500);
-    expect(backendQuestion({ question: "y".repeat(800) })).toHaveLength(500);
+  it("keeps the question within the backend's 500 characters and leaves out empty fields", () => {
+    expect(backendBody({ question: "y".repeat(800), sources: ["a"], quote: " ", history: [] })).toEqual({
+      question: "y".repeat(500),
+    });
   });
 });
 
@@ -104,11 +123,86 @@ describe("ask", () => {
     await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/still reading/);
   });
 
-  it("keeps lens snapshots and documents the backend doesn't have in the labelled preview", async () => {
+  it("shows the backend's reason when the AI service fails, instead of the preview", async () => {
+    spy.mockRejectedValue(new ApiError("AI features aren't set up on this server yet.", 503));
+    await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/aren't set up/);
+    spy.mockRejectedValue(new ApiError("The AI couldn't answer right now. Try again in a moment.", 502));
+    await expect(ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"])).rejects.toThrow(/couldn't answer/);
+  });
+
+  it("falls back to the preview only when the backend can't be reached", async () => {
+    spy.mockRejectedValue(new TypeError("Failed to fetch"));
+    const answer = await ask({ question: "Hi", sources: ["a"] }, [doc("a")], ["a"]);
+    expect(answer.preview).toBe(true);
+    expect(answer.text).toMatch(/Couldn't reach the AI server/);
+  });
+
+  it("sends a lens snapshot to the backend, for the document it was taken from only", async () => {
+    spy.mockResolvedValue(message("A diagram of joint angles."));
+    const image = "data:image/jpeg;base64,x";
+    const answer = await ask({ question: "What is this?", sources: ["a", "b"], image }, [doc("a"), doc("b")], ["a", "b"]);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith("a", { question: "What is this?", image });
+    expect(answer).toEqual({ text: "A diagram of joint angles.", citations: [], preview: false });
+  });
+
+  it("passes on a refusal of the snapshot, such as no vision model", async () => {
+    spy.mockRejectedValue(new ApiError("This server's AI can't read images yet.", 422));
+    await expect(
+      ask({ question: "What?", sources: ["a"], image: "data:image/jpeg;base64,x" }, [doc("a")], ["a"]),
+    ).rejects.toThrow(/can't read images/);
+  });
+
+  it("keeps a snapshot the backend can't be reached for, and documents it doesn't have, in the labelled preview", async () => {
+    spy.mockRejectedValue(new ApiError("Not found", 404));
     const lens = await ask({ question: "What is this?", sources: ["a"], image: "data:image/jpeg;base64,x" }, [doc("a")], ["a"]);
     const demo = await ask({ question: "What?", sources: ["demo"] }, [doc("demo")], []);
-    expect(spy).not.toHaveBeenCalled();
     expect(lens.preview).toBe(true);
+    expect(lens.text).toMatch(/saved in this box/);
     expect(demo.preview).toBe(true);
+    expect(demo.text).not.toMatch(/Couldn't reach/);
+  });
+});
+
+describe("generate", () => {
+  const attach = vi.spyOn(api, "attachSource");
+  const make = vi.spyOn(api, "generateArtifact");
+  const cards = { kind: "flashcards", cards: [{ front: "What is an encoder?", back: "A sensor that measures motion." }] };
+  beforeEach(() => {
+    attach.mockReset();
+    make.mockReset();
+    attach.mockResolvedValue({});
+  });
+
+  it("attaches the other chosen documents to the room, then asks the backend", async () => {
+    make.mockResolvedValue(cards);
+    const result = await generate("main", "flashcards", [doc("main"), doc("other")]);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledWith("main", "other", "token");
+    expect(make).toHaveBeenCalledWith("main", { kind: "flashcards", sources: ["main", "other"] }, "token");
+    expect(result).toEqual({ body: cards, preview: false });
+  });
+
+  it("passes on a refused attachment instead of asking for the artifact", async () => {
+    attach.mockRejectedValue(new ApiError("A room can have up to 20 sources", 409));
+    await expect(generate("main", "flashcards", [doc("main"), doc("other")])).rejects.toThrow(/up to 20 sources/);
+    expect(make).not.toHaveBeenCalled();
+  });
+
+  it("shows the backend's refusal or AI failure instead of a browser preview", async () => {
+    make.mockRejectedValue(new ApiError("Some of the chosen sources aren't in this room", 404));
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/aren't in this room/);
+    make.mockRejectedValue(new ApiError("The AI couldn't answer right now. Try again in a moment.", 502));
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/couldn't answer/);
+  });
+
+  it("says the server couldn't be reached instead of building a preview for a real room", async () => {
+    make.mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/Couldn't reach the server at/);
+  });
+
+  it("builds a browser preview only for the demo room", async () => {
+    expect((await generate("demo", "flashcards", [doc("demo")], false)).preview).toBe(true);
+    expect(make).not.toHaveBeenCalled();
   });
 });

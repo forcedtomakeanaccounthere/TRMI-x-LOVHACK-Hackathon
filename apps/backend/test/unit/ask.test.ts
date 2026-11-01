@@ -57,9 +57,16 @@ describe("POST /api/rooms/:id/ask", () => {
     ]);
     expect(callAi.mock.calls[2]).toEqual([
       "/answer",
-      { question: "How do plants get energy?", chunks: [{ content: CHUNKS[0]!.content }, { content: CHUNKS[1]!.content }] },
+      {
+        question: "How do plants get energy?",
+        chunks: [{ content: CHUNKS[0]!.content }, { content: CHUNKS[1]!.content }],
+        quote: null,
+        history: [],
+        image: null,
+      },
       expect.anything(),
       30_000,
+      { 501: expect.any(HttpError) },
     ]);
 
     const saved = {
@@ -176,7 +183,7 @@ describe("POST /api/rooms/:id/ask", () => {
   });
 
   it.each([null, "pending", "indexing"])("answers 409 while the room's AI state is %s", async (aiStatus) => {
-    state.results.room_ai = [{ data: aiStatus ? { status: aiStatus } : null }];
+    state.results.room_ai = [{ data: aiStatus ? [{ room_id: "room0001", status: aiStatus }] : [] }];
     const res = await ask();
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/still reading/);
@@ -184,7 +191,7 @@ describe("POST /api/rooms/:id/ask", () => {
   });
 
   it("answers 409 when the room's indexing failed, rather than searching missing chunks", async () => {
-    state.results.room_ai = [{ data: { status: "failed" } }];
+    state.results.room_ai = [{ data: [{ room_id: "room0001", status: "failed" }] }];
     const res = await ask();
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/couldn't read this room/);
@@ -193,7 +200,7 @@ describe("POST /api/rooms/:id/ask", () => {
   });
 
   it.each(["summarizing", "ready"])("answers while the room's AI state is %s", async (aiStatus) => {
-    state.results.room_ai = [{ data: { status: aiStatus } }];
+    state.results.room_ai = [{ data: [{ room_id: "room0001", status: aiStatus }] }];
     state.matches = [];
     expect((await ask()).status).toBe(201);
   });
@@ -205,4 +212,84 @@ describe("POST /api/rooms/:id/ask", () => {
       expect(callAi).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("interleaveChunks", () => {
+  const chunk = (room: string, n: number) => ({ content: `${room}${n}`, block_ids: [`b${n}`], page: null, start_sec: null, end_sec: null, room_id: room });
+
+  it("takes each room's best first, then each room's next, up to the limit", async () => {
+    const { interleaveChunks } = await import("../../src/routes/rooms");
+    const a = [chunk("a", 1), chunk("a", 2), chunk("a", 3)];
+    const b = [chunk("b", 1)];
+    expect(interleaveChunks([a, b], 8).map((c) => c.content)).toEqual(["a1", "b1", "a2", "a3"]);
+    expect(interleaveChunks([a, b], 2).map((c) => c.content)).toEqual(["a1", "b1"]);
+    expect(interleaveChunks([[], []], 8)).toEqual([]);
+  });
+});
+
+describe("POST /api/rooms/:id/ask with the workspace's context", () => {
+  it("passes the passage and earlier turns to apps/ai, and searches with the passage and previous question too", async () => {
+    state.matches = CHUNKS;
+    const res = await ask({
+      question: "Explain this",
+      quote: "  sunlight\n into energy ",
+      history: [
+        { role: "user", text: "What is photosynthesis?" },
+        { role: "ai", text: "x".repeat(1500) },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(state.rpc[0]![1]).toMatchObject({ p_query: "Explain this\nsunlight into energy\nWhat is photosynthesis?" });
+    const sent = callAi.mock.calls.find(([path]) => path === "/answer")![1] as Record<string, unknown>;
+    expect(sent.quote).toBe("sunlight into energy");
+    expect(sent.history).toEqual([
+      { role: "user", text: "What is photosynthesis?" },
+      { role: "ai", text: "x".repeat(1000) }, // long turns are cut, not refused
+    ]);
+  });
+
+  it("searches a short follow-up with the question before it", async () => {
+    state.matches = CHUNKS;
+    await ask({
+      question: "Why?",
+      history: [
+        { role: "user", text: "How do plants get energy?" },
+        { role: "ai", text: "From sunlight." },
+      ],
+    });
+    expect(state.rpc[0]![1]).toMatchObject({ p_query: "Why?\nHow do plants get energy?" });
+  });
+
+  it("refuses a snapshot that isn't an image data URL before calling the AI", async () => {
+    const res = await ask({ question: "What is this?", image: "data:text/html;base64,PHNjcmlwdD4=" });
+    expect(res.status).toBe(400);
+    expect(callAi).not.toHaveBeenCalled();
+  });
+
+  it("answers a snapshot question with a longer timeout, and keeps an answer about the image", async () => {
+    state.matches = [];
+    callAi.mockImplementation(async (path: string) => {
+      if (path === "/moderate") return { flagged: [] };
+      if (path === "/embed") return { model: "m", vectors: [[0.1]] };
+      return { answer: "A diagram of a cell.", found_in_document: false, citations: [], withheld: false };
+    });
+    const image = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+    const res = await ask({ question: "What is this?", image });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ answer: "A diagram of a cell.", found_in_document: false, citations: [] });
+    const call = callAi.mock.calls.find(([path]) => path === "/answer")!;
+    expect(call[1]).toMatchObject({ image, chunks: [] });
+    expect(call[3]).toBe(45_000);
+  });
+
+  it("answers a snapshot question even before the room is indexed", async () => {
+    state.results.room_ai = [{ data: [{ room_id: "room0001", status: "indexing" }] }];
+    callAi.mockImplementation(async (path: string) =>
+      path === "/moderate" ? { flagged: [] } : { answer: "A chart.", found_in_document: false, citations: [], withheld: false },
+    );
+    const res = await ask({ question: "What is this?", image: "data:image/png;base64,iVBORw0KGgo=" });
+    expect(res.status).toBe(201);
+    expect(state.rpc).toEqual([]); // nothing to search yet
+    expect(callAi.mock.calls.map(([path]) => path)).toEqual(["/moderate", "/answer"]);
+  });
 });

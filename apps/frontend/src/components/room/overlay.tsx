@@ -323,21 +323,35 @@ export function Overlay({
                 mass: 0.6,
               }}
             >
-              <svg
-                width="18"
-                height="20"
-                viewBox="0 0 18 20"
-                className="drop-shadow-[0_2px_4px_rgb(0_0_0/0.25)]"
-                aria-hidden
-              >
-                <path
-                  d="M1 1l6.5 17 2.6-7.1L17 8.3z"
-                  fill={peer.color}
-                  stroke="white"
-                  strokeWidth="1.4"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {peer.focusing ? (
+                // A focus leader's pointer is a laser: a glowing dot everyone's eyes go to.
+                <span className="relative -top-3 -left-3 grid size-6 place-items-center" aria-hidden>
+                  <span
+                    className="absolute inset-0 animate-ping rounded-full opacity-60"
+                    style={{ backgroundColor: peer.color }}
+                  />
+                  <span
+                    className="relative size-3.5 rounded-full ring-2 ring-white"
+                    style={{ backgroundColor: peer.color, boxShadow: `0 0 18px 6px ${peer.color}` }}
+                  />
+                </span>
+              ) : (
+                <svg
+                  width="18"
+                  height="20"
+                  viewBox="0 0 18 20"
+                  className="drop-shadow-[0_2px_4px_rgb(0_0_0/0.25)]"
+                  aria-hidden
+                >
+                  <path
+                    d="M1 1l6.5 17 2.6-7.1L17 8.3z"
+                    fill={peer.color}
+                    stroke="white"
+                    strokeWidth="1.4"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
               <span
                 className="absolute top-4 left-3.5 rounded-full px-2 py-0.5 text-[0.6875rem] font-semibold whitespace-nowrap text-white shadow-md"
                 style={{
@@ -345,7 +359,7 @@ export function Overlay({
                   boxShadow: following === c.id ? `0 0 0 2px var(--background), 0 0 0 4px ${peer.color}` : undefined,
                 }}
               >
-                {following === c.id ? `Following ${peer.name}` : peer.name}
+                {peer.focusing ? `${peer.name} · look here` : following === c.id ? `Following ${peer.name}` : peer.name}
               </span>
             </motion.div>
           );

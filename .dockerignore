@@ -1,0 +1,17 @@
+**/node_modules
+**/.venv
+**/.turbo
+**/.next
+**/dist
+**/.pytest_cache
+**/.ruff_cache
+**/__pycache__
+**/test
+**/tests
+.git
+.env
+.env.*
+apps/frontend
+supabase
+docs
+*.md

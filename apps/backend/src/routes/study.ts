@@ -12,7 +12,7 @@ import {
 import { Router } from "express";
 import { z } from "zod";
 import { callAi } from "../lib/ai";
-import { htmlToText } from "../lib/extract";
+import { loadStudyDocuments, shareBudget } from "../lib/study-docs";
 import { supabaseAdmin } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -22,13 +22,24 @@ import { MAX_PARTICIPATION } from "./rooms";
 // (rooms) a user picks: all of them, all in one project, or a hand-picked list.
 export const studyRouter = Router();
 
-// apps/ai's request limit per document (MAX_TEXT_CHARS in apps/ai/app/schemas.py), shared across
-// the documents so the request stays bounded. apps/ai cuts further to what the model reads.
-const MAX_STUDY_TEXT_CHARS = 1_000_000;
+// Kept here for its tests and callers; it lives in lib/study-docs.ts.
+export { shareBudget };
+
 // One study set per user at a time, and a short pause between them, so a burst of clicks costs one
 // AI call. In-process like the recap lock: right for one backend instance.
 const STUDY_COOLDOWN_MS = 10_000;
 const studyInFlight = new Set<string>();
+// When each user last called the AI, kept apart from study_sets: deleting a set must not reset the
+// pause. The newest saved set still counts too, so a restart doesn't reset it either.
+const lastStudyCall = new Map<string, number>();
+
+// Records a call and forgets ones older than the pause, so the map holds only the users who called
+// in the last 10 s instead of growing with every user until a restart.
+export function rememberStudyCall(userId: string, now: number) {
+  for (const [id, at] of lastStudyCall) if (now - at >= STUDY_COOLDOWN_MS) lastStudyCall.delete(id);
+  lastStudyCall.set(userId, now);
+  return lastStudyCall.size;
+}
 
 const SET_COLUMNS = "id, kind, title, room_ids, focus, created_at";
 const studySetId = z.object({ id: z.string().uuid() });
@@ -41,7 +52,6 @@ type RoomRow = {
   created_by: string | null;
   last_activity_at: string;
 };
-type RoomText = { id: string; title: string | null; content_html: string | null; content_text: string | null };
 
 // Rooms the user created or joined, newest activity first. Deleted rooms are never offered.
 // With a group, only that project's rooms, which are always the owner's own.
@@ -131,7 +141,8 @@ studyRouter.post("/", requireAuth, async (req, res) => {
       .limit(1)
       .maybeSingle();
     if (last.error) throw last.error;
-    const waitMs = last.data ? STUDY_COOLDOWN_MS - (Date.now() - Date.parse(last.data.created_at as string)) : 0;
+    const lastAt = Math.max(lastStudyCall.get(userId) ?? 0, last.data ? Date.parse(last.data.created_at as string) : 0);
+    const waitMs = STUDY_COOLDOWN_MS - (Date.now() - lastAt);
     if (waitMs > 0) {
       const seconds = Math.ceil(waitMs / 1000);
       res.set("Retry-After", String(seconds));
@@ -144,23 +155,12 @@ studyRouter.post("/", requireAuth, async (req, res) => {
       : await pickedRooms(db, userId, body.room_ids!);
     if (!roomIds.length) throw new HttpError(422, "There are no documents to study yet. Create a room first.");
 
-    const { data, error } = await db.from("rooms").select("id, title, content_html, content_text").in("id", roomIds);
-    if (error) throw error;
-    const byId = new Map((data as RoomText[]).map((room) => [room.id, room]));
-    const perDocument = Math.floor(MAX_STUDY_TEXT_CHARS / roomIds.length);
-    const documents = roomIds
-      .map((id) => byId.get(id))
-      .filter((room): room is RoomText => Boolean(room))
-      .map((room) => ({
-        id: room.id,
-        title: (room.title ?? "Untitled").slice(0, 300),
-        // PDF rooms have no HTML: their text was extracted on upload.
-        text: (room.content_text ?? htmlToText(room.content_html ?? "")).trim().slice(0, perDocument),
-      }))
-      .filter((doc) => doc.text.length > 0);
+    const documents = await loadStudyDocuments(db, roomIds);
     if (!documents.length) throw new HttpError(422, "The chosen documents have no text to study.");
 
-    // apps/ai stops trying providers after 100 s, so it answers before this gives up.
+    // apps/ai stops trying providers after 100 s, so it answers before this gives up. The pause
+    // counts from here, whether or not the call succeeds: a failed call is paid for too.
+    rememberStudyCall(userId, Date.now());
     const study = await callAi(
       "/study",
       { kind: body.kind, documents, count: body.count ?? 10, focus: body.focus || null },

@@ -13,6 +13,7 @@ from app.services.providers import (
     configured_providers,
     record_failure,
     record_success,
+    vision_providers,
 )
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ class AllProvidersFailed(Exception):
     pass
 
 
+class NoVisionProvider(Exception):
+    """An image was sent, but no configured model can read images (VISION_MODELS)."""
+
+
 async def complete_with_fallback[T: BaseModel](
     label: str,
     system: str,
@@ -34,12 +39,21 @@ async def complete_with_fallback[T: BaseModel](
     deadline: float,
     attempt_seconds: float,
     min_attempt_seconds: float = MIN_ATTEMPT_SECONDS,
+    images: list[str] | None = None,
 ) -> T:
     """Asks each provider in turn (skipping ones whose breaker is open) until one returns valid
     JSON for `schema`. Each attempt gets at most `attempt_seconds`, and none starts with less than
-    `min_attempt_seconds` left before `deadline` (a time.monotonic() value)."""
+    `min_attempt_seconds` left before `deadline` (a time.monotonic() value). With `images`, only
+    vision models are asked (NoVisionProvider when there are none)."""
+    candidates = configured_providers()
+    extra = {}
+    if images:
+        candidates = vision_providers(candidates)
+        if not candidates:
+            raise NoVisionProvider(f"{label}: no configured model can read images (VISION_MODELS)")
+        extra = {"images": images}
     failures = []
-    for provider in available(configured_providers()):
+    for provider in available(candidates):
         remaining = deadline - time.monotonic()
         if remaining < min_attempt_seconds:
             failures.append("deadline reached")
@@ -50,7 +64,8 @@ async def complete_with_fallback[T: BaseModel](
             # The SDK timeout is per HTTP request and the client retries once; wait_for cancels the
             # whole attempt when its share of the deadline runs out.
             result = await asyncio.wait_for(
-                complete_json(provider, system, user, schema, timeout=timeout), timeout=timeout
+                complete_json(provider, system, user, schema, timeout=timeout, **extra),
+                timeout=timeout,
             )
         except Exception as e:
             record_failure(provider)

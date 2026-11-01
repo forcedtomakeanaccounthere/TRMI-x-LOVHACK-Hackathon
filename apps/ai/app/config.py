@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     answer_deadline_seconds: float = 25.0
     # One provider's share, so a provider that hangs still leaves time to fall back to the next.
     answer_attempt_seconds: float = 10.0
+    # A question with an AI-lens snapshot: reading an image takes longer. Below apps/backend's 45 s.
+    answer_image_deadline_seconds: float = 40.0
+    answer_image_attempt_seconds: float = 20.0
+    # Models that can read images, from the *_MODEL lists. Only these are tried for a question with
+    # a snapshot; with none configured, such questions get a 501.
+    vision_models: str = (
+        "nvidia/nemotron-3.5-super-vl-120b-a12b,"
+        "gemini-3.5-flash,gemini-3.5-flash-lite,"
+        "claude-opus-5-5"
+    )
 
     # Embeddings (POST /embed) use one provider and model, with no fallback: vectors from different
     # models can't be compared, so mixing them would break search. When it fails, apps/backend
