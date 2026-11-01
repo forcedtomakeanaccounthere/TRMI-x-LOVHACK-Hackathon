@@ -26,6 +26,7 @@ restarts both. The frontend stays on Vercel.
 | `AI_PROVIDERS` | `nvidia,gemini,mistral,anthropic` |
 | `NVIDIA_API_KEY` / `GEMINI_API_KEY` / `MISTRAL_API_KEY` / `ANTHROPIC_API_KEY` | at least one; NVIDIA also gives embeddings and the AI-lens vision model |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | `nvidia`, `nvidia/llama-3.2-nv-embedqa-1b-v2`, `1024` |
+| `EMBEDDING_FALLBACKS` | optional: `gemini:gemini-embedding-001,mistral:mistral-embed` (the default), used when the main model fails; needs those providers' keys |
 | `MODERATION_ENABLED` | `true` (uses `MISTRAL_API_KEY` when set) |
 | `YT_PROXY_URL` | optional: an http(s) proxy for YouTube transcripts, which YouTube often blocks from cloud hosts |
 

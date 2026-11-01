@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # nvidia/nv-embedqa-e5-v5 was retired (410 Gone); this is its successor.
     embedding_model: str = "nvidia/llama-3.2-nv-embedqa-1b-v2"
     embedding_dim: int = 1024
+    # Tried in order when EMBEDDING_MODEL fails ("provider:model,..."; providers without a key are
+    # skipped). Each must give EMBEDDING_DIM numbers. A room keeps the model it was indexed with:
+    # its questions are embedded with that one, and fall back to keyword search if it's down.
+    embedding_fallbacks: str = "gemini:gemini-embedding-001,mistral:mistral-embed"
     embedding_timeout_seconds: float = 30.0
 
     # Moderation of questions and answers shown to the whole room, through Mistral's moderation

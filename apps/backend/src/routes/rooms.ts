@@ -841,6 +841,54 @@ const NOT_READY = new Set(["pending", "indexing"]);
 // apps/ai gives a question with a snapshot 70 s.
 const IMAGE_ANSWER_TIMEOUT_MS = 80_000;
 
+/**
+ * Embeds a question once per embedding model the rooms' chunks were made with (one query per room
+ * to read it). Returns each room's vector, or null where its model failed (keyword search only).
+ */
+async function questionEmbeddings(
+  db: ReturnType<typeof supabaseAdmin>,
+  rooms: string[],
+  text: string,
+  askedIn: string,
+): Promise<(room: string) => number[] | null> {
+  if (!rooms.length) return () => null;
+  const modelOf = new Map(
+    await Promise.all(
+      rooms.map(async (room) => {
+        const { data } = await db
+          .from("chunks")
+          .select("embedding_model")
+          .eq("room_id", room)
+          .not("embedding_model", "is", null)
+          .limit(1)
+          .maybeSingle();
+        return [room, ((data as { embedding_model?: string } | null)?.embedding_model ?? null) as string | null] as const;
+      }),
+    ),
+  );
+  // null: no model known yet, so whichever works first.
+  const models = [...new Set(modelOf.values())];
+  const vectors = new Map<string | null, number[] | null>(
+    await Promise.all(
+      models.map(async (model) => {
+        try {
+          const res = await callAi(
+            "/embed",
+            { texts: [text], input_type: "query", ...(model && { model }) },
+            EmbedResponse,
+            QUESTION_EMBED_TIMEOUT_MS,
+          );
+          return [model, res.vectors[0] ?? null] as const;
+        } catch {
+          console.warn(`[rooms] no ${model ?? "default"} embedding for a question in room ${askedIn}, searching by keyword`);
+          return [model, null] as const;
+        }
+      }),
+    ),
+  );
+  return (room) => vectors.get(modelOf.get(room) ?? null) ?? null;
+}
+
 // POST /api/rooms/:id/ask  { question, name?, sources?, quote?, history?, image? }: answers a question
 // from the room's document, or from several of the room's documents (`sources`: the room and its
 // attached sources), with citations checked against them. `quote` is the passage an AI box is about,
@@ -891,23 +939,18 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   // question: a follow-up such as "Why?" has no words of its own to search with.
   const earlier = history?.filter((turn) => turn.role === "user").at(-1)?.text;
   const searchText = [question, quote, earlier !== question ? earlier : undefined].filter(Boolean).join("\n");
-  // Without an embedding the search is by keyword only.
-  let embedding: number[] | null = null;
-  if (ready.length) {
-    try {
-      const embedded = await callAi("/embed", { texts: [searchText.slice(0, 2000)], input_type: "query" }, EmbedResponse, QUESTION_EMBED_TIMEOUT_MS);
-      embedding = embedded.vectors[0] ?? null;
-    } catch {
-      console.warn(`[rooms] no embedding for a question in room ${id}, searching by keyword`);
-    }
-  }
+  // Each room is searched with a question vector from the model its chunks were made with (apps/ai
+  // may have fallen back to another one when it was indexed); vectors from different models can't
+  // be compared. A room whose model is unknown gets one from the first model that works, and a
+  // room whose model can't embed the question is searched by keyword only.
+  const embeddingFor = await questionEmbeddings(db, ready, searchText.slice(0, 2000), id);
 
   const perRoomK = ready.length > 1 ? Math.max(3, Math.ceil((ASK_CHUNKS * 1.5) / ready.length)) : ASK_CHUNKS;
   const perRoom = await Promise.all(
     ready.map(async (room) => {
       const { data: found, error: matchError } = await db.rpc("match_chunks", {
         p_room: room,
-        p_embedding: embedding,
+        p_embedding: embeddingFor(room),
         p_query: searchText,
         p_k: perRoomK,
       });

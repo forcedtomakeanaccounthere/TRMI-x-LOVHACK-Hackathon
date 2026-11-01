@@ -227,6 +227,25 @@ describe("interleaveChunks", () => {
   });
 });
 
+describe("POST /api/rooms/:id/ask embedding models", () => {
+  it("embeds the question with the model the room's chunks were made with", async () => {
+    state.results.chunks = [{ data: { embedding_model: "fallback-model" } }];
+    state.matches = CHUNKS;
+    await ask();
+    const embed = callAi.mock.calls.find(([path]) => path === "/embed")!;
+    expect(embed[1]).toEqual({ texts: ["How do plants get energy?"], input_type: "query", model: "fallback-model" });
+    expect(state.rpc[0]![1]).toMatchObject({ p_embedding: [0.1, 0.2] });
+  });
+
+  it("searches by keyword when that model can't embed the question", async () => {
+    state.results.chunks = [{ data: { embedding_model: "retired-model" } }];
+    state.matches = CHUNKS;
+    fakeAi({ embed: false });
+    expect((await ask()).status).toBe(201);
+    expect(state.rpc[0]![1]).toMatchObject({ p_embedding: null });
+  });
+});
+
 describe("POST /api/rooms/:id/ask with the workspace's context", () => {
   it("passes the passage and earlier turns to apps/ai, and searches with the passage and previous question too", async () => {
     state.matches = CHUNKS;
