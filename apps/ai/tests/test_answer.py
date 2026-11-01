@@ -198,3 +198,22 @@ def test_check_question_cleans_and_refuses_blank_questions():
     assert len(check_question("q" * 900)) == 500
     with pytest.raises(ValueError):
         check_question("\x01 \n")
+
+
+def test_answer_text_is_tidied_into_bullets_without_labels_or_quotes():
+    from app.services.answer import tidy_answer
+
+    raw = (
+        "Images are made of pixels. [C1]\n"
+        '1. **Digital** images are grids of pixels. [C1] "Location is (x,y)" "Each pixel holds"\n'
+        "2. Sampling picks pixels [C5, C6]\n"
+        "## Notes\n"
+        "* Quantization rounds values."
+    )
+    assert tidy_answer(raw) == (
+        "Images are made of pixels.\n\n"
+        "- Digital images are grids of pixels.\n"
+        "- Sampling picks pixels\n"
+        "Notes\n\n"
+        "- Quantization rounds values."
+    )

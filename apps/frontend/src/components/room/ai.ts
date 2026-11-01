@@ -117,6 +117,7 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
   // A snapshot or a selected passage belongs to the document it was taken from (the box's, first):
   // asking the other sources about it only adds "not in this document" answers.
   const targets = req.image || req.quote?.trim() ? backendDocs.slice(0, 1) : backendDocs;
+  let lastError: string | null = null;
   if (targets.length > 0) {
     const body = backendBody(req);
     const results = await Promise.allSettled(targets.map((id) => api.ask(id, body)));
@@ -142,11 +143,15 @@ export async function ask(req: AskRequest, docs: DocContent[], remote: string[])
       };
     }
     if (!failed.every(unreachable)) throw failed.find((e) => !unreachable(e));
+    lastError = failed[0] instanceof Error ? failed[0].message : null;
   }
 
   if (req.image) {
+    // Say which: a document the server doesn't have (demo, unprocessed video) or a failed request.
     return {
-      text: "The AI lens couldn't reach the backend, so this snapshot wasn't read. It's saved in this box: ask again once the AI is back.",
+      text: targets.length
+        ? `The AI lens couldn't reach the AI server (${lastError ?? "no response"}), so this snapshot wasn't read. It's saved in this box: ask again in a moment.`
+        : "The AI lens only reads documents saved on the server, and this one isn't. Upload it as a source to ask about it.",
       citations: [],
       preview: true,
     };
