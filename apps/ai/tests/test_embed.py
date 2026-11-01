@@ -24,10 +24,11 @@ class FakeEmbeddings:
         self.drop_one = False
         self.bad_value = False
         self.mutate = None  # optional function that changes the response data
+        self.fail_providers: set[str] | None = None  # with `error`: only these fail (None: all)
 
     async def __call__(self, provider, api_key, model, texts, **kwargs):
         self.calls.append({"provider": provider, "model": model, "texts": texts, **kwargs})
-        if self.error:
+        if self.error and (self.fail_providers is None or provider in self.fail_providers):
             raise self.error
         data = [
             SimpleNamespace(index=i, embedding=vector(float(i), self.dim))
@@ -65,7 +66,7 @@ def test_returns_one_vector_per_text_in_order(client, auth, fake_embeddings):
     res = post(client, auth, ["first", "second", "third"])
     assert res.status_code == 200
     body = res.json()
-    assert body["model"] == "nvidia/nv-embedqa-e5-v5"
+    assert body["model"] == "nvidia/llama-3.2-nv-embedqa-1b-v2"
     assert [v[0] for v in body["vectors"]] == [0.0, 1.0, 2.0]
     assert all(len(v) == DIM for v in body["vectors"])
 
@@ -77,6 +78,17 @@ def test_nvidia_gets_the_input_type_and_truncation(client, auth, fake_embeddings
     assert call["provider"] == "nvidia"
     assert call["extra_body"] == {"input_type": input_type, "truncate": "END"}
     assert call["encoding_format"] == "float"
+
+
+def test_nvidia_is_asked_for_the_column_size_unless_the_model_has_one_size(
+    client, auth, fake_embeddings, monkeypatch
+):
+    post(client, auth, ["text"])
+    assert fake_embeddings.calls[0]["dimensions"] == DIM
+    monkeypatch.setenv("EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5")
+    get_settings.cache_clear()
+    post(client, auth, ["text"])
+    assert "dimensions" not in fake_embeddings.calls[1]
 
 
 def test_passage_is_the_default(client, auth, fake_embeddings):
@@ -105,10 +117,11 @@ def test_mistral_gets_no_extra_parameters(client, auth, fake_embeddings, monkeyp
     assert set(call) == {"provider", "model", "texts", "encoding_format"}
 
 
-def test_answers_503_without_a_key_for_the_embedding_provider(
+def test_answers_503_without_a_key_for_any_embedding_model(
     client, auth, fake_embeddings, monkeypatch
 ):
     monkeypatch.setenv("EMBEDDING_PROVIDER", "mistral")  # MISTRAL_API_KEY is empty in tests
+    monkeypatch.setenv("EMBEDDING_FALLBACKS", "")
     get_settings.cache_clear()
     res = post(client, auth, ["text"])
     assert res.status_code == 503
@@ -116,15 +129,40 @@ def test_answers_503_without_a_key_for_the_embedding_provider(
     assert fake_embeddings.calls == []
 
 
-def test_has_no_fallback_when_the_provider_fails(client, auth, fake_embeddings, caplog):
+def test_falls_back_to_the_next_model_without_logging_the_text(
+    client, auth, fake_embeddings, caplog, monkeypatch
+):
+    # Gemini has a key in tests, Mistral doesn't (skipped).
+    monkeypatch.setenv("EMBEDDING_FALLBACKS", "mistral:mistral-embed,gemini:gemini-embedding-001")
+    get_settings.cache_clear()
     # Some providers echo the input back in their error message.
     fake_embeddings.error = RuntimeError("invalid input: secret document text")
+    fake_embeddings.fail_providers = {"nvidia"}
     with caplog.at_level(logging.WARNING):
         res = post(client, auth, ["secret document text"])
-    assert res.status_code == 502
-    # Vectors from another model wouldn't match the room's other vectors: only one attempt.
-    assert len(fake_embeddings.calls) == 1
+    assert res.status_code == 200
+    assert res.json()["model"] == "gemini-embedding-001"
+    assert [c["provider"] for c in fake_embeddings.calls] == ["nvidia", "gemini"]
     assert "secret document text" not in caplog.text
+
+
+def test_a_named_model_is_used_alone(client, auth, fake_embeddings):
+    # A room's chunks were made with one model: its questions must use that one, or none.
+    fake_embeddings.error = RuntimeError("down")
+    fake_embeddings.fail_providers = {"nvidia"}
+    res = post(client, auth, ["q"], input_type="query", model="nvidia/llama-3.2-nv-embedqa-1b-v2")
+    assert res.status_code == 502
+    assert len(fake_embeddings.calls) == 1
+    res = post(client, auth, ["q"], input_type="query", model="gemini-embedding-001")
+    assert res.status_code == 200
+    assert fake_embeddings.calls[-1]["provider"] == "gemini"
+    assert post(client, auth, ["q"], model="not-configured").status_code == 502
+
+
+def test_answers_502_when_every_model_fails(client, auth, fake_embeddings):
+    fake_embeddings.error = RuntimeError("down")
+    assert post(client, auth, ["text"]).status_code == 502
+    assert [c["provider"] for c in fake_embeddings.calls] == ["nvidia", "gemini"]
 
 
 @pytest.mark.parametrize(

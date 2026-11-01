@@ -132,31 +132,37 @@ async function embedChunks(roomId: string, chunks: Chunk[]) {
   try {
     const batches: Chunk[][] = [];
     for (let i = 0; i < chunks.length; i += EMBED_BATCH) batches.push(chunks.slice(i, i + EMBED_BATCH));
+    const embedBatch = async (batch: Chunk[], model?: string) => {
+      const res = await callAi(
+        "/embed",
+        { texts: batch.map(embeddingText), input_type: "passage", ...(model && { model }) },
+        EmbedResponse,
+        EMBED_TIMEOUT_MS,
+      );
+      if (res.vectors.length !== batch.length) throw new Error(`got ${res.vectors.length} vectors for ${batch.length}`);
+      return res;
+    };
+    // The first batch finds a model that works (apps/ai falls back across its configured ones); the
+    // rest must use that same model, since vectors from different models can't be compared.
+    const first = await embedBatch(batches[0]!);
+    const model = first.model;
     const results: { model: string; vectors: number[][] }[] = new Array(batches.length);
+    results[0] = first;
     // A few batches in flight at once: a long document no longer waits on each batch in turn.
-    let next = 0;
+    let next = 1;
     let failed = false;
     const worker = async () => {
       while (!failed && next < batches.length) {
         const n = next++;
-        const batch = batches[n]!;
         try {
-          const res = await callAi(
-            "/embed",
-            { texts: batch.map(embeddingText), input_type: "passage" },
-            EmbedResponse,
-            EMBED_TIMEOUT_MS,
-          );
-          if (res.vectors.length !== batch.length) throw new Error(`got ${res.vectors.length} vectors for ${batch.length}`);
-          results[n] = res;
+          results[n] = await embedBatch(batches[n]!, model);
         } catch (err) {
           failed = true; // the other workers stop sending: these vectors would be thrown away
           throw err;
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(EMBED_CONCURRENCY, batches.length) }, worker));
-    const model = results[0]!.model;
+    await Promise.all(Array.from({ length: Math.min(EMBED_CONCURRENCY, batches.length - 1) }, worker));
     const changed = results.find((r) => r.model !== model);
     if (changed) throw new Error(`model changed from ${model} to ${changed.model}`);
     return { model, vectors: results.flatMap((r) => r.vectors) };

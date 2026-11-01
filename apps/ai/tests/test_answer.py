@@ -153,7 +153,7 @@ def test_gives_each_provider_a_share_of_the_time(client, auth, fake):
     fake.fail = {"nv-a"}
     fake.answer.citations = [cite(1, "turns sunlight into chemical energy")]
     assert ask(client, auth).status_code == 200
-    assert fake.timeouts == [10.0, 10.0]
+    assert fake.timeouts == [20.0, 20.0]
 
 
 def test_falls_back_to_the_next_provider(client, auth, fake):

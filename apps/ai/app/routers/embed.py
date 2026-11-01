@@ -17,7 +17,7 @@ router = APIRouter()
 )
 async def embed_texts(req: EmbedRequest) -> EmbedResponse:
     try:
-        model, vectors = await embed(req.texts, req.input_type)
+        model, vectors = await embed(req.texts, req.input_type, req.model)
     except NoEmbeddingProviderError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except EmbeddingError as e:

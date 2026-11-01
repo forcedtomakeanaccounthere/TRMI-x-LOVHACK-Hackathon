@@ -343,8 +343,21 @@ describe("embedding in parallel", () => {
     });
 
     expect((await indexRoom("room0001")).embedded).toBe(false);
-    expect(callAi.mock.calls.filter(([path]) => path === "/embed").length).toBe(EMBED_CONCURRENCY);
+    // The first batch goes alone (it finds the model), so its failure stops the rest.
+    expect(callAi.mock.calls.filter(([path]) => path === "/embed").length).toBe(1);
     expect(inserted().every((row) => row.embedding === null)).toBe(true);
+  });
+
+  it("sends every batch after the first with the model the first one used", async () => {
+    results.rooms = [{ data: roomWith(EMBED_BATCH * 3) }];
+    callAi.mockImplementation(async (path: string, body: { texts: string[]; model?: string }) =>
+      path === "/embed" ? { model: body.model ?? "fallback-model", vectors: body.texts.map(() => [0, 0]) } : SUMMARY,
+    );
+    expect((await indexRoom("room0001")).embedded).toBe(true);
+    const bodies = callAi.mock.calls.filter(([path]) => path === "/embed").map(([, body]) => body as { model?: string });
+    expect(bodies[0]!.model).toBeUndefined();
+    expect(bodies.slice(1).every((b) => b.model === "fallback-model")).toBe(true);
+    expect(inserted().every((row) => row.embedding_model === "fallback-model")).toBe(true);
   });
 });
 

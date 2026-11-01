@@ -11,6 +11,10 @@ log = logging.getLogger(__name__)
 InputType = Literal["passage", "query"]
 
 
+# NVIDIA models whose vectors have one fixed size and refuse a `dimensions` parameter.
+FIXED_SIZE_MODELS = frozenset({"nvidia/nv-embedqa-e5-v5", "nvidia/nv-embedqa-mistral-7b-v2"})
+
+
 class EmbeddingError(Exception):
     pass
 
@@ -28,18 +32,56 @@ async def _create(provider: str, api_key: str, model: str, texts: list[str], **k
     return await client.embeddings.create(model=model, input=texts, **kwargs)
 
 
-async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list[float]]]:
-    """Embeds `texts` with the configured provider and model. Returns (model, vectors), one vector
-    of EMBEDDING_DIM numbers per text, in order. No fallback: a failure raises EmbeddingError."""
+def candidates() -> list[tuple[str, str]]:
+    """(provider, model) pairs to embed with, in order: EMBEDDING_PROVIDER/EMBEDDING_MODEL, then
+    EMBEDDING_FALLBACKS ("provider:model,..."). Each must give EMBEDDING_DIM numbers."""
     settings = get_settings()
-    provider, model, dim = (
-        settings.embedding_provider,
-        settings.embedding_model,
-        settings.embedding_dim,
-    )
+    pairs = [(settings.embedding_provider, settings.embedding_model)]
+    for entry in settings.embedding_fallbacks.split(","):
+        provider, sep, model = entry.strip().partition(":")
+        known = provider in ("nvidia", "gemini", "mistral")
+        if sep and known and model and (provider, model) not in pairs:
+            pairs.append((provider, model))
+    return pairs
+
+
+async def embed(
+    texts: list[str], input_type: InputType, model: str | None = None
+) -> tuple[str, list[list[float]]]:
+    """Embeds `texts`, one vector of EMBEDDING_DIM numbers per text, in order. Returns (model,
+    vectors).
+
+    Without `model`, tries the configured models in order and returns the first that works: a room
+    is indexed with one model throughout. With `model` (the one a room's chunks were made with),
+    only that model is used, since vectors from different models can't be compared. Providers
+    without an API key are skipped."""
+    settings = get_settings()
+    usable = [
+        (provider, name)
+        for provider, name in candidates()
+        if getattr(settings, f"{provider}_api_key") and (model is None or name == model)
+    ]
+    if not usable:
+        if model is not None:
+            raise EmbeddingError(f"{model} isn't a configured embedding model with an API key")
+        raise NoEmbeddingProviderError(
+            f"{settings.embedding_provider.upper()}_API_KEY is not set for embeddings"
+        )
+    last: EmbeddingError | None = None
+    for provider, name in usable:
+        try:
+            return name, await _embed_with(provider, name, texts, input_type)
+        except EmbeddingError as e:
+            last = e
+    raise last or EmbeddingError("no embedding model worked")
+
+
+async def _embed_with(
+    provider: str, model: str, texts: list[str], input_type: InputType
+) -> list[list[float]]:
+    settings = get_settings()
     api_key = getattr(settings, f"{provider}_api_key")
-    if not api_key:
-        raise NoEmbeddingProviderError(f"{provider.upper()}_API_KEY is not set for embeddings")
+    dim = settings.embedding_dim
 
     # Plain floats: without this the SDK asks for base64, which not every provider supports.
     kwargs: dict = {"encoding_format": "float"}
@@ -47,6 +89,10 @@ async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list
         # NVIDIA's retrieval models embed documents and questions differently, and refuse input
         # over their token limit unless told to cut it.
         kwargs["extra_body"] = {"input_type": input_type, "truncate": "END"}
+        # Newer ones (llama-3.2-nv-embedqa-1b-v2) make vectors of several sizes: ask for the
+        # column's.
+        if model not in FIXED_SIZE_MODELS:
+            kwargs["dimensions"] = dim
     elif provider == "gemini":
         kwargs["dimensions"] = dim
 
@@ -75,7 +121,7 @@ async def embed(texts: list[str], input_type: InputType) -> tuple[str, list[list
         input_type,
         (time.monotonic() - start) * 1000,
     )
-    return model, vectors
+    return vectors
 
 
 def _vectors(response, count: int, dim: int, name: str) -> list[list[float]]:
