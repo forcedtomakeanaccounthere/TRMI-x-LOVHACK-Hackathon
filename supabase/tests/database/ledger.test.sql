@@ -1,0 +1,140 @@
+-- The workspace ledger tables (0020_room_ledger.sql): only the backend (service role) reads or writes
+-- them, events are never edited, and deleting a room removes its ledger.
+-- Run with `npm run test:db`. Everything runs in one transaction that is rolled back.
+begin;
+create extension if not exists pgtap with schema extensions;
+
+select plan(31);
+
+insert into rooms (id, kind, title) values ('ledg0001', 'link', 'Ledger room');
+insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+values ('ledg0001', 'e1', 'chat', 'guest-abcd1234', 'Gus', '{"type": "chat"}', now());
+insert into room_members (room_id, member_id, name, role) values ('ledg0001', 'guest-abcd1234', 'Gus', 'viewer');
+insert into room_settings (room_id) values ('ledg0001');
+insert into rooms (id, kind, title) values ('ledg0002', 'link', 'Attached'), ('ledg0003', 'link', 'Also attached');
+insert into room_attachments (room_id, source_room_id, position) values ('ledg0001', 'ledg0002', 0), ('ledg0001', 'ledg0003', 1);
+
+select ok(relrowsecurity, format('RLS is enabled on %s', relname))
+from pg_class
+where oid in ('public.room_events'::regclass, 'public.room_members'::regclass, 'public.room_settings'::regclass, 'public.room_attachments'::regclass)
+order by relname;
+
+-- Defaults match the frontend's DEFAULT_SETTINGS.
+select results_eq(
+  $$select allow_guests, guest_role, member_role, viewers_use_ai from room_settings where room_id = 'ledg0001'$$,
+  $$values (true, 'editor', 'editor', true)$$,
+  'room settings default to the frontend''s'
+);
+
+-- Append-only, even for the table owner.
+select throws_ok(
+  $$update room_events set actor_name = 'Hacked' where room_id = 'ledg0001'$$,
+  '42501', 'room_events is append-only', 'an event cannot be edited'
+);
+select throws_ok(
+  $$insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+    values ('ledg0001', 'e1', 'chat', 'x', 'X', '{}', now())$$,
+  '23505', null, 'an event id is used once per room'
+);
+select throws_ok(
+  $$insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+    values ('ledg0001', 'e2', 'room.delete', 'x', 'X', '{}', now())$$,
+  '23514', null, 'an unknown event type is refused'
+);
+select throws_ok(
+  $$insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+    values ('ledg0001', 'e3', 'chat', 'x', 'X', '[]', now())$$,
+  '23514', null, 'a payload must be an object'
+);
+select throws_ok(
+  $$insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+    values ('ledg0001', 'bad id!', 'chat', 'x', 'X', '{}', now())$$,
+  '23514', null, 'an event id must be url-safe'
+);
+select throws_ok(
+  $$insert into room_members (room_id, member_id, name, role) values ('ledg0001', 'm2', 'M', 'owner')$$,
+  '23514', null, 'nobody is stored as owner (the owner is rooms.created_by)'
+);
+select throws_ok(
+  $$insert into room_members (room_id, member_id, name, key_hash) values ('ledg0001', 'm3', 'M', 'not-a-hash')$$,
+  '23514', null, 'a guest key is stored only as a sha256 hex digest'
+);
+select throws_ok(
+  $$insert into room_settings (room_id, guest_role) values ('ledg0001', 'admin')$$,
+  '23514', null, 'guests can''t default to admin'
+);
+
+select throws_ok(
+  $$insert into room_attachments (room_id, source_room_id, position) values ('ledg0002', 'ledg0002', 0)$$,
+  '23514', null, 'a room is not attached to itself'
+);
+
+-- append_room_events (0023): writes events and their effects together, against the latest state.
+select is(
+  append_room_events('ledg0001', 0, '[]'::jsonb, null, '[]'::jsonb, null),
+  'conflict',
+  'a write checked against an older ledger is refused'
+);
+select is(
+  append_room_events(
+    'ledg0001',
+    (select max(seq) from room_events where room_id = 'ledg0001'),
+    '[{"id": "e2", "type": "member.kick", "actor_id": "owner", "actor_name": "Olivia", "payload": {"type": "member.kick"}, "at": "2026-11-01T10:00:00Z"}]'::jsonb,
+    null,
+    '[{"member_id": "guest-abcd1234", "name": "Gus", "kick": true}]'::jsonb,
+    '{"viewersUseAi": false}'::jsonb
+  ),
+  'ok',
+  'a write against the latest ledger is accepted'
+);
+select results_eq(
+  $$select role, kicked_at is not null from room_members where room_id = 'ledg0001' and member_id = 'guest-abcd1234'$$,
+  $$values ('viewer', true)$$,
+  'a kick keeps the member''s role (only the kick is patched)'
+);
+select results_eq(
+  $$select viewers_use_ai, guest_role from room_settings where room_id = 'ledg0001'$$,
+  $$values (false, 'editor')$$,
+  'a settings patch changes only what it names'
+);
+
+-- Browsers (anon and authenticated) can't reach any of it.
+set local role anon;
+select throws_ok($$select 1 from room_events$$, '42501', null, 'anon cannot read the ledger');
+select throws_ok(
+  $$insert into room_events (room_id, id, type, actor_id, actor_name, payload, at)
+    values ('ledg0001', 'e9', 'chat', 'x', 'X', '{}', now())$$,
+  '42501', null, 'anon cannot append events'
+);
+select throws_ok($$select 1 from room_members$$, '42501', null, 'anon cannot read members (or guest key hashes)');
+select throws_ok($$update room_settings set allow_guests = false$$, '42501', null, 'anon cannot change settings');
+select throws_ok($$select 1 from room_attachments$$, '42501', null, 'anon cannot read attachments');
+select throws_ok(
+  $$select append_room_events('ledg0001', 0, '[]'::jsonb, null, '[]'::jsonb, null)$$,
+  '42501', null, 'anon cannot append through the function either'
+);
+
+set local role authenticated;
+select throws_ok($$select 1 from room_events$$, '42501', null, 'a signed-in browser cannot read the ledger either');
+select throws_ok(
+  $$update room_members set role = 'admin' where member_id = 'guest-abcd1234'$$,
+  '42501', null, 'a signed-in browser cannot hand out roles'
+);
+select throws_ok($$delete from room_events$$, '42501', null, 'a signed-in browser cannot delete events');
+
+reset role;
+-- Deleting an attached room removes only that attachment.
+delete from rooms where id = 'ledg0003';
+select results_eq(
+  $$select source_room_id from room_attachments where room_id = 'ledg0001'$$,
+  $$values ('ledg0002')$$,
+  'deleting an attached room detaches it'
+);
+-- Deleting a room takes its ledger with it.
+delete from rooms where id = 'ledg0001';
+select is_empty($$select 1 from room_events where room_id = 'ledg0001'$$, 'events go with the room');
+select is_empty($$select 1 from room_members where room_id = 'ledg0001'$$, 'members go with the room');
+select is_empty($$select 1 from room_attachments where room_id = 'ledg0001'$$, 'attachments go with the room');
+
+select * from finish();
+rollback;

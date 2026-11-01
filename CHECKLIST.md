@@ -402,14 +402,20 @@ How state is shared until the backend has tables for it: every change is an even
 - [ ] Roles owner / admin / editor / viewer, defaults for guests and signed-in members, "viewers can use AI"; checked in the UI
 - [ ] Phone layout: bottom bar opens Sources or the room panel as a sheet you can drag down to close
 
-**BE: still needed** (the frontend already calls these and falls back to a labelled **Preview** when they return 404)
-- [ ] `POST /api/rooms/:id/ask` `{ question, sources: room_id[], quote?, image? (JPEG data URL), history? }` → `{ answer, citations: [{ room_id, block, quote }] }`, answered with `match_chunks` over the chosen rooms; the image is for the AI lens, so it needs a vision model. Save each one to `ai_queries`.
-- [ ] `POST /api/rooms/:id/artifacts` `{ kind: summary|quiz|flashcards|mindmap|infographic, sources }` → the `ArtifactBody` shape in `components/room/types.ts`. The preview builds them from `room_ai.summary` (or headings) in the browser.
-- [ ] `POST /api/rooms/youtube` `{ url }` → `{ id }`: a `youtube` room with transcript segments as `t{n}` blocks
-- [ ] `room_sources` table (room_id, source_room_id, added_by, position) plus `GET/POST/DELETE /api/rooms/:id/sources`, so attachments don't depend on peers being online
-- [ ] Tables for what the ledger holds now: `annotations` (kind, doc, block, geometry jsonb, color, author), `room_messages` (discussion), `ai_threads`, `artifacts`, `room_members` (role, kicked_at) and `room_settings`; append-only `room_events` for History. Enforce roles and kicks in RLS or the API.
-- [ ] A signed download link for an uploaded room's original file (private `files` bucket): `GET /api/rooms/:id/original`
-- [ ] Notes as comments: allow `comments.highlight_id` to be null in `NewComment`, so comment boxes reach the recap
+**BE** (the frontend already calls `/ask` and `/artifacts`, and falls back to a labelled **Preview** when they return 404)
+- [x] `POST /api/rooms/:id/ask` `{ question, name?, sources?: room_id[], quote?, history?, image? (JPEG/PNG/WebP data URL) }` → `AiMessage`; `match_chunks` over each chosen room, interleaved by rank; citations carry `room_id` when several rooms were asked. The image goes only to `VISION_MODELS` (apps/ai answers 501 without one → backend 422). Saved to `ai_messages` and `ai_queries`. Follows the room's roles (`useAi`, kicks).
+- [x] `POST /api/rooms/:id/artifacts` `{ kind: summary|quiz|flashcards|mindmap|infographic, sources }` → `ArtifactBody`. Summary from `room_ai.summary` (no AI call); the rest through apps/ai `/study`. Editors and up, one per room at a time, rate-limited like Ask, recorded in `ai_queries` (kind `artifact`).
+- [x] `POST /api/rooms/youtube` `{ url }` → `{ id }`: a `youtube` room with transcript segments as `t{n}` blocks
+- [x] `room_attachments` table (room_id, source_room_id, added_by, position; `room_sources` already holds transcripts) plus `GET/POST/DELETE /api/rooms/:id/sources`, so attachments don't depend on peers being online
+- [x] The ledger in the database as an event store: append-only `room_events` (every `LedgerEvent`, the History), with `room_members` (role, kicked_at, guest key hash) and `room_settings` kept from it. `GET/POST /api/rooms/:id/events`, `GET /api/rooms/:id/members`; roles and kicks enforced in the API (`lib/ledger.ts`). Guests send `X-Guest-Id` + `X-Guest-Key`.
+- [x] A signed download link for an uploaded room's original file (private `files` bucket, or `pdfs`): `GET /api/rooms/:id/original`
+- [x] Notes as comments: `comments.highlight_id` may be null in `NewComment`, so comment boxes reach the recap
+
+**FE: wire to the new backend**
+- [ ] Ledger: load with `GET /events` (paged by `seq`) on join, append with `POST /events` alongside the realtime broadcast; send `X-Guest-Id`/`X-Guest-Key` for guests (keep the key in the browser next to the guest id); show `rejected` reasons; replace `localStorage` as the source of truth
+- [ ] Sources rail: `GET/POST/DELETE /sources` instead of `doc.add`/`doc.remove` alone
+- [ ] AI boxes and chat: one `/ask` call with `sources`, `quote`, `history`, `image` instead of one call per document; map citations by `room_id`
+- [ ] Library: a "Download original" button from `GET /original`
 
 **QA**
 - [ ] Two browsers on `/r/demo`: presence, cursors, highlights, drawings, comments, AI boxes, chat and artifacts appear on both; the later joiner receives everything

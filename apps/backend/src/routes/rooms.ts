@@ -20,6 +20,7 @@ import {
   CreateDrawingRequest,
   RemoveDrawingRequest,
   ExportSummaryQuery,
+  type OriginalFileResponse,
   type Drawing,
   DashboardQuery,
   RecapData,
@@ -52,6 +53,11 @@ import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
+import { assertParticipant, assertReader, can, roomAccess } from "../lib/ledger";
+import { roomScope } from "../lib/sources";
+import { ledgerRoutes } from "./ledger";
+import { sourcesRoutes } from "./sources";
+import { artifactsRoutes } from "./artifacts";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -806,33 +812,63 @@ const askPerRoom = rateLimit({
 });
 
 type MatchedChunk = { content: string; block_ids: string[]; page: number | null; start_sec: number | null; end_sec: number | null };
+type SourcedChunk = MatchedChunk & { room_id: string };
 
-// POST /api/rooms/:id/ask  { question, name? }: answers a question from the room's document, with
-// citations checked against it. Guests can ask. The answer is saved in ai_messages, which reaches
-// everyone in the room over Realtime, and returned.
+/**
+ * The best chunks across several rooms: each room's own ranking, taken in turns (every room's best,
+ * then every room's second best, ...), so one long document doesn't crowd the others out.
+ */
+export function interleaveChunks(perRoom: SourcedChunk[][], limit: number): SourcedChunk[] {
+  const out: SourcedChunk[] = [];
+  for (let rank = 0; out.length < limit && perRoom.some((list) => rank < list.length); rank++) {
+    for (const list of perRoom) {
+      const chunk = list[rank];
+      if (chunk && out.length < limit) out.push(chunk);
+    }
+  }
+  return out;
+}
+
+const NOT_READY = new Set(["pending", "indexing"]);
+// apps/ai gives a question with a snapshot 40 s.
+const IMAGE_ANSWER_TIMEOUT_MS = 45_000;
+
+// POST /api/rooms/:id/ask  { question, name?, sources?, quote?, history?, image? }: answers a question
+// from the room's document, or from several of the room's documents (`sources`: the room and its
+// attached sources), with citations checked against them. `quote` is the passage an AI box is about,
+// `history` its earlier turns, `image` an AI-lens snapshot (read by a vision model). Guests can ask,
+// unless the room's roles say otherwise. The answer is saved in ai_messages, which reaches everyone in
+// the room over Realtime, and returned.
 roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res) => {
   const id = req.params.id as string;
-  const { question, name } = AskRequest.parse(req.body ?? {});
+  const { question, name, sources, quote, history, image } = AskRequest.parse(req.body ?? {});
   const askedBy = name ?? (req.user?.name.trim().slice(0, 40) || null);
   const db = supabaseAdmin();
 
-  const [room, ai] = await Promise.all([
-    db.from("rooms").select("status").eq("id", id).maybeSingle(),
-    db.from("room_ai").select("status").eq("room_id", id).maybeSingle(),
-  ]);
-  if (room.error) throw room.error;
-  if (ai.error) throw ai.error;
-  if (!room.data || room.data.status === "deleted") throw new HttpError(404, "Room not found");
-  if (room.data.status === "archived") throw new HttpError(409, "This room is archived");
-  // Until the chunks are saved there is nothing to search; once they are ("summarizing" onwards)
-  // questions work, with or without the summary.
-  if (!ai.data || ai.data.status === "pending" || ai.data.status === "indexing") {
-    throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
+  const access = await roomAccess(id, req);
+  if (access.status === "archived") throw new HttpError(409, "This room is archived");
+  assertParticipant(access);
+  if (!can.useAi(access.role, access.settings)) throw new HttpError(403, "Your role can't use the AI");
+
+  const wanted = sources ? [...new Set(sources)] : [id];
+  if (sources) {
+    const scope = new Set(await roomScope(id, access.identity));
+    if (wanted.some((source) => !scope.has(source))) throw new HttpError(404, "Some of the chosen sources aren't in this room");
   }
-  // A failed indexing run may have left no chunks or only some: an empty search there would say
-  // "not in this document" about a document nobody searched.
-  if (ai.data.status === "failed") {
-    throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
+
+  const { data: states, error: aiError } = await db.from("room_ai").select("room_id, status").in("room_id", wanted);
+  if (aiError) throw aiError;
+  const statusOf = new Map(((states ?? []) as { room_id: string; status: string }[]).map((row) => [row.room_id, row.status]));
+  // Until a room's chunks are saved there is nothing to search; once they are ("summarizing" onwards)
+  // questions work, with or without the summary. A failed indexing run may have left no chunks or only
+  // some: an empty search there would say "not in this document" about a document nobody searched.
+  const ready = wanted.filter((room) => statusOf.has(room) && !NOT_READY.has(statusOf.get(room)!) && statusOf.get(room) !== "failed");
+  // A snapshot can be answered on its own; a text question needs a document to search.
+  if (!ready.length && !image) {
+    if (wanted.every((room) => statusOf.get(room) === "failed")) {
+      throw new HttpError(409, "The AI couldn't read this room, so it can't answer questions about it yet.");
+    }
+    throw new HttpError(409, "The AI is still reading this room. Try again in a moment.");
   }
 
   // The question is shown to the whole room, so it is moderated before anything else, whether or not
@@ -843,36 +879,66 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   });
   if (moderation.flagged.length) throw new HttpError(422, "That question can't be asked here. Try rephrasing it.");
 
+  // The passage an AI box is about helps find the right chunks too.
+  const searchText = quote ? `${question}\n${quote}` : question;
   // Without an embedding the search is by keyword only.
   let embedding: number[] | null = null;
-  try {
-    const embedded = await callAi("/embed", { texts: [question], input_type: "query" }, EmbedResponse, QUESTION_EMBED_TIMEOUT_MS);
-    embedding = embedded.vectors[0] ?? null;
-  } catch {
-    console.warn(`[rooms] no embedding for a question in room ${id}, searching by keyword`);
+  if (ready.length) {
+    try {
+      const embedded = await callAi("/embed", { texts: [searchText.slice(0, 2000)], input_type: "query" }, EmbedResponse, QUESTION_EMBED_TIMEOUT_MS);
+      embedding = embedded.vectors[0] ?? null;
+    } catch {
+      console.warn(`[rooms] no embedding for a question in room ${id}, searching by keyword`);
+    }
   }
 
-  const { data: found, error: matchError } = await db.rpc("match_chunks", {
-    p_room: id,
-    p_embedding: embedding,
-    p_query: question,
-    p_k: ASK_CHUNKS,
-  });
-  if (matchError) throw matchError;
-  const chunks = (found ?? []) as MatchedChunk[];
+  const perRoomK = ready.length > 1 ? Math.max(3, Math.ceil((ASK_CHUNKS * 1.5) / ready.length)) : ASK_CHUNKS;
+  const perRoom = await Promise.all(
+    ready.map(async (room) => {
+      const { data: found, error: matchError } = await db.rpc("match_chunks", {
+        p_room: room,
+        p_embedding: embedding,
+        p_query: searchText,
+        p_k: perRoomK,
+      });
+      if (matchError) throw matchError;
+      return ((found ?? []) as MatchedChunk[]).map((chunk) => ({ ...chunk, room_id: room }));
+    }),
+  );
+  const chunks = interleaveChunks(perRoom, ASK_CHUNKS);
 
-  // Nothing matched: the document can't answer, and there is nothing to send the AI.
-  const answer: AnswerResponse = chunks.length
-    ? await callAi("/answer", { question, chunks: chunks.map((c) => ({ content: c.content })) }, AnswerResponse, ANSWER_TIMEOUT_MS)
-    : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
+  // Nothing matched and no snapshot: the documents can't answer, and there is nothing to send the AI.
+  const answer: AnswerResponse =
+    chunks.length || image
+      ? await callAi(
+          "/answer",
+          { question, chunks: chunks.map((c) => ({ content: c.content })), quote: quote ?? null, history: history ?? [], image: image ?? null },
+          AnswerResponse,
+          image ? IMAGE_ANSWER_TIMEOUT_MS : ANSWER_TIMEOUT_MS,
+          { 501: new HttpError(422, "Questions about a snapshot need a vision model, and none is set up on this server.") },
+        )
+      : { answer: NOT_IN_DOCUMENT, found_in_document: false, citations: [], withheld: false };
 
-  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped.
+  // Where each quote is comes from its chunk; a citation of a chunk that wasn't sent is dropped. A
+  // citation names its room whenever it isn't the room the question was asked in.
   const citations = answer.citations.flatMap((citation): AiCitation[] => {
     const chunk = chunks[citation.chunk - 1];
     if (!chunk) return [];
-    return [{ quote: citation.quote, block_ids: chunk.block_ids, page: chunk.page, start_sec: chunk.start_sec, end_sec: chunk.end_sec }];
+    return [
+      {
+        ...(wanted.length > 1 || chunk.room_id !== id ? { room_id: chunk.room_id } : {}),
+        quote: citation.quote,
+        block_ids: chunk.block_ids,
+        page: chunk.page,
+        start_sec: chunk.start_sec,
+        end_sec: chunk.end_sec,
+      },
+    ];
   });
   const inDocument = answer.found_in_document && citations.length > 0;
+  // An answer about a snapshot stands without citations; a text answer without one isn't trusted.
+  const aboutImage = Boolean(image) && !answer.withheld && answer.answer.trim() !== "" && answer.answer !== NOT_IN_DOCUMENT;
+  const shown = answer.withheld ? ANSWER_WITHHELD : inDocument || aboutImage ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT;
 
   const { data: message, error } = await db
     .from("ai_messages")
@@ -882,7 +948,7 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
       asked_by: askedBy,
       question,
       // Our own text for a withheld answer: never the model's.
-      answer: answer.withheld ? ANSWER_WITHHELD : inDocument ? answer.answer.slice(0, 4000) : NOT_IN_DOCUMENT,
+      answer: shown,
       found_in_document: inDocument,
       citations: inDocument ? citations : [],
     })
@@ -891,9 +957,13 @@ roomsRouter.post("/:id/ask", askPerIp, askPerRoom, optionalAuth, async (req, res
   if (error) throw error;
 
   // A history row is nice to have but never worth failing the answer for.
-  const { error: historyError } = await db
-    .from("ai_queries")
-    .insert({ room_id: id, user_id: req.user?.id ?? null, kind: "ask", prompt: question, response: message });
+  const { error: historyError } = await db.from("ai_queries").insert({
+    room_id: id,
+    user_id: req.user?.id ?? null,
+    kind: "ask",
+    prompt: question,
+    response: { ...message, sources: wanted, quote: quote ?? null, with_image: Boolean(image) },
+  });
   if (historyError) console.error("[rooms] could not record the question", historyError);
 
   res.status(201).json(message as AiMessage);
@@ -1055,6 +1125,49 @@ roomsRouter.get("/:id/summary/export", optionalAuth, async (req, res) => {
   }
 });
 
+// GET /api/rooms/:id/original: a short-lived signed link that downloads the file the room was made
+// from, under its original name. Anyone who can read the room can download it, like the summary
+// export. File rooms keep the original in the private "files" bucket, PDF rooms in "pdfs"; rooms made
+// from a link, text or a video have no file.
+roomsRouter.get("/:id/original", optionalAuth, async (req, res) => {
+  const id = req.params.id as string;
+  // Removed people, and guests where the room is for members only, can't download it.
+  assertReader(await roomAccess(id, req));
+  const { data: room, error } = await supabaseAdmin()
+    .from("rooms")
+    .select("kind, status, pdf_path, source_meta")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!room || room.status === "deleted") throw new HttpError(404, "Room not found");
+
+  const meta = room.source_meta as { format?: string; file_name?: string } | null;
+  let bucket: string;
+  let path: string;
+  if (room.kind === "file" && meta?.format) {
+    bucket = FILES_BUCKET;
+    path = `${id}.${meta.format}`;
+  } else if (room.kind === "pdf" && room.pdf_path) {
+    bucket = "pdfs";
+    path = room.pdf_path as string;
+  } else {
+    throw new HttpError(404, "This room has no original file");
+  }
+  const fileName = meta?.file_name?.trim() || path;
+
+  const ttl = env.ORIGINAL_URL_TTL_SECONDS;
+  const { data: signed, error: signError } = await supabaseAdmin()
+    .storage.from(bucket)
+    .createSignedUrl(path, ttl, { download: fileName });
+  // A room whose file is gone (removed by hand, or a failed upload) has nothing to download.
+  if (signError || !signed?.signedUrl) {
+    console.error(`[rooms] could not sign ${bucket}/${path}:`, signError);
+    throw new HttpError(404, "The original file isn't available");
+  }
+  res.set("Cache-Control", "no-store");
+  res.json({ url: signed.signedUrl, file_name: fileName, expires_in: ttl } satisfies OriginalFileResponse);
+});
+
 // GET /api/rooms/:id/drawings
 roomsRouter.get("/:id/drawings", optionalAuth, async (req, res) => {
   const id = req.params.id as string;
@@ -1112,3 +1225,9 @@ roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) =>
   res.json({ ok: true });
 });
 
+// The workspace ledger: GET/POST /:id/events and GET /:id/members (routes/ledger.ts).
+ledgerRoutes(roomsRouter);
+// Attached documents: GET/POST /:id/sources, DELETE /:id/sources/:sourceId (routes/sources.ts).
+sourcesRoutes(roomsRouter);
+// Studio: POST /:id/artifacts (routes/artifacts.ts), rate-limited like Ask.
+artifactsRoutes(roomsRouter, [askPerIp, askPerRoom]);

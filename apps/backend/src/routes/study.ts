@@ -12,7 +12,7 @@ import {
 import { Router } from "express";
 import { z } from "zod";
 import { callAi } from "../lib/ai";
-import { htmlToText } from "../lib/extract";
+import { loadStudyDocuments, shareBudget } from "../lib/study-docs";
 import { supabaseAdmin } from "../lib/supabase";
 import { requireAuth } from "../middleware/auth";
 import { HttpError } from "../middleware/error";
@@ -22,9 +22,9 @@ import { MAX_PARTICIPATION } from "./rooms";
 // (rooms) a user picks: all of them, all in one project, or a hand-picked list.
 export const studyRouter = Router();
 
-// apps/ai's request limit per document (MAX_TEXT_CHARS in apps/ai/app/schemas.py), shared across
-// the documents so the request stays bounded. apps/ai cuts further to what the model reads.
-const MAX_STUDY_TEXT_CHARS = 1_000_000;
+// Kept here for its tests and callers; it lives in lib/study-docs.ts.
+export { shareBudget };
+
 // One study set per user at a time, and a short pause between them, so a burst of clicks costs one
 // AI call. In-process like the recap lock: right for one backend instance.
 const STUDY_COOLDOWN_MS = 10_000;
@@ -41,22 +41,6 @@ export function rememberStudyCall(userId: string, now: number) {
   return lastStudyCall.size;
 }
 
-/**
- * Cuts texts to `total` characters in all, fairly: short texts keep everything and what they don't
- * use goes to the longer ones, so one long PDF isn't cut while there is room. Same rule as
- * share_budget in apps/ai/app/services/study.py.
- */
-export function shareBudget(texts: string[], total: number): string[] {
-  const budget = texts.map(() => 0);
-  let remaining = total;
-  const order = texts.map((_, i) => i).sort((a, b) => texts[a]!.length - texts[b]!.length);
-  order.forEach((i, n) => {
-    budget[i] = Math.min(texts[i]!.length, Math.floor(remaining / (order.length - n)));
-    remaining -= budget[i]!;
-  });
-  return texts.map((text, i) => text.slice(0, budget[i]));
-}
-
 const SET_COLUMNS = "id, kind, title, room_ids, focus, created_at";
 const studySetId = z.object({ id: z.string().uuid() });
 
@@ -68,7 +52,6 @@ type RoomRow = {
   created_by: string | null;
   last_activity_at: string;
 };
-type RoomText = { id: string; title: string | null; content_html: string | null; content_text: string | null };
 
 // Rooms the user created or joined, newest activity first. Deleted rooms are never offered.
 // With a group, only that project's rooms, which are always the owner's own.
@@ -172,24 +155,7 @@ studyRouter.post("/", requireAuth, async (req, res) => {
       : await pickedRooms(db, userId, body.room_ids!);
     if (!roomIds.length) throw new HttpError(422, "There are no documents to study yet. Create a room first.");
 
-    const { data, error } = await db.from("rooms").select("id, title, content_html, content_text").in("id", roomIds);
-    if (error) throw error;
-    const byId = new Map((data as RoomText[]).map((room) => [room.id, room]));
-    const rooms = roomIds
-      .map((id) => byId.get(id))
-      .filter((room): room is RoomText => Boolean(room))
-      .map((room) => ({
-        id: room.id,
-        title: (room.title ?? "Untitled").slice(0, 300),
-        // PDF rooms have no HTML: their text was extracted on upload.
-        text: (room.content_text ?? htmlToText(room.content_html ?? "")).trim(),
-      }))
-      .filter((doc) => doc.text.length > 0);
-    const texts = shareBudget(
-      rooms.map((doc) => doc.text),
-      MAX_STUDY_TEXT_CHARS,
-    );
-    const documents = rooms.map((doc, i) => ({ ...doc, text: texts[i]! }));
+    const documents = await loadStudyDocuments(db, roomIds);
     if (!documents.length) throw new HttpError(422, "The chosen documents have no text to study.");
 
     // apps/ai stops trying providers after 100 s, so it answers before this gives up. The pause

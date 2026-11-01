@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(126);
+select plan(127);
 
 -- Fixtures, created as the table owner.
 insert into rooms (id, kind, title) values ('room0001', 'link', 'Fixture room'), ('room0009', 'pdf', 'Other room');
@@ -76,6 +76,11 @@ select lives_ok(
   $$insert into comments (room_id, highlight_id, author_name, author_color, body)
     values ('room0001', '00000000-0000-0000-0000-000000000001', 'Guest', '#00ff00', 'Agreed')$$,
   'anon can add a comment'
+);
+select lives_ok(
+  $$insert into comments (room_id, highlight_id, author_name, author_color, body)
+    values ('room0001', null, 'Guest', '#00ff00', 'A note on the room')$$,
+  'anon can add a note: a comment with no highlight'
 );
 
 select throws_ok(

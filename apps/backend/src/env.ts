@@ -22,6 +22,10 @@ const Env = z
     // Questions per minute to POST /api/rooms/:id/ask: per IP, and per room across everyone.
     ASK_RATE_LIMIT: z.coerce.number().int().positive().default(10),
     ASK_ROOM_RATE_LIMIT: z.coerce.number().int().positive().default(30),
+    // Writes per minute per IP to POST /api/rooms/:id/events (each one a batch of up to 50 events).
+    LEDGER_RATE_LIMIT: z.coerce.number().int().positive().default(300),
+    // How long a GET /api/rooms/:id/original download link works, in seconds.
+    ORIGINAL_URL_TTL_SECONDS: z.coerce.number().int().positive().default(300),
     // Headless Chromium processes the link-import fallback may run at once (lib/scraper-browser.ts).
     PLAYWRIGHT_MAX_BROWSERS: z.coerce.number().int().positive().default(2),
     // SMTP server for the verification emails (sent with nodemailer). Required in production.
