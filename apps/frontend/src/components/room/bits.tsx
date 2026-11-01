@@ -72,6 +72,15 @@ export function AiText({ text, className }: { text: string; className?: string }
     <div className={cn("space-y-2 text-[0.8125rem] leading-relaxed", className)}>
       {blocks.map((block, i) => {
         const lines = block.split("\n");
+        if (lines.every((l) => /^\s*\d+[.)]\s/.test(l))) {
+          return (
+            <ol key={i} className="list-decimal space-y-1 pl-5">
+              {lines.map((l, j) => (
+                <li key={j}>{inline(l.replace(/^\s*\d+[.)]\s/, ""))}</li>
+              ))}
+            </ol>
+          );
+        }
         if (lines.every((l) => /^\s*[-*•]\s/.test(l))) {
           return (
             <ul key={i} className="list-disc space-y-1 pl-4">
