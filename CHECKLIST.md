@@ -35,6 +35,7 @@ See [MASTER.md](MASTER.md) for the idea, stack and UI design, and [docs/IMPLEMEN
 | 6 | Polish | Sun 4 – 8 PM | P1 |
 | D | Dashboard (`/dashboard`) | Alongside Phase 6 | P1 |
 | W | Link rooms workspace (`/r/[id]`) | Alongside Phases 3–6 | P1 |
+| X | Room extras: huddle, focus, notebook, catch-up, mentions, minimap | After the workspace | P1 / P2 |
 | 7 | Test and ship | Sun 8 PM – Mon 1:30 AM | Ship |
 | 8 | Stretch | Only if time is left | P2 |
 
@@ -471,6 +472,50 @@ How state is shared until the backend has tables for it: every change is an even
 - [ ] Archived room: read only, Library still downloads
 
 **Done when:** a group can attach mixed sources, mark them up together, ask the AI about any part, and leave with artifacts and a full history.
+
+---
+
+## Room extras · P1 / P2, after the workspace
+
+Seven features that make a room work for groups beyond reading side by side. `[*]` means built (frontend or backend) but not yet checked on the deployed URL.
+
+1. Voice huddle with live captions
+   - [ ] Pick the transport: LiveKit (hosted SFU, simplest at more than 3 people) or plain WebRTC through the room's realtime channel for signalling (fine for 2–4)
+   - [ ] **BE:** `POST /api/rooms/:id/huddle/token` → a LiveKit access token for this room (identity = member or guest id, name, colour); only members who aren't kicked
+   - [ ] **FE:** a huddle bar in the room: join with everyone, or pick who to talk to (a private huddle with chosen people); mute, leave, speaking rings on avatars; works for guests
+   - [ ] **FE / AI:** live captions under the speaker's avatar (LiveKit transcription agent, or the browser's speech recognition as a fallback), with a captions on / off switch
+2. Huddle notes (builds on the huddle)
+   - [ ] **BE:** keep the live transcript per room (`huddle_transcripts`: speaker, text, start time), written as captions finish
+   - [ ] **FE:** with each transcript line, record the block each speaker had on screen at that moment (from the scroll updates already sent), so a line knows what text people were looking at
+   - [ ] **AI:** turn a finished huddle into meeting notes (decisions, action items, open questions); every point links to the passage being discussed when it was said
+   - [ ] **FE:** notes appear in the Library and can be dropped into the shared notebook; clicking a point opens the source at that passage
+3. Laser focus: "everyone look here"
+   - [*] **Everyone look here** in the top bar (editors and up, in a live room): everyone else is taken to your document and scroll position, follow mode locked, until you press **Stop focus**
+   - [*] Your pointer becomes a laser that stays on screen for the others, labelled "Name · look here"
+   - [*] When the focus ends (or someone leaves it), each person goes back to the document and spot they were reading before
+   - [*] One focus at a time: others see "Name is focusing", and anyone can step out of it; a new focus by the same person can be joined again
+   - Built on presence (`focusing`) and the follow feature; nothing is stored, so there is no backend part
+4. Shared notebook
+   - [*] **Notebook** tab: one live document next to the sources that everyone writes in at once (Tiptap + Yjs; edits travel over the room channel)
+   - [*] **BE:** the merged notebook is saved and loaded (`GET` / `POST /api/rooms/:id/notebook`, migration `0024_room_notebooks.sql`), so it's there for people who join later
+   - [*] Drag a highlight into the notebook: it becomes a quote that stays linked to its source; clicking it opens that document at that line
+   - [*] **AI:** draft a first version from the group's highlights (from the room recap); quotes that match a highlight become linked quotes
+   - [ ] Export the notebook (Markdown / PDF) so people leave with what they wrote together
+5. "While you were away" catch-up
+   - [*] **BE + AI:** `POST /api/rooms/:id/catchup { since }` summarises the highlights and comments made since then (apps/ai `/catchup`; nothing is saved, and the AI isn't called when there's nothing new)
+   - [ ] **FE:** remember when you last left each room; when you come back, show a short "While you were away" card with what changed (new highlights, comments being discussed, new sources and artifacts from the ledger)
+   - [ ] **FE:** "waiting on you": questions and comments that @mention you (needs feature 6)
+6. Mentions and notifications
+   - [ ] **FE:** `@name` in comments, discussion messages and AI boxes, with a picker of the room's members
+   - [ ] **BE:** `notifications` table (user, room, kind, actor, snippet, read_at) and `GET /api/me/notifications`, `POST /api/me/notifications/read`; written when someone is mentioned
+   - [ ] **BE:** an email for mentions when the person is offline (the existing SMTP mailer), at most one per room every few minutes
+   - [ ] **FE:** the dashboard bell lists mentions (unread count, click to jump to the comment); in-room toast when you're mentioned while there
+   - [ ] **FE + BE:** browser push notifications (service worker + Web Push with VAPID keys, `POST /api/me/push-subscriptions`)
+7. Who's-where minimap
+   - [ ] **FE:** a slim bar beside the document with each reader's avatar at their spot (from the `scroll` updates already broadcast), click an avatar to jump there
+   - [ ] **FE:** "race to finish": how far each person has read (furthest block reached / blocks in the document), as a small progress view
+
+**Done when:** a group can talk while they read with captions on, leave with notes tied to the text, pull everyone to one spot, write a shared notebook together, and catch up on what they missed.
 
 ---
 
