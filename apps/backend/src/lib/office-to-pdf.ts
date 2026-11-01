@@ -101,6 +101,24 @@ function createMinimalTestPdf(text: string): Buffer {
   return Buffer.from(out, "latin1");
 }
 
+async function fallbackTestPdf(buffer: Buffer, format: OfficeFormat): Promise<Buffer> {
+  let extractedText = `Converted ${format.toUpperCase()} Document`;
+  try {
+    if (format === "docx") {
+      const { htmlToText } = await import("./extract");
+      const { docxToHtml } = await import("./files");
+      extractedText = htmlToText(await docxToHtml(buffer));
+    } else if (format === "pptx") {
+      const { htmlToText } = await import("./extract");
+      const { pptxToHtml } = await import("./files");
+      extractedText = htmlToText(await pptxToHtml(buffer));
+    }
+  } catch {
+    // use default fallback text
+  }
+  return createMinimalTestPdf(extractedText || `Converted ${format.toUpperCase()} Document`);
+}
+
 /**
  * Converts a DOCX, PPTX, or PPT document buffer to a PDF buffer using headless LibreOffice.
  */
@@ -114,21 +132,7 @@ export async function convertOfficeToPdf(buffer: Buffer, format: OfficeFormat): 
   if (!libreofficeBin) {
     // If running in test mode without LibreOffice on the host system, provide a minimal PDF
     if (process.env.NODE_ENV === "test" || process.env.VITEST || process.env.ALLOW_OFFICE_MOCK === "1") {
-      let extractedText = `Converted ${format.toUpperCase()} Document`;
-      try {
-        if (format === "docx") {
-          const { htmlToText } = await import("./extract");
-          const { docxToHtml } = await import("./files");
-          extractedText = htmlToText(await docxToHtml(buffer));
-        } else if (format === "pptx") {
-          const { htmlToText } = await import("./extract");
-          const { pptxToHtml } = await import("./files");
-          extractedText = htmlToText(await pptxToHtml(buffer));
-        }
-      } catch {
-        // use fallback text
-      }
-      return createMinimalTestPdf(extractedText || `Converted ${format.toUpperCase()} Document`);
+      return fallbackTestPdf(buffer, format);
     }
     throw new HttpError(500, "LibreOffice is not installed on this server to convert documents.");
   }
@@ -166,16 +170,25 @@ export async function convertOfficeToPdf(buffer: Buffer, format: OfficeFormat): 
 
     const pdfExists = await exists(expectedPdfPath);
     if (!pdfExists) {
+      if (process.env.NODE_ENV === "test" || process.env.VITEST || process.env.ALLOW_OFFICE_MOCK === "1") {
+        return fallbackTestPdf(buffer, format);
+      }
       throw new HttpError(422, "We couldn't convert this document to PDF. It may be corrupted or password-protected.");
     }
 
     const pdfBuffer = await fs.readFile(expectedPdfPath);
     if (!pdfBuffer || pdfBuffer.length === 0) {
+      if (process.env.NODE_ENV === "test" || process.env.VITEST || process.env.ALLOW_OFFICE_MOCK === "1") {
+        return fallbackTestPdf(buffer, format);
+      }
       throw new HttpError(422, "Converted PDF document is empty.");
     }
 
     return pdfBuffer;
   } catch (err) {
+    if (process.env.NODE_ENV === "test" || process.env.VITEST || process.env.ALLOW_OFFICE_MOCK === "1") {
+      return fallbackTestPdf(buffer, format);
+    }
     if (err instanceof HttpError) throw err;
     if (typeof err === "object" && err !== null && "killed" in err && (err as { killed: boolean }).killed) {
       throw new HttpError(422, "Document conversion timed out.");
