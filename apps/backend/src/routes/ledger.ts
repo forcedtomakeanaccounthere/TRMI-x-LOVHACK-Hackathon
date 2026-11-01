@@ -81,7 +81,7 @@ async function claimGuest(access: Access, name: string) {
 
 // Who added each annotation, artifact and document the batch points at (the actor of its add event).
 async function loadAuthors(roomId: string, events: LedgerEvent[]) {
-  const wanted: Record<Authored, Set<string>> = { annotation: new Set(), artifact: new Set(), doc: new Set() };
+  const wanted: Record<Authored, Set<string>> = { annotation: new Set(), artifact: new Set(), doc: new Set(), notebook: new Set() };
   for (const event of events) {
     const ref = authoredRef(event);
     if (ref) wanted[ref.kind].add(ref.id);
@@ -92,6 +92,7 @@ async function loadAuthors(roomId: string, events: LedgerEvent[]) {
     annotation: "payload->annotation->>id",
     artifact: "payload->artifact->>id",
     doc: "payload->doc->>id",
+    notebook: "payload->entry->>id",
   };
   await Promise.all(
     (Object.keys(wanted) as Authored[]).map(async (kind) => {

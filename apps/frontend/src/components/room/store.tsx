@@ -17,7 +17,9 @@ import {
   removeSavedHighlight,
   saveHighlight,
 } from "./docs";
-import type { Identity } from "./identity";
+import { buildCatchup, lastVisit, markVisit } from "./catchup";
+import { guestKey, type Identity } from "./identity";
+import { authFor, LedgerSync } from "./ledger-sync";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
 import {
   type Annotation,
@@ -130,6 +132,80 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const [focusing, setFocusing] = useState(false);
 
   const receive = (incoming: LedgerEvent[]) => setEvents((prev) => mergeEvents(prev, incoming));
+
+  // --- The ledger on the server ---
+  // Loaded when the room opens (so changes made while you were away arrive even when nobody else is
+  // online), and every event made here is saved there too.
+  const syncRef = useRef<LedgerSync | null>(null);
+  const [serverLoaded, setServerLoaded] = useState(isDemo);
+  useEffect(() => {
+    if (isDemo) return;
+    let cancelled = false;
+    let warned = false;
+    const auth = async () =>
+      authFor(me, (await getFreshSession().catch(() => null))?.access_token ?? null, guestKey);
+    const sync = new LedgerSync({
+      list: async (after) => {
+        const a = await auth();
+        if (!a) throw new ApiError("Sign in again to load the room's changes", 401);
+        return api.listEvents(roomId, after, a);
+      },
+      post: async (batch) => {
+        const a = await auth();
+        if (!a) throw new ApiError("Sign in again to save your changes", 401);
+        return api.postEvents(roomId, batch, a);
+      },
+      onRejected: (rejected) => {
+        console.warn("[room] changes the server refused:", rejected);
+        if (!warned && rejected[0]) {
+          warned = true;
+          toast.error(`Some changes weren't saved for others: ${rejected[0].reason}`);
+        }
+      },
+    });
+    syncRef.current = sync;
+    sync
+      .load()
+      .then((saved) => {
+        if (cancelled) return;
+        receive(saved);
+        sync.backfill(eventsRef.current, saved, me.id);
+      })
+      .catch((err: unknown) => console.warn("[room] couldn't load the room's saved changes:", err))
+      .finally(() => {
+        if (!cancelled) setServerLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+      sync.stop();
+      syncRef.current = null;
+    };
+  }, [roomId, isDemo, me.id, me.signedIn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- While you were away ---
+  // The last time this browser had the room open (kept up to date while it's open), and when this
+  // visit began: the catch-up covers what others did in between.
+  const [visit] = useState(() => ({ since: isDemo ? null : lastVisit(roomId, me.id), start: new Date().toISOString() }));
+  useEffect(() => {
+    if (isDemo) return;
+    const mark = () => markVisit(roomId, me.id);
+    mark();
+    const timer = setInterval(mark, 60_000);
+    const onHide = () => document.visibilityState === "hidden" && mark();
+    window.addEventListener("pagehide", mark);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      mark();
+      clearInterval(timer);
+      window.removeEventListener("pagehide", mark);
+      document.removeEventListener("visibilitychange", onHide);
+    };
+  }, [roomId, isDemo, me.id]);
+  const catchup = useMemo(
+    () => (visit.since && serverLoaded ? buildCatchup(events, me, visit.since, visit.start) : null),
+    [events, me, visit, serverLoaded],
+  );
+  const [catchupDismissed, setCatchupDismissed] = useState(false);
 
   const channel = useRoomChannel(
     roomId,
@@ -442,6 +518,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     })) as LedgerEvent[];
     setEvents((prev) => mergeEvents(prev, made));
     channel.send.events(made);
+    syncRef.current?.push(made);
     return made;
   };
 
@@ -690,6 +767,8 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     },
     channel,
     mentionables,
+    catchup: catchupDismissed ? null : catchup,
+    dismissCatchup: () => setCatchupDismissed(true),
     presenceFeed,
     kickedOut,
     actions,

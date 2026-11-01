@@ -1,5 +1,6 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import CFB from "cfb";
 import { LEGACY_OFFICE } from "../../src/lib/files";
 import { makeDocx, makePptx } from "../support/files";
 import { makePdf } from "../support/pdf";
@@ -64,7 +65,7 @@ beforeEach(() => {
 });
 
 describe("POST /api/rooms/file", () => {
-  it("makes a file room from a DOCX, keeping the original in the private bucket", async () => {
+  it("makes a PDF room from a DOCX via LibreOffice, keeping the original in the private bucket", async () => {
     const res = await upload(await makeDocx(["Hello room"]), "Notes.docx");
     expect(res.status).toBe(201);
     const { id } = res.body as { id: string };
@@ -75,26 +76,75 @@ describe("POST /api/rooms/file", () => {
         path: `${id}.docx`,
         contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       },
+      {
+        bucket: "pdfs",
+        path: `${id}.pdf`,
+        contentType: "application/pdf",
+      },
     ]);
     expect(inserts).toEqual([
-      {
+      expect.objectContaining({
         id,
-        kind: "file",
+        kind: "pdf",
         title: "Notes.docx",
-        content_html: '<p data-block="b0">Hello room</p>',
+        pdf_path: `${id}.pdf`,
         source_meta: { format: "docx", file_name: "Notes.docx" },
         created_by: USER,
-      },
+      }),
     ]);
     expect(startIndexing).toHaveBeenCalledWith(id);
   });
 
-  it("makes a room from each slide of a PPTX", async () => {
+  it("makes a PDF room from a PPTX via LibreOffice", async () => {
     const res = await upload(await makePptx([["Intro"], ["Details"]]), "deck.pptx");
     expect(res.status).toBe(201);
-    expect(uploads[0]).toMatchObject({ bucket: "files", path: expect.stringMatching(/\.pptx$/) });
-    expect(inserts[0]).toMatchObject({ kind: "file", source_meta: { format: "pptx", file_name: "deck.pptx" } });
-    expect(inserts[0]!.content_html).toContain('<section data-block="p2"><h2>Slide 2</h2><p>Details</p></section>');
+    const { id } = res.body as { id: string };
+    expect(uploads).toEqual([
+      {
+        bucket: "files",
+        path: `${id}.pptx`,
+        contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      },
+      {
+        bucket: "pdfs",
+        path: `${id}.pdf`,
+        contentType: "application/pdf",
+      },
+    ]);
+    expect(inserts[0]).toMatchObject({
+      kind: "pdf",
+      pdf_path: `${id}.pdf`,
+      source_meta: { format: "pptx", file_name: "deck.pptx" },
+    });
+    expect(startIndexing).toHaveBeenCalledWith(id);
+  });
+
+  it("makes a PDF room from a legacy .ppt via LibreOffice", async () => {
+    const cfb = CFB.utils.cfb_new();
+    CFB.utils.cfb_add(cfb, "PowerPoint Document", Buffer.from("test"));
+    const pptBuffer = Buffer.from(CFB.write(cfb, { type: "buffer" }) as Uint8Array);
+
+    const res = await upload(pptBuffer, "presentation.ppt");
+    expect(res.status).toBe(201);
+    const { id } = res.body as { id: string };
+    expect(uploads).toEqual([
+      {
+        bucket: "files",
+        path: `${id}.ppt`,
+        contentType: "application/vnd.ms-powerpoint",
+      },
+      {
+        bucket: "pdfs",
+        path: `${id}.pdf`,
+        contentType: "application/pdf",
+      },
+    ]);
+    expect(inserts[0]).toMatchObject({
+      kind: "pdf",
+      pdf_path: `${id}.pdf`,
+      source_meta: { format: "ppt", file_name: "presentation.ppt" },
+    });
+    expect(startIndexing).toHaveBeenCalledWith(id);
   });
 
   it.each([
@@ -125,6 +175,15 @@ describe("POST /api/rooms/file", () => {
     const res = await upload(Buffer.from("old binary"), "report.doc");
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: LEGACY_OFFICE });
+    expect(uploads).toEqual([]);
+    expect(inserts).toEqual([]);
+    expect(startIndexing).not.toHaveBeenCalled();
+  });
+
+  it("refuses an invalid .ppt file that is not a valid PowerPoint document", async () => {
+    const res = await upload(Buffer.from("not a ppt file"), "deck.ppt");
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "That file isn't a valid .ppt file." });
     expect(uploads).toEqual([]);
     expect(inserts).toEqual([]);
     expect(startIndexing).not.toHaveBeenCalled();

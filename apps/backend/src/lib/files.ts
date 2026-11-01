@@ -1,4 +1,5 @@
 import type { FileFormat } from "@linkroom/shared";
+import CFB from "cfb";
 import { JSDOM } from "jsdom";
 import JSZip from "jszip";
 import mammoth from "mammoth";
@@ -6,17 +7,17 @@ import { Marked } from "marked";
 import yauzl from "yauzl";
 import { HttpError } from "../middleware/error";
 import { cleanArticle, htmlToText, textToHtml } from "./extract";
-import { pptToHtml } from "./ppt";
 import { isPdf } from "./pdf";
 
-// Uploaded documents (POST /api/rooms/file) turned into the same block HTML as a link room:
+// Uploaded documents (POST /api/rooms/file):
 //
-//   format  bytes check                          parsed with                         blocks
-//   pdf     %PDF-                                lib/pdf.ts (the PDF viewer)          p{n}
-//   docx    ZIP with word/document.xml           mammoth → cleanArticle               b{n}
-//   pptx    ZIP with ppt/presentation.xml        JSZip, <a:t> text of each slide      p{n}, one per slide
-//   md      valid UTF-8, .md / .markdown         marked → cleanArticle (DOMPurify)    b{n}
-//   txt     valid UTF-8, .txt                    textToHtml                           b{n}
+//   format  bytes check                          handling                             room kind
+//   pdf     %PDF-                                stored directly for PDF viewer       pdf (p{n})
+//   docx    ZIP with word/document.xml           LibreOffice headless -> PDF viewer   pdf (p{n})
+//   pptx    ZIP with ppt/presentation.xml        LibreOffice headless -> PDF viewer   pdf (p{n})
+//   ppt     OLE with PowerPoint Document         LibreOffice headless -> PDF viewer   pdf (p{n})
+//   md      valid UTF-8, .md / .markdown         marked → cleanArticle (DOMPurify)    file (b{n})
+//   txt     valid UTF-8, .txt                    textToHtml                           file (b{n})
 
 // A ZIP's unpacked size and file count, read from its central directory before anything unpacks it.
 export const MAX_UNZIPPED_BYTES = 50 * 1024 * 1024;
@@ -25,14 +26,15 @@ export const MAX_ZIP_ENTRIES = 2000;
 export const MAX_FILE_HTML_CHARS = 5 * 1024 * 1024;
 
 export const LEGACY_OFFICE = "Save as .docx/.pptx and upload again.";
-export const UNSUPPORTED = "We can read PDF, Word (.docx), PowerPoint (.pptx), Markdown (.md) and text (.txt) files.";
+export const UNSUPPORTED = "We can read PDF, Word (.docx), PowerPoint (.pptx, .ppt), Markdown (.md) and text (.txt) files.";
 
 // Uploaded files have no page to resolve against: relative links and images are dropped.
 const NO_BASE_URL = "about:blank";
 
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // PK\x03\x04
-// Old binary .doc / .ppt / .xls files (OLE compound documents).
+// Old binary .doc / .xls files (OLE compound documents).
 const OLE_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+const LEGACY_EXTENSIONS = ["doc", "dot", "pot", "xls"];
 
 export const CONTENT_TYPES: Record<FileFormat, string> = {
   pdf: "application/pdf",
@@ -45,45 +47,56 @@ export const CONTENT_TYPES: Record<FileFormat, string> = {
 
 const TEXT_EXTENSIONS: Record<string, "md" | "txt"> = { md: "md", markdown: "md", txt: "txt", text: "txt" };
 
-export type ParsedFile = { format: "pdf" } | { format: Exclude<FileFormat, "pdf">; html: string };
+export type ParsedFile =
+  | { format: "pdf" }
+  | { format: "docx" }
+  | { format: "pptx" }
+  | { format: "ppt" }
+  | { format: "md"; html: string }
+  | { format: "txt"; html: string };
 
 function extension(fileName: string) {
   const match = /\.([a-z0-9]+)$/i.exec(fileName.trim());
   return match ? match[1]!.toLowerCase() : "";
 }
 
+/** Check if a buffer is a legacy PowerPoint (.ppt) OLE document. */
+export function isPpt(buf: Buffer): boolean {
+  if (buf.length < 512 || !buf.subarray(0, 8).equals(OLE_MAGIC)) return false;
+  try {
+    const cfb = CFB.read(buf, { type: "buffer" });
+    return CFB.find(cfb, "PowerPoint Document") != null;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Works out the format from the bytes (the extension only tells Markdown from plain text) and turns
- * the file into block HTML. PDFs are only detected: the caller stores them for the PDF viewer.
+ * Works out the format from the bytes (the extension only tells Markdown from plain text).
  * Throws a 400 for a format we don't read and a 422 for a file of the right format that won't parse.
  */
 export async function parseFile(buf: Buffer, fileName: string): Promise<ParsedFile> {
   const ext = extension(fileName);
 
-  if (buf.subarray(0, 8).equals(OLE_MAGIC) || ["ppt", "pps"].includes(ext)) {
-    if (buf.subarray(0, 8).equals(OLE_MAGIC)) {
-      try {
-        const html = pptToHtml(buf);
-        return { format: "ppt", html: checkHtml(html) };
-      } catch (err) {
-        if (["ppt", "pps"].includes(ext)) throw err;
-        throw new HttpError(400, LEGACY_OFFICE);
-      }
-    }
-    if (["ppt", "pps"].includes(ext)) {
-      throw new HttpError(400, `That file isn't a valid .${ext} file.`);
-    }
+  if (buf.subarray(0, 8).equals(OLE_MAGIC)) {
+    if (isPpt(buf)) return { format: "ppt" };
+    throw new HttpError(400, LEGACY_OFFICE);
   }
-
-  if (["doc", "pot", "dot"].includes(ext)) {
+  if (LEGACY_EXTENSIONS.includes(ext)) {
     throw new HttpError(400, LEGACY_OFFICE);
   }
   if (isPdf(buf)) return { format: "pdf" };
 
   if (buf.subarray(0, 4).equals(ZIP_MAGIC)) {
     const names = await inspectZip(buf);
-    if (names.has("word/document.xml")) return { format: "docx", html: checkHtml(await docxToHtml(buf)) };
-    if (names.has("ppt/presentation.xml")) return { format: "pptx", html: checkHtml(await pptxToHtml(buf)) };
+    if (names.has("word/document.xml")) {
+      checkHtml(await docxToHtml(buf));
+      return { format: "docx" };
+    }
+    if (names.has("ppt/presentation.xml")) {
+      checkHtml(await pptxToHtml(buf));
+      return { format: "pptx" };
+    }
     throw new HttpError(400, UNSUPPORTED);
   }
 
@@ -178,7 +191,7 @@ export function decodeUtf8(buf: Buffer) {
   return text;
 }
 
-async function docxToHtml(buf: Buffer) {
+export async function docxToHtml(buf: Buffer) {
   let html: string;
   try {
     const result = await mammoth.convertToHtml(
@@ -198,7 +211,7 @@ async function docxToHtml(buf: Buffer) {
 }
 
 /** One <section data-block="p{n}"> per slide, in slide order, with each text paragraph inside. */
-async function pptxToHtml(buf: Buffer) {
+export async function pptxToHtml(buf: Buffer) {
   const damaged = () => new HttpError(422, "We couldn't read this PowerPoint file. It may be damaged.");
   let zip: JSZip;
   try {

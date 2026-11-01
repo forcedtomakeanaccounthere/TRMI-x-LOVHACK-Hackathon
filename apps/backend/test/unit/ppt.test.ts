@@ -54,20 +54,18 @@ describe("PPT parser (lib/ppt.ts)", () => {
     expect(html).toContain("Intro Slide");
   });
 
-  it("parseFile parses .ppt files into { format: 'ppt', html }", async () => {
-    const slideMarker = makeRecord(1006, Buffer.alloc(0));
-    const payload = Buffer.from("Lecture Deck Slide", "latin1");
-    const textRecord = makeRecord(4008, payload);
+  // .ppt uploads are now supported: a readable deck is accepted as format ppt.
+  it.each(["presentation.ppt", "renamed.pptx", "deck"])(
+    "parseFile accepts a readable .ppt deck (%s) as format ppt",
+    async (name) => {
+      const slideMarker = makeRecord(1006, Buffer.alloc(0));
+      const textRecord = makeRecord(4008, Buffer.from("Lecture Deck Slide", "latin1"));
+      const pptBuffer = createMockPptBuffer(Buffer.concat([slideMarker, textRecord]));
 
-    const pptBuffer = createMockPptBuffer(Buffer.concat([slideMarker, textRecord]));
-    const result = await parseFile(pptBuffer, "presentation.ppt");
-
-    expect(result.format).toBe("ppt");
-    if (result.format === "ppt") {
-      expect(result.html).toContain('data-block="p1"');
-      expect(result.html).toContain("Lecture Deck Slide");
-    }
-  });
+      const parsed = await parseFile(pptBuffer, name);
+      expect(parsed).toEqual({ format: "ppt" });
+    },
+  );
 
   it("throws 422 if PPT file has no extractable text", () => {
     const slideMarker = makeRecord(1006, Buffer.alloc(0));

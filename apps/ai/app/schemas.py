@@ -71,6 +71,9 @@ class EmbedRequest(BaseModel):
     )
     # "passage" for chunks being indexed, "query" for a question being searched.
     input_type: Literal["passage", "query"] = "passage"
+    # The model to use and no other (the one a room's chunks were made with); none: the first
+    # configured one that works.
+    model: str | None = Field(default=None, max_length=200)
 
 
 class EmbedResponse(BaseModel):

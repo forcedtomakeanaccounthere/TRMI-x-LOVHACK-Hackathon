@@ -126,11 +126,40 @@ describe("checkEvent", () => {
     expect(checkEvent(artifact, ctx(MEMBER, { authors }))).toBe("That artifact id belongs to someone else");
   });
 
-  it("only the note's author edits it", () => {
-    const edit = (who: string) => ev(who, { type: "note.edit", annotation_id: "n1", body: "changed" });
+  it("lets anyone who can annotate edit a comment or move a box, as the workspace does", () => {
     const authors = { "annotation:n1": MEMBER };
-    expect(checkEvent(edit(MEMBER), ctx(MEMBER, { authors }))).toBeNull();
-    expect(checkEvent(edit(OWNER), ctx(OWNER, { authors }))).toBe("Only the note's author can edit it");
+    const edit = (who: string) => ev(who, { type: "note.edit", annotation_id: "n1", body: "changed" });
+    const move = (who: string) => ev(who, { type: "annot.move", annotation_id: "n1", x: 0.5, y: 0.25 });
+    expect(checkEvent(edit(OWNER), ctx(OWNER, { authors }))).toBeNull();
+    expect(checkEvent(move(OWNER), ctx(OWNER, { authors }))).toBeNull();
+    const viewer = ctx(MEMBER, { authors, roles: { [MEMBER]: "viewer" } });
+    expect(checkEvent(edit(MEMBER), viewer)).toBe("Your role can't edit comments");
+    expect(checkEvent(move(MEMBER), viewer)).toBe("Your role can't move comments");
+  });
+
+  it("lets anyone taking part react, even a viewer", () => {
+    const react = ev(MEMBER, { type: "chat.react", message_id: "m1", emoji: "👍" });
+    expect(checkEvent(react, ctx(MEMBER, { roles: { [MEMBER]: "viewer" } }))).toBeNull();
+  });
+
+  it("keeps room notes: editors add and edit, only the author or an admin removes", () => {
+    const entry = (who: string, id = "nb1") => ({ id, kind: "text", text: "Idea", quote: null, image: null, author: actor(who), at: AT });
+    expect(checkEvent(ev(MEMBER, { type: "notebook.add", entry: entry(MEMBER) }), ctx(MEMBER))).toBeNull();
+    expect(checkEvent(ev(MEMBER, { type: "notebook.add", entry: entry(OWNER) }), ctx(MEMBER))).toBe("A note's author must be you");
+    const authors = { "notebook:nb1": MEMBER };
+    expect(checkEvent(ev(OWNER, { type: "notebook.add", entry: entry(OWNER) }), ctx(OWNER, { authors }))).toBe(
+      "That note id belongs to someone else",
+    );
+    expect(checkEvent(ev(OWNER, { type: "notebook.edit", entry_id: "nb1", text: "x" }), ctx(OWNER, { authors }))).toBeNull();
+    const remove = (who: string) => ev(who, { type: "notebook.remove", entry_id: "nb1" });
+    expect(checkEvent(remove(GUEST), ctx(GUEST, { authors }))).toBe("Only its author or an admin can remove this");
+    expect(checkEvent(remove(MEMBER), ctx(MEMBER, { authors }))).toBeNull();
+    expect(checkEvent(remove(OWNER), ctx(OWNER, { authors }))).toBeNull();
+  });
+
+  it("keeps a reply's link to the message it answers", () => {
+    const reply = ev(MEMBER, { type: "chat", message: { id: "m2", text: "Yes", author: actor(MEMBER), at: AT, reply_to: "m1" } });
+    expect(reply.type === "chat" && reply.message.reply_to).toBe("m1");
   });
 
   it("never removes the room's own document; other sources by who added them or an admin", () => {

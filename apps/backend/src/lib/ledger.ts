@@ -196,7 +196,7 @@ export async function readableBy(roomIds: string[], identity: Identity | null): 
 
 // --- Checking events ---
 
-type Authored = "annotation" | "artifact" | "doc";
+type Authored = "annotation" | "artifact" | "doc" | "notebook";
 
 export type RuleContext = {
   roomId: string;
@@ -244,10 +244,10 @@ export function checkEvent(event: LedgerEvent, ctx: RuleContext): string | null 
       if (event.annotation.kind === "ai" && !can.useAi(role, ctx.settings)) return "Your role can't use the AI";
       return null;
     case "note.edit":
-      // Only a note's author edits it (apps/frontend boxes.tsx).
-      return can.annotate(role) && ctx.authorOf("annotation", event.annotation_id) === ctx.me.id
-        ? null
-        : "Only the note's author can edit it";
+      // Anyone who can annotate edits any comment; History records who changed whose (boxes.tsx).
+      return can.annotate(role) ? null : "Your role can't edit comments";
+    case "annot.move":
+      return can.annotate(role) ? null : "Your role can't move comments";
     case "annot.remove":
       return authorOrManager("annotation", event.annotation_id) ? null : "Only its author or an admin can remove this";
     case "doc.add":
@@ -263,6 +263,17 @@ export function checkEvent(event: LedgerEvent, ctx: RuleContext): string | null 
       return can.useAi(role, ctx.settings) ? null : "Your role can't use the AI";
     case "chat":
       return event.message.author.id === ctx.me.id ? null : "A message's author must be you";
+    case "chat.react":
+      return null; // anyone taking part may react
+    case "notebook.add":
+      if (!can.annotate(role)) return "Your role can't add to the room's notes";
+      if (event.entry.author.id !== ctx.me.id) return "A note's author must be you";
+      if (takenByOther("notebook", event.entry.id)) return "That note id belongs to someone else";
+      return null;
+    case "notebook.edit":
+      return can.annotate(role) ? null : "Your role can't edit the room's notes";
+    case "notebook.remove":
+      return authorOrManager("notebook", event.entry_id) ? null : "Only its author or an admin can remove this";
     case "artifact.add":
       if (event.artifact.author.id !== ctx.me.id) return "An artifact's author must be you";
       if (takenByOther("artifact", event.artifact.id)) return "That artifact id belongs to someone else";
@@ -319,6 +330,10 @@ export function authoredRef(event: LedgerEvent): { kind: Authored; id: string } 
       return { kind: "artifact", id: event.artifact_id };
     case "doc.remove":
       return { kind: "doc", id: event.doc_id };
+    case "notebook.add":
+      return { kind: "notebook", id: event.entry.id };
+    case "notebook.remove":
+      return { kind: "notebook", id: event.entry_id };
     default:
       return null;
   }
@@ -328,4 +343,5 @@ export const ADD_TYPE: Record<Authored, LedgerEvent["type"]> = {
   annotation: "annot.add",
   artifact: "artifact.add",
   doc: "doc.add",
+  notebook: "notebook.add",
 };

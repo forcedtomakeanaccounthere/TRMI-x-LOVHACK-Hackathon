@@ -3,12 +3,14 @@ import mammoth from "mammoth";
 import { describe, expect, it } from "vitest";
 import {
   decodeUtf8,
+  docxToHtml,
   inspectZip,
   LEGACY_OFFICE,
   MAX_FILE_HTML_CHARS,
   MAX_UNZIPPED_BYTES,
   MAX_ZIP_ENTRIES,
   parseFile,
+  pptxToHtml,
   slideOrder,
   slideParagraphs,
   UNSUPPORTED,
@@ -16,9 +18,11 @@ import {
 import { forgeSizes, makeClaimedSizeZip, makeDocx, makePptx, makeZip } from "../support/files";
 import { makePdf } from "../support/pdf";
 
-const html = async (buf: Buffer, name: string) => {
+const html = async (buf: Buffer, name: string): Promise<{ format: string; html: string }> => {
   const parsed = await parseFile(buf, name);
-  if (parsed.format === "pdf") throw new Error("expected HTML");
+  if (parsed.format === "docx") return { format: "docx", html: await docxToHtml(buf) };
+  if (parsed.format === "pptx") return { format: "pptx", html: await pptxToHtml(buf) };
+  if (!("html" in parsed)) throw new Error("expected HTML");
   return parsed;
 };
 
