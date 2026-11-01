@@ -331,13 +331,13 @@ function buildLocally(kind: ArtifactKind, docs: DocContent[]): ArtifactBody {
 
 // The backend makes an artifact only from the room and documents attached to it (room_attachments).
 // Documents added in the workspace live in its ledger, so they're attached here first; attaching
-// one twice changes nothing. Needs a signed-in editor; otherwise the backend's refusal is shown.
-async function attachSources(roomId: string, ids: string[]) {
+// one twice changes nothing. A refusal (the room's source limit, a role that can't add sources) is
+// passed on as it is, so its reason is shown rather than a later "not in this room".
+async function attachSources(roomId: string, ids: string[], token: string) {
   const others = ids.filter((id) => id !== roomId);
-  if (!others.length) return;
-  const session = await getFreshSession().catch(() => null);
-  if (!session) return;
-  await Promise.allSettled(others.map((id) => api.attachSource(roomId, id, session.access_token)));
+  const results = await Promise.allSettled(others.map((id) => api.attachSource(roomId, id, token)));
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
 // `remote`: the documents are backend rooms (not the demo room's). An artifact the backend can't
@@ -352,8 +352,10 @@ export async function generate(
   if (remote) {
     try {
       const sources = docs.map((d) => d.id);
-      await attachSources(roomId, sources);
-      const body = await api.generateArtifact(roomId, { kind, sources });
+      // Signed out: only the room itself is in scope, and the backend says so if more was chosen.
+      const token = (await getFreshSession().catch(() => null))?.access_token;
+      if (token) await attachSources(roomId, sources, token);
+      const body = await api.generateArtifact(roomId, { kind, sources }, token);
       if (looksLike(kind, body)) return { body, preview: false };
       throw new Error("The AI's answer couldn't be shown. Try again.");
     } catch (err) {

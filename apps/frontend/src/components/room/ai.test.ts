@@ -179,8 +179,14 @@ describe("generate", () => {
     const result = await generate("main", "flashcards", [doc("main"), doc("other")]);
     expect(attach).toHaveBeenCalledTimes(1);
     expect(attach).toHaveBeenCalledWith("main", "other", "token");
-    expect(make).toHaveBeenCalledWith("main", { kind: "flashcards", sources: ["main", "other"] });
+    expect(make).toHaveBeenCalledWith("main", { kind: "flashcards", sources: ["main", "other"] }, "token");
     expect(result).toEqual({ body: cards, preview: false });
+  });
+
+  it("passes on a refused attachment instead of asking for the artifact", async () => {
+    attach.mockRejectedValue(new ApiError("A room can have up to 20 sources", 409));
+    await expect(generate("main", "flashcards", [doc("main"), doc("other")])).rejects.toThrow(/up to 20 sources/);
+    expect(make).not.toHaveBeenCalled();
   });
 
   it("shows the backend's refusal or AI failure instead of a browser preview", async () => {
