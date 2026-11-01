@@ -53,6 +53,7 @@ import { extractPdfText, isPdf, MAX_PDF_BYTES } from "../lib/pdf";
 import { supabaseAdmin } from "../lib/supabase";
 import { fetchVideoTitle, parsePastedTranscript, transcriptToHtml, videoIdOf, watchUrl } from "../lib/youtube";
 import { optionalAuth, requireAuth } from "../middleware/auth";
+import { ledgerRoutes } from "./ledger";
 import { HttpError } from "../middleware/error";
 import { env } from "../env";
 
@@ -1154,3 +1155,5 @@ roomsRouter.delete("/:id/drawings/:drawingId", optionalAuth, async (req, res) =>
   res.json({ ok: true });
 });
 
+// The workspace ledger: GET/POST /:id/events and GET /:id/members (routes/ledger.ts).
+ledgerRoutes(roomsRouter);

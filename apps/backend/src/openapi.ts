@@ -16,6 +16,11 @@ import {
   Drawing as DrawingSchema,
   ExportSummaryQuery,
   OriginalFileResponse,
+  ListEventsQuery,
+  ListEventsResponse,
+  PostEventsRequest,
+  PostEventsResponse,
+  RoomMembersResponse,
   CatchupRequest,
   CatchupResponse,
   ExplainRequest,
@@ -686,6 +691,45 @@ export const openApiDocument = createDocument({
         responses: {
           "200": reply("A signed link that downloads the original under its file name", OriginalFileResponse),
           "404": failure("Unknown or deleted room, a room with no file (link, text, video), or a missing file"),
+        },
+      },
+    },
+    "/api/rooms/{id}/events": {
+      get: {
+        tags: ["Room workspace"],
+        summary: "List the room's ledger events in the order they were accepted (paged by seq)",
+        requestParams: { path: roomId, query: ListEventsQuery, header: z.object({ "x-guest-id": z.string().optional(), "x-guest-key": z.string().optional() }) },
+        responses: {
+          "200": reply("The events, and the seq to pass as `after` for the next page", ListEventsResponse),
+          "403": failure("You were removed, or the room is for signed-in members only"),
+          "404": failure("Unknown or deleted room"),
+        },
+      },
+      post: {
+        tags: ["Room workspace"],
+        summary: "Append ledger events; each is checked against the writer's role and kicks",
+        description:
+          "Signed-in callers write as their account. Guests send X-Guest-Id and X-Guest-Key: the first write claims the id, later ones must send the same key. Events already saved count as accepted (retries are safe).",
+        requestParams: { path: roomId, header: z.object({ "x-guest-id": z.string().optional(), "x-guest-key": z.string().optional() }) },
+        requestBody: { content: { "application/json": { schema: PostEventsRequest } } },
+        responses: {
+          "200": reply("Which events were saved, and why the others weren't", PostEventsResponse),
+          "401": failure("Neither signed in nor a guest id and key"),
+          "403": failure("Removed from the room, guests not allowed, or a guest id claimed with another key"),
+          "404": failure("Unknown or deleted room"),
+          "429": failure("Too many writes"),
+        },
+      },
+    },
+    "/api/rooms/{id}/members": {
+      get: {
+        tags: ["Room workspace"],
+        summary: "The room's members (roles and removals) and settings",
+        requestParams: { path: roomId, header: z.object({ "x-guest-id": z.string().optional(), "x-guest-key": z.string().optional() }) },
+        responses: {
+          "200": reply("Members and settings", RoomMembersResponse),
+          "403": failure("You were removed, or the room is for signed-in members only"),
+          "404": failure("Unknown or deleted room"),
         },
       },
     },
