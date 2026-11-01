@@ -196,10 +196,12 @@ describe("generate", () => {
     await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/couldn't answer/);
   });
 
-  it("builds a preview only when the backend can't be reached, or for the demo room", async () => {
+  it("says the server couldn't be reached instead of building a preview for a real room", async () => {
     make.mockRejectedValue(new TypeError("Failed to fetch"));
-    expect((await generate("main", "flashcards", [doc("main")])).preview).toBe(true);
-    make.mockReset();
+    await expect(generate("main", "flashcards", [doc("main")])).rejects.toThrow(/Couldn't reach the server at/);
+  });
+
+  it("builds a browser preview only for the demo room", async () => {
     expect((await generate("demo", "flashcards", [doc("demo")], false)).preview).toBe(true);
     expect(make).not.toHaveBeenCalled();
   });
