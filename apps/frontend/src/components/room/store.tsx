@@ -136,7 +136,9 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // A document still being indexed shows "AI pending…" until its status changes, so its status is
   // checked again every few seconds until it is ready or failed. Reloaded in full then, since a
   // video room's doc is written at the end.
-  const waitingKey = Object.values(contents)
+  // Only sources still in the room: a removed one is no longer checked.
+  const waitingKey = state.docs
+    .map((d) => contents[d.id])
     .filter((c): c is DocContent => typeof c === "object" && AI_WAITING.has(c.ai_status ?? ""))
     .map((c) => c.id)
     .join(" ");
@@ -149,12 +151,12 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       if (cancelled || !statuses) return;
       for (const id of ids) {
         const status = statuses[id];
+        // No row: the room was deleted (its row is hidden then), so it has no AI status to wait for.
         if (!status || AI_WAITING.has(status)) {
           setContents((prev) => {
             const c = prev[id];
-            return typeof c === "object" && status && c.ai_status !== status
-              ? { ...prev, [id]: { ...c, ai_status: status } }
-              : prev;
+            const next = status ?? null;
+            return typeof c === "object" && c.ai_status !== next ? { ...prev, [id]: { ...c, ai_status: next } } : prev;
           });
           continue;
         }

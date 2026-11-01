@@ -221,22 +221,33 @@ const SWEEP_INTERVAL_MS = 60_000;
 export async function restartStuckIndexing(now = Date.now()): Promise<number> {
   const waitingBefore = new Date(now - STALE_WAITING_MS).toISOString();
   const summarizingBefore = new Date(now - STALE_SUMMARIZING_MS).toISOString();
-  const { data, error } = await supabaseAdmin()
-    .from("room_ai")
-    .select("room_id, status, updated_at, rooms!inner(status)")
-    .in("status", WAITING)
-    .neq("rooms.status", "deleted")
-    .lt("updated_at", waitingBefore)
-    .limit(RESUME_BATCH);
-  if (error) throw error;
-  const stuck = (data as { room_id: string; status: string; updated_at: string }[]).filter(
-    (row) => !running.has(row.room_id) && (row.status !== "summarizing" || row.updated_at < summarizingBefore),
-  );
-  for (const { room_id } of stuck) {
-    console.warn(`[ai-jobs] room ${room_id} was left waiting, indexing it again`);
-    await indexRoom(room_id).catch((err: unknown) => markFailed(room_id, err));
+  let restarted = 0;
+  // Paged by room id, like resumeIndexing, so rooms skipped below never hide stuck ones behind them.
+  let after = "";
+  for (;;) {
+    const { data, error } = await supabaseAdmin()
+      .from("room_ai")
+      .select("room_id, status, updated_at, rooms!inner(status)")
+      .in("status", WAITING)
+      .neq("rooms.status", "deleted")
+      .lt("updated_at", waitingBefore)
+      .gt("room_id", after)
+      .order("room_id")
+      .limit(RESUME_BATCH);
+    if (error) throw error;
+    const rows = data as { room_id: string; status: string; updated_at: string }[];
+    if (!rows.length) break;
+    const stuck = rows.filter(
+      (row) => !running.has(row.room_id) && (row.status !== "summarizing" || row.updated_at < summarizingBefore),
+    );
+    for (const { room_id } of stuck) {
+      console.warn(`[ai-jobs] room ${room_id} was left waiting, indexing it again`);
+      await indexRoom(room_id).catch((err: unknown) => markFailed(room_id, err));
+    }
+    restarted += stuck.length;
+    after = rows.at(-1)!.room_id;
   }
-  return stuck.length;
+  return restarted;
 }
 
 /** Checks for stuck rooms every minute. Call once at startup, after resumeIndexing. */

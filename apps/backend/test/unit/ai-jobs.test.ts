@@ -362,13 +362,32 @@ describe("restartStuckIndexing", () => {
           { room_id: "stuck0003", status: "summarizing", updated_at: ago(STALE_SUMMARIZING_MS + 1) },
         ],
       },
+      { data: [] },
     ];
     results.rooms = [{ data: roomWith(1) }, { data: roomWith(1) }, { data: roomWith(1) }];
 
     expect(await restartStuckIndexing(now)).toBe(3);
     expect(called("rooms", "eq").map(([, id]) => id)).toEqual(["stuck0001", "stuck0002", "stuck0003"]);
     // Only rooms whose row hasn't changed since the cutoff are read.
-    expect(called("room_ai", "lt")).toEqual([["updated_at", ago(STALE_WAITING_MS)]]);
+    expect(called("room_ai", "lt")[0]).toEqual(["updated_at", ago(STALE_WAITING_MS)]);
+  });
+
+  it("reads past a full page of rooms it skips, so they don't hide stuck ones", async () => {
+    const fresh = Array.from({ length: RESUME_BATCH }, (_, i) => ({
+      room_id: `slow${String(i).padStart(5, "0")}`,
+      status: "summarizing",
+      updated_at: ago(STALE_WAITING_MS + 1),
+    }));
+    results.room_ai = [
+      { data: fresh },
+      { data: [{ room_id: "stuck0001", status: "indexing", updated_at: ago(STALE_WAITING_MS + 1) }] },
+      { data: [] },
+    ];
+    results.rooms = [{ data: roomWith(1) }];
+
+    expect(await restartStuckIndexing(now)).toBe(1);
+    expect(called("rooms", "eq").map(([, id]) => id)).toEqual(["stuck0001"]);
+    expect(called("room_ai", "gt").map(([, after]) => after)).toEqual(["", fresh.at(-1)!.room_id, "stuck0001"]);
   });
 
   it("does nothing when no room is stuck", async () => {
