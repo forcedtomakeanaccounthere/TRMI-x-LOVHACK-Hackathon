@@ -74,6 +74,13 @@ export const api = {
 
     resendVerification: (email: string) => request<MessageResponse>("/api/auth/resend-verification", json({ email })),
 
+    // Proposed (CHECKLIST.md "Auth: password reset"): emails a link to /forgot-password?token_hash=…
+    forgotPassword: (email: string) => request<MessageResponse>("/api/auth/forgot-password", json({ email })),
+
+    // Proposed: uses the emailed link's token once and sets the new password.
+    resetPassword: (data: { token_hash: string; password: string }) =>
+      request<MessageResponse>("/api/auth/reset-password", json(data)),
+
     refresh: (refresh_token: string) => request<AuthSession>("/api/auth/refresh", json({ refresh_token })),
 
     me: (token: string) => request<AuthUser>("/api/auth/me", { method: "GET" }, token),
