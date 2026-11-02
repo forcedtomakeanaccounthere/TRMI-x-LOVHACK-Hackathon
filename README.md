@@ -10,9 +10,22 @@ Paste any article or drop a PDF, share one link, then highlight, comment and fol
 
 Built for the **TRMI x LOVHACK Hackathon**.
 
+**[API documentation](https://link-room-swaq.onrender.com/docs/)** · **[Try it as a guest judge](#try-it-in-one-click)**
+
 ![LinkRoom landing page](docs/images/landing-hero.jpg)
 
 </div>
+
+## Try it in one click
+
+The sign-in page has **Judging? Sign in as a guest**: two seeded accounts, no email needed. Sign in as one, or as both in two windows (one private) to see live cursors, follow, laser focus and huddles between them.
+
+| Account | Email | Password |
+| --- | --- | --- |
+| Ada (demo), owns the demo rooms | `judge.ada@linkroom.demo` | `LinkRoom-demo-2026` |
+| Ben (demo), reads along with Ada | `judge.ben@linkroom.demo` | `LinkRoom-demo-2026` |
+
+Their dashboard has **Robot Perception 101 · demo room** with two attached sources, highlights and comments, an @mention, a discussion with replies and reactions, notebook entries, a Studio mind map, quiz and flashcards, and a finished voice huddle with its transcript and AI notes. The data comes from `npm run seed:demo -w apps/backend` (see [Scripts](#scripts)).
 
 ## The problem
 
@@ -36,6 +49,8 @@ Three steps, no onboarding:
 
 | | |
 | --- | --- |
+| ![Five readers' live cursors in one room](docs/images/live-cursors.jpg) | **Live cursors.** Everyone in the room sees each other's named cursors move over the text in real time. Click a reader to jump to exactly where they are, or follow them. |
+| ![Laser focus](docs/images/laser-focus.jpg) | **Laser focus.** "Everyone look here" pulls the whole room to your paragraph and turns your pointer into a laser ("Arnav · look here"). When it ends, everyone goes back to where they were reading. |
 | ![Room with AI chat](docs/images/room-ai-chat.jpg) | **AI chat with sources.** Ask anything about the room's sources (PDFs, web pages, docs, Markdown, text). Answers cite the exact passages. |
 | ![AI lens](docs/images/ai-lens.jpg) | **AI lens.** Drag over any part of the page, even a diagram, and ask about it. |
 | ![While you were away](docs/images/while-you-were-away.jpg) | **While you were away.** Come back to a short AI summary of what others highlighted and discussed. |
@@ -43,6 +58,9 @@ Three steps, no onboarding:
 | ![Mind map](docs/images/mind-map.jpg) | **Mind maps** from any mix of sources in the room. |
 | ![Discussion](docs/images/discussion.jpg) | **Discussion** with @mentions, replies and reactions, right beside the text. |
 | ![Notebook](docs/images/notebook.jpg) | **Room notebook.** Notes, passages and images everyone in the room can see. |
+| ![Voice huddle](docs/images/huddle-call.jpg) | **Voice huddles.** Start a call with the whole room or pick people for a private talk, right in the Sources rail. Speaking rings, mute, invite, leave or end for all; viewers join to listen. Built on LiveKit. |
+| ![Huddle transcript](docs/images/huddle-transcript.jpg) | **Live captions and transcript.** What people say shows as subtitles over the reading and builds a transcript as they talk (Chrome and Edge speech recognition, in English or Hindi). Download it as .txt or .md. |
+| ![Huddle notes](docs/images/huddle-notes.jpg) | **Huddle notes.** One click turns the conversation into a summary, decisions, action items with owners, open questions and key points. Each point links to the passage people were reading when it was said. |
 | ![Room settings](docs/images/room-settings.jpg) | **Roles and access.** Owner, admin, editor and viewer roles, guest access, and AI chat permissions. |
 
 ### Four verbs, one page
@@ -159,6 +177,7 @@ The backend sends the verification email itself, with nodemailer over your SMTP 
 | `npm run test:unit` / `test:integration` / `test:e2e` | One test level (e2e builds the backend first) |
 | `npm run test:db` | pgTAP tests for the database's row level security |
 | `npm run lint` | ESLint + ruff |
+| `npm run seed:demo -w apps/backend` | Creates the two guest-judge accounts (already verified) and fills a demo room through the running backend: sources, marks, comments, chat, notebook, Studio artifacts and a huddle with AI notes. Needs `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; set `SEED_API_URL` to seed a deployed backend. Safe to run again. |
 
 ## Testing
 
@@ -189,7 +208,7 @@ npm run supabase:stop
 
 ## API
 
-Interactive docs are generated when each service starts: backend at http://localhost:4000/docs (`/openapi.json`), AI service at http://localhost:8000/docs.
+Interactive docs for the deployed backend: **https://link-room-swaq.onrender.com/docs/**. They're generated when each service starts, so locally they're at http://localhost:4000/docs (`/openapi.json`) for the backend and http://localhost:8000/docs for the AI service.
 
 | Method | Path | Service |
 | --- | --- | --- |

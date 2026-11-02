@@ -1,6 +1,6 @@
 "use client";
 
-import { LoginRequest } from "@linkroom/shared";
+import { DEMO_ACCOUNTS, type DemoAccount, LoginRequest } from "@linkroom/shared";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
@@ -23,6 +23,7 @@ export function LoginForm() {
   const [unverified, setUnverified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sendingReset, setSendingReset] = useState(false);
+  const [demoBusy, setDemoBusy] = useState<string | null>(null);
 
   // Sends a reset link to the email typed above; the link opens /forgot-password.
   async function forgotPassword() {
@@ -69,17 +70,43 @@ export function LoginForm() {
     }
     setErrors({});
     setBusy(true);
+    await signIn(parsed.data);
+  }
 
+  async function signIn(data: LoginRequest, demo = false) {
     try {
-      const session = await api.auth.login(parsed.data);
+      const session = await api.auth.login(data);
       setSession(session);
-      toast.success(`Welcome back, ${session.user.name.split(" ")[0]}.`);
+      toast.success(
+        demo
+          ? `Signed in as ${session.user.name}. Open the demo room to try everything.`
+          : `Welcome back, ${session.user.name.split(" ")[0]}.`,
+      );
       router.push(next);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) setUnverified(true);
-      else setFormError(err instanceof Error ? err.message : "Something went wrong");
+      else
+        setFormError(
+          demo && err instanceof ApiError && err.status === 401
+            ? "The demo accounts aren't set up on this server yet (npm run seed:demo -w apps/backend)."
+            : err instanceof Error
+              ? err.message
+              : "Something went wrong",
+        );
       setBusy(false);
+      setDemoBusy(null);
     }
+  }
+
+  // One click for judges: fills the form so the credentials are visible, then signs in.
+  async function signInAsDemo(account: DemoAccount) {
+    setFormError(null);
+    setUnverified(false);
+    setErrors({});
+    setEmail(account.email);
+    setPassword(account.password);
+    setDemoBusy(account.email);
+    await signIn({ email: account.email, password: account.password }, true);
   }
 
   return (
@@ -146,6 +173,8 @@ export function LoginForm() {
         </SubmitButton>
       </form>
 
+      <DemoAccounts busy={demoBusy} disabled={busy || demoBusy !== null} onPick={signInAsDemo} />
+
       <p className="mt-8 text-center text-[0.875rem] text-muted-foreground">
         New to LinkRoom?{" "}
         <Link
@@ -156,5 +185,56 @@ export function LoginForm() {
         </Link>
       </p>
     </>
+  );
+}
+
+// "Sign in as a guest judge": the seeded demo accounts, with their credentials in plain sight.
+function DemoAccounts({
+  busy,
+  disabled,
+  onPick,
+}: {
+  busy: string | null;
+  disabled: boolean;
+  onPick: (account: DemoAccount) => void;
+}) {
+  return (
+    <section className="mt-6 rounded-2xl border border-dashed border-(--hairline) bg-foreground/[0.02] p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="eyebrow text-[0.625rem] text-muted-foreground">Judging? Sign in as a guest</h2>
+        <span className="text-[0.6875rem] text-muted-foreground">no email needed</span>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {DEMO_ACCOUNTS.map((account) => (
+          <button
+            key={account.email}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(account)}
+            className="group flex items-center gap-3 rounded-xl border border-(--hairline) bg-card px-3 py-2.5 text-left transition hover:border-foreground/25 hover:shadow-sm disabled:opacity-60"
+          >
+            <span
+              className="grid size-8 shrink-0 place-items-center rounded-full text-[0.75rem] font-semibold text-white"
+              style={{ background: account.color }}
+            >
+              {account.name[0]}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[0.8125rem] font-medium">
+                {busy === account.email ? "Signing in…" : account.name}
+              </span>
+              <span className="block truncate text-[0.6875rem] text-muted-foreground">{account.blurb}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-[0.6875rem] leading-relaxed text-muted-foreground">
+        {DEMO_ACCOUNTS.map((a) => a.email).join(" · ")} · password{" "}
+        <code className="rounded bg-foreground/6 px-1 py-0.5 font-mono text-[0.6875rem] text-foreground">
+          {DEMO_ACCOUNTS[0]!.password}
+        </code>
+        . Sign in as both in two windows to see live cursors, follow and huddles.
+      </p>
+    </section>
   );
 }
