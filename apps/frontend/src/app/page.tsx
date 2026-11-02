@@ -9,6 +9,7 @@ import { ScrollToTop } from "@/components/landing/scroll-to-top";
 import { SiteFooter } from "@/components/landing/site-footer";
 import { SiteNav } from "@/components/landing/site-nav";
 import { SourcesMarquee } from "@/components/landing/sources-marquee";
+import { TalkTogether } from "@/components/landing/talk-together";
 import { UseCases } from "@/components/landing/use-cases";
 
 export default function Home() {
@@ -21,6 +22,7 @@ export default function Home() {
         <Manifesto />
         <HowItWorks />
         <FeatureBento />
+        <TalkTogether />
         <UseCases />
         <InsideRoom />
         <ParallaxQuote />

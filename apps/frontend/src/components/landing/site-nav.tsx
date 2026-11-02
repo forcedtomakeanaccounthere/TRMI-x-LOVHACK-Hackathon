@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { FEATURES, USE_CASES } from "./content";
 
 const triggerClass =
-  "h-9 rounded-full bg-transparent px-3.5 text-[0.8125rem] font-medium tracking-[-0.005em] text-foreground/75 hover:bg-foreground/5 hover:text-foreground focus:bg-foreground/5 data-open:bg-foreground/5 data-open:text-foreground";
+  "h-9 shrink-0 rounded-full bg-transparent px-3.5 whitespace-nowrap text-[0.8125rem] font-medium tracking-[-0.005em] text-foreground/75 hover:bg-foreground/5 hover:text-foreground focus:bg-foreground/5 data-open:bg-foreground/5 data-open:text-foreground";
 
 export function SiteNav() {
   const [scrolled, setScrolled] = useState(false);
@@ -56,8 +56,8 @@ export function SiteNav() {
           transition={{ duration: 1, ease: EASE_OUT_EXPO, delay: 0.1 }}
           aria-label="Main"
           className={cn(
-            "liquid-glass pointer-events-auto flex h-14 w-full max-w-5xl items-center justify-between gap-2 rounded-full pr-2 pl-5 transition-[background-color,max-width] duration-700 ease-fluid",
-            scrolled && "liquid-glass-strong max-w-4xl",
+            "liquid-glass pointer-events-auto flex h-14 w-full max-w-6xl items-center justify-between gap-4 rounded-full pr-2 pl-5 transition-[background-color,max-width] duration-700 ease-fluid",
+            scrolled && "liquid-glass-strong max-w-5xl",
           )}
         >
           <Logo />
@@ -66,7 +66,7 @@ export function SiteNav() {
             className="hidden md:flex"
             viewportClassName="mt-3 rounded-[1.75rem] bg-popover/[0.97] ring-1 ring-foreground/10 shadow-[0_30px_80px_-30px_rgb(5_10_30/0.55)] backdrop-blur-2xl"
           >
-            <NavigationMenuList className="gap-0.5">
+            <NavigationMenuList className="gap-1.5">
               <NavigationMenuItem>
                 <NavigationMenuTrigger className={triggerClass}>Product</NavigationMenuTrigger>
                 <NavigationMenuContent className="p-2.5">
