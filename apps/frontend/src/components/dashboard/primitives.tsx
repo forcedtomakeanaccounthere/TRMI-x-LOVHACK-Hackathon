@@ -71,7 +71,8 @@ export function timeAgo(iso: string, now = Date.now()) {
 }
 
 export function initials(name: string) {
-  const parts = name.trim().split(/\s+/);
+  // Words that start with a letter or digit, so "Ada (demo)" is "A", not "A(".
+  const parts = name.trim().split(/\s+/).filter((w) => /^[\p{L}\p{N}]/u.test(w));
   return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts.at(-1)?.[0] ?? "") : "")).toUpperCase() || "?";
 }
 
