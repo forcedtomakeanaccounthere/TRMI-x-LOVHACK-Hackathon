@@ -55,7 +55,7 @@ export class LedgerSync {
   /** Saves this browser's own events that the server doesn't have yet. */
   backfill(local: LedgerEvent[], onServer: LedgerEvent[], myId: string) {
     const saved = new Set(onServer.map((e) => e.id));
-    this.push(local.filter((e) => e.actor.id === myId && !saved.has(e.id)));
+    this.push(local.filter((e) => e.actor.id === myId && !saved.has(e.id)).map(repair));
   }
 
   private async flush() {
@@ -68,7 +68,13 @@ export class LedgerSync {
       if (res.rejected.length) this.io.onRejected?.(res.rejected);
     } catch (err) {
       // The whole batch was refused (signed out, removed, bad input): retrying won't help.
-      if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+      if (
+        err instanceof ApiError &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 408 &&
+        err.status !== 429
+      ) {
         this.queue = this.queue.slice(batch.length);
         this.io.onRejected?.(batch.map((e) => ({ id: e.id, reason: err.message })));
       } else {
@@ -96,5 +102,37 @@ export class LedgerSync {
   }
 }
 
-export const authFor = (me: { id: string; signedIn: boolean }, token: string | null, guestKey: () => string): LedgerAuth | null =>
-  me.signedIn ? (token ? { token } : null) : { guestId: me.id, guestKey: guestKey() };
+// Positions are fractions of a block, and the server takes -0.5 to 1.5. Marks saved by older builds
+// could reach past that (a long highlighter drag from a short block), so they're clipped before
+// they're sent again, the way new ones are clipped when they're made.
+const LO = -0.5;
+const HI = 1.5;
+const fraction = (v: number) => Math.min(HI, Math.max(LO, v));
+const span = (from: number, size: number) => {
+  const a = fraction(from);
+  return [a, Math.max(0, Math.min(HI, from + size) - a)] as const;
+};
+export function repair(event: LedgerEvent): LedgerEvent {
+  if (event.type === "annot.move") return { ...event, x: fraction(event.x), y: fraction(event.y) };
+  if (event.type !== "annot.add") return event;
+  const a = event.annotation;
+  if (a.kind === "region") {
+    const [x, w] = span(a.rect.x, a.rect.w);
+    const [y, h] = span(a.rect.y, a.rect.h);
+    return { ...event, annotation: { ...a, rect: { x, y, w, h } } };
+  }
+  if (a.kind === "note" || a.kind === "ai")
+    return { ...event, annotation: { ...a, x: fraction(a.x), y: fraction(a.y) } };
+  if (a.kind === "ink")
+    return {
+      ...event,
+      annotation: { ...a, points: a.points.map(([px, py]) => [fraction(px), fraction(py)] as [number, number]) },
+    };
+  return event;
+}
+
+export const authFor = (
+  me: { id: string; signedIn: boolean },
+  token: string | null,
+  guestKey: () => string,
+): LedgerAuth | null => (me.signedIn ? (token ? { token } : null) : { guestId: me.id, guestKey: guestKey() });

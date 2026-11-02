@@ -5,11 +5,13 @@ import {
   ChatsCircleIcon,
   CoffeeIcon,
   CrosshairIcon,
+  CrosshairSimpleIcon,
   CursorClickIcon,
   FilePdfIcon,
   GraduationCapIcon,
   HighlighterIcon,
   SparkleIcon,
+  WaveformIcon,
 } from "@phosphor-icons/react/ssr";
 import type { Icon } from "@phosphor-icons/react";
 
@@ -22,6 +24,8 @@ export const FEATURES: Feature[] = [
   { icon: HighlighterIcon, title: "Shared highlights", body: "Select a line and it glows on every screen.", href: "#features" },
   { icon: ChatsCircleIcon, title: "Comment threads", body: "Discuss any highlight in the margin, live.", href: "#inside" },
   { icon: CrosshairIcon, title: "Follow mode", body: "Follow someone's scroll, or bring everyone to you.", href: "#inside" },
+  { icon: WaveformIcon, title: "Voice huddles", body: "Talk in the room, with live captions and AI notes.", href: "#talk" },
+  { icon: CrosshairSimpleIcon, title: "Laser focus", body: "Bring everyone to your line and point at it.", href: "#talk" },
   { icon: SparkleIcon, title: "AI group recap", body: "Claude summarises what the group cared about.", href: "#inside" },
   { icon: FilePdfIcon, title: "PDF rooms", body: "Drop a paper or slides; it all works the same.", href: "#features" },
 ];

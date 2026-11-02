@@ -243,29 +243,69 @@ function Scroller({
     return { x: clientX - a.left, y: clientY - a.top };
   };
 
-  const scrollToBlock = useCallback(
+  // Scrolls to a block and keeps at it while the page is still laying out: a document that has
+  // just opened (its blocks not there yet, the scroller's height not updated), PDF pages rendering,
+  // images loading. One scroll at that moment lands short, often at the very top. It re-aims every
+  // 200 ms until the spot has held for a moment, gives up after about 5 s, and stops at once if the
+  // reader scrolls themselves.
+  const landing = useRef<(() => void) | null>(null);
+  const land = useCallback(
     (block: string, ratio = 0) => {
-      const el = findBlock(article, block);
-      const lenis = lenisRef.current?.lenis;
-      if (!el || !lenis || !scroller) return;
-      const target =
-        el.getBoundingClientRect().top -
-        scroller.getBoundingClientRect().top +
-        scroller.scrollTop +
-        ratio * el.offsetHeight -
-        96;
-      lenis.scrollTo(Math.max(0, target), { duration: 0.9 });
+      landing.current?.();
+      if (!article || !scroller) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let tries = 0;
+      let steady = 0;
+      const stop = () => {
+        clearTimeout(timer);
+        scroller.removeEventListener("wheel", stop);
+        scroller.removeEventListener("touchstart", stop);
+        window.removeEventListener("keydown", stop);
+        if (landing.current === stop) landing.current = null;
+      };
+      const step = () => {
+        const el = findBlock(article, block);
+        const lenis = lenisRef.current?.lenis;
+        if (el && lenis) {
+          const max = scroller.scrollHeight - scroller.clientHeight;
+          const target = Math.min(
+            max,
+            Math.max(
+              0,
+              el.getBoundingClientRect().top -
+                scroller.getBoundingClientRect().top +
+                scroller.scrollTop +
+                ratio * el.offsetHeight -
+                96,
+            ),
+          );
+          if (Math.abs(scroller.scrollTop - target) <= 24) {
+            if (++steady >= 3) return stop();
+          } else {
+            steady = 0;
+            if (!lenis.isScrolling) {
+              lenis.resize(); // the page may have grown since Lenis last measured it
+              lenis.scrollTo(target, { duration: tries === 0 ? 0.9 : 0.35 });
+            }
+          }
+        }
+        if (++tries < 25) timer = setTimeout(step, 200);
+        else stop();
+      };
+      scroller.addEventListener("wheel", stop, { passive: true });
+      scroller.addEventListener("touchstart", stop, { passive: true });
+      window.addEventListener("keydown", stop);
+      landing.current = stop;
+      step();
     },
     [article, scroller],
   );
+  useEffect(() => () => landing.current?.(), []);
 
-  // Jumps from citations, history and comment lists.
+  // Jumps from citations, history and comment lists, and back to your spot after a laser focus.
   useEffect(() => {
-    if (jump && jump.doc === docId) {
-      const t = setTimeout(() => scrollToBlock(jump.block, jump.ratio), 120);
-      return () => clearTimeout(t);
-    }
-  }, [jump, docId, scrollToBlock, version > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (jump && jump.doc === docId) land(jump.block, jump.ratio);
+  }, [jump, docId, land]);
 
   // Follow mode: go where the leader is reading. Which document is open comes from the leader's
   // presence (RoomProvider); a scroll only moves within it, since the last scroll may be from a
@@ -273,8 +313,8 @@ function Scroller({
   const leaderScroll = following ? channel.scrolls[following] : undefined;
   useEffect(() => {
     if (!leaderScroll || leaderScroll.doc !== docId) return;
-    scrollToBlock(leaderScroll.block, leaderScroll.ratio);
-  }, [leaderScroll, docId, scrollToBlock]);
+    land(leaderScroll.block, leaderScroll.ratio);
+  }, [leaderScroll, docId, land]);
 
   // Tell the room where you're reading.
   useEffect(() => {
@@ -287,7 +327,13 @@ function Scroller({
       room.reportView(docId, top.block, top.ratio); // where a laser focus brings you back to
     };
     lenis.on("scroll", onScroll);
-    return () => lenis.off("scroll", onScroll);
+    // Known from the start, not only after a scroll, so a laser focus always has a spot to bring you
+    // back to (the top of the document until the page has laid out).
+    const first = setTimeout(onScroll, 400);
+    return () => {
+      clearTimeout(first);
+      lenis.off("scroll", onScroll);
+    };
   }, [scroller, docId, channel.send]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Someone who starts following you is sent where you are now, without waiting for you to scroll.
@@ -629,188 +675,208 @@ function Scroller({
       onWheel={() => following && !room.focus.leader && setFollowing(null)}
       onTouchMove={() => following && !room.focus.leader && setFollowing(null)}
     >
-      {/* Text documents keep a margin on the right for comment and AI boxes beside their 68ch column.
-          PDF pages and slides are as wide as the column, so they get a centred column of their own. */}
-      <div
-        className={cn(
-          "mx-auto w-full px-5 pt-10 pb-40 md:px-10",
-          content?.pdf_url ? "max-w-[56rem]" : "max-w-[min(100%,62rem)] xl:pr-84",
-        )}
-      >
-        <header className={cn("mb-10", !content?.pdf_url && "max-w-[68ch]")}>
-          <div className="eyebrow flex items-center gap-2 text-[0.625rem] text-muted-foreground">
-            <span>{labelFor(docRef)}</span>
-            {readOnly && (
-              <span className="flex items-center gap-1 rounded-full bg-foreground/6 px-2 py-0.5 normal-case">
-                <LockSimpleIcon className="size-3" /> Read only · {room.primary.status}
-              </span>
-            )}
-            {content?.ai_status && content.ai_status !== "ready" && (
-              <span className="rounded-full bg-azure/10 px-2 py-0.5 text-azure normal-case">
-                AI {content.ai_status}…
-              </span>
-            )}
-          </div>
-          <h1 className="mt-3 font-display text-[clamp(2.1rem,4.4vw,3.4rem)] font-normal text-balance">
-            {docRef.title}
-          </h1>
-          {docRef.source_url && (
-            <a
-              href={docRef.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-3 inline-flex items-center gap-1 text-[0.8125rem] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            >
-              {hostOf(docRef.source_url)} <ArrowSquareOutIcon className="size-3.5" />
-            </a>
-          )}
-          {content?.summary && room.realDoc(docId) && (
-            <div className="mt-3 flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
-              <DownloadSimpleIcon className="size-3.5" />
-              <span>Summary</span>
-              {(["md", "txt"] as const).map((format) => (
-                <a
-                  key={format}
-                  href={api.summaryExportUrl(docId, format)}
-                  download
-                  className="rounded-full px-2 py-0.5 ring-1 ring-(--hairline) hover:bg-foreground/5 hover:text-foreground"
-                >
-                  .{format}
-                </a>
-              ))}
-            </div>
-          )}
-        </header>
-
-        <article
-          ref={setArticle}
-          data-doc={docId}
+      {/* Text documents keep a margin on the right for comment and AI boxes beside their 68ch column
+          (about 40.5rem), but only when the reading pane is wide enough to spare it; a narrower pane
+          centres the column, and the boxes sit just inside its edge. PDF pages and slides are as
+          wide as the column, so they get a centred column of their own. */}
+      <div className="@container">
+        <div
           className={cn(
-            "relative",
-            tool === "highlight" && !lens && "cursor-text [&_.textLayer]:cursor-text",
-            interactive && !perms.annotate && "select-text",
+            "mx-auto w-full px-5 pt-10 pb-40 md:px-10",
+            content?.pdf_url
+              ? "max-w-[56rem]"
+              : "max-w-[min(100%,46rem)] @min-[68rem]:max-w-[62rem] @min-[68rem]:pr-84",
           )}
-          onPointerDown={(e) => {
-            if (!article || lens || capture) return;
-            if ((e.target as HTMLElement).closest("[data-room-ui]")) return;
-            const block = blockOf(e.target as Node);
-            if (tool === "highlight" && block)
-              gesture.current = {
-                start: { ...local(e.clientX, e.clientY), block },
-                points: [],
-                moved: false,
-              };
-            setSelection(null);
-          }}
-          onPointerMove={(e) => {
-            onMove(e);
-            const g = gesture.current;
-            if (g && tool === "highlight" && !capture && !lens && article) {
-              const p = local(e.clientX, e.clientY);
-              if (Math.hypot(p.x - g.start.x, p.y - g.start.y) > 8) g.moved = true;
-              if (g.moved && window.getSelection()?.isCollapsed !== false) {
-                setDraft({
-                  kind: "rect",
-                  rect: {
-                    left: Math.min(g.start.x, p.x),
-                    top: Math.min(g.start.y, p.y),
-                    width: Math.abs(p.x - g.start.x),
-                    height: Math.abs(p.y - g.start.y),
-                  },
-                  color,
-                });
-              } else setDraft(null);
-            }
-          }}
-          onPointerLeave={() => {
-            channel.send.cursor(docId, null);
-            setHover(null);
-          }}
-          onPointerUp={onPointerUpText}
-          onKeyUp={(e) => onPointerUpText(e as unknown as React.PointerEvent)}
         >
-          {children({ onLayout, scroller })}
-
-          {interactive && (
-            <Overlay
-              article={article}
-              docId={docId}
-              annotations={annotations}
-              version={version}
-              fresh={fresh}
-              hovered={hover?.id ?? null}
-              draft={draft}
-              cursors={cursors}
-              peers={channel.peers}
-              following={following}
-              paper={!!content?.pdf_url}
-              onGeometry={onGeometry}
-              onMove={moveBox}
-            />
-          )}
-
-          {capture && (
-            <div
-              data-room-ui
-              className={cn(
-                "absolute inset-0 z-20 touch-none",
-                tool === "pen" ? "cursor-crosshair" : tool === "eraser" ? "cursor-cell" : "cursor-copy",
+          <header className={cn("mb-10", !content?.pdf_url && "max-w-[68ch]")}>
+            <div className="eyebrow flex items-center gap-2 text-[0.625rem] text-muted-foreground">
+              <span>{labelFor(docRef)}</span>
+              {readOnly && (
+                <span className="flex items-center gap-1 rounded-full bg-foreground/6 px-2 py-0.5 normal-case">
+                  <LockSimpleIcon className="size-3" /> Read only · {room.status}
+                  {room.status === "paused" &&
+                    (room.resume ? (
+                      <button
+                        type="button"
+                        onClick={room.resume}
+                        disabled={room.resuming}
+                        className="ml-1 rounded-full bg-foreground px-2 py-px text-background hover:opacity-90 disabled:opacity-50"
+                      >
+                        {room.resuming ? "Resuming…" : "Resume"}
+                      </button>
+                    ) : (
+                      <span className="ml-1 text-muted-foreground">· the owner can resume it</span>
+                    ))}
+                </span>
               )}
-              onPointerDown={onCaptureDown}
-              onPointerMove={(e) => {
-                onCaptureMove(e);
-                onMove(e);
-              }}
-              onPointerUp={onCaptureUp}
-              onPointerCancel={onCaptureUp}
-            />
-          )}
-
-          {interactive && lens && (
-            <div
-              data-room-ui
-              className="absolute inset-0 z-20 cursor-crosshair touch-none bg-azure/[0.04] ring-2 ring-azure/30 ring-inset"
-              onPointerDown={onLensDown}
-              onPointerMove={onLensMove}
-              onPointerUp={onLensUp}
-            >
-              {capturing && (
-                <div className="sticky top-1/2 mx-auto flex w-max items-center gap-2 rounded-full bg-ink px-4 py-2 text-[0.8125rem] text-pearl">
-                  <Spinner /> Taking a snapshot…
-                </div>
+              {content?.ai_status && content.ai_status !== "ready" && (
+                <span className="rounded-full bg-azure/10 px-2 py-0.5 text-azure normal-case">
+                  AI {content.ai_status}…
+                </span>
               )}
             </div>
-          )}
-
-          {selection && (
-            <SelectionToolbar
-              selection={selection.sel}
-              at={selection.at}
-              onHighlight={(c) => markSelection(selection.sel, "highlight", c)}
-              onUnderline={() => markSelection(selection.sel, "underline")}
-              onComment={() => commentOn(selection.sel)}
-              onSave={() => saveToNotebook(selection.sel)}
-              onAsk={() => openAiBox(selection.sel)}
-            />
-          )}
-
-          {hovered && hovered.kind !== "note" && hovered.kind !== "ai" && hover && (
-            <div
-              data-room-ui
-              className="pointer-events-none absolute z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/90 py-1 pr-2.5 pl-1 text-[0.6875rem] whitespace-nowrap text-pearl shadow-lg backdrop-blur"
-              style={{ left: hover.x, top: hover.y + 18 }}
-            >
-              <span
-                className="grid size-4 place-items-center rounded-full text-[0.5rem] font-bold"
-                style={{ backgroundColor: hovered.author.color }}
+            <h1 className="mt-3 font-display text-[clamp(2.1rem,4.4vw,3.4rem)] font-normal text-balance">
+              {docRef.title}
+            </h1>
+            {docRef.source_url && (
+              <a
+                href={docRef.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-1 text-[0.8125rem] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
               >
-                {hovered.author.name[0]?.toUpperCase()}
-              </span>
-              {KIND_LABEL[hovered.kind]} by <strong>{hovered.author.id === me.id ? "you" : hovered.author.name}</strong>
-              <span className="text-pearl/50">· {timeAgo(hovered.at)}</span>
-            </div>
-          )}
-        </article>
+                {hostOf(docRef.source_url)} <ArrowSquareOutIcon className="size-3.5" />
+              </a>
+            )}
+            {content?.summary && room.realDoc(docId) && (
+              <div className="mt-3 flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                <DownloadSimpleIcon className="size-3.5" />
+                <span>Summary</span>
+                {(["md", "txt"] as const).map((format) => (
+                  <a
+                    key={format}
+                    href={api.summaryExportUrl(docId, format)}
+                    download
+                    className="rounded-full px-2 py-0.5 ring-1 ring-(--hairline) hover:bg-foreground/5 hover:text-foreground"
+                  >
+                    .{format}
+                  </a>
+                ))}
+              </div>
+            )}
+          </header>
+
+          <article
+            ref={setArticle}
+            data-doc={docId}
+            className={cn(
+              "relative",
+              tool === "highlight" && !lens && "cursor-text [&_.textLayer]:cursor-text",
+              interactive && !perms.annotate && "select-text",
+            )}
+            onPointerDown={(e) => {
+              if (!article || lens || capture) return;
+              if ((e.target as HTMLElement).closest("[data-room-ui]")) return;
+              const block = blockOf(e.target as Node);
+              if (tool === "highlight" && block)
+                gesture.current = {
+                  start: { ...local(e.clientX, e.clientY), block },
+                  points: [],
+                  moved: false,
+                };
+              setSelection(null);
+            }}
+            onPointerMove={(e) => {
+              onMove(e);
+              const g = gesture.current;
+              if (g && tool === "highlight" && !capture && !lens && article) {
+                const p = local(e.clientX, e.clientY);
+                if (Math.hypot(p.x - g.start.x, p.y - g.start.y) > 8) g.moved = true;
+                if (g.moved && window.getSelection()?.isCollapsed !== false) {
+                  setDraft({
+                    kind: "rect",
+                    rect: {
+                      left: Math.min(g.start.x, p.x),
+                      top: Math.min(g.start.y, p.y),
+                      width: Math.abs(p.x - g.start.x),
+                      height: Math.abs(p.y - g.start.y),
+                    },
+                    color,
+                  });
+                } else setDraft(null);
+              }
+            }}
+            onPointerLeave={() => {
+              channel.send.cursor(docId, null);
+              setHover(null);
+            }}
+            onPointerUp={onPointerUpText}
+            onKeyUp={(e) => onPointerUpText(e as unknown as React.PointerEvent)}
+          >
+            {children({ onLayout, scroller })}
+
+            {interactive && (
+              <Overlay
+                article={article}
+                docId={docId}
+                annotations={annotations}
+                version={version}
+                fresh={fresh}
+                hovered={hover?.id ?? null}
+                draft={draft}
+                cursors={cursors}
+                peers={channel.peers}
+                following={following}
+                paper={!!content?.pdf_url}
+                onGeometry={onGeometry}
+                onMove={moveBox}
+              />
+            )}
+
+            {capture && (
+              <div
+                data-room-ui
+                className={cn(
+                  "absolute inset-0 z-20 touch-none",
+                  tool === "pen" ? "cursor-crosshair" : tool === "eraser" ? "cursor-cell" : "cursor-copy",
+                )}
+                onPointerDown={onCaptureDown}
+                onPointerMove={(e) => {
+                  onCaptureMove(e);
+                  onMove(e);
+                }}
+                onPointerUp={onCaptureUp}
+                onPointerCancel={onCaptureUp}
+              />
+            )}
+
+            {interactive && lens && (
+              <div
+                data-room-ui
+                className="absolute inset-0 z-20 cursor-crosshair touch-none bg-azure/[0.04] ring-2 ring-azure/30 ring-inset"
+                onPointerDown={onLensDown}
+                onPointerMove={onLensMove}
+                onPointerUp={onLensUp}
+              >
+                {capturing && (
+                  <div className="sticky top-1/2 mx-auto flex w-max items-center gap-2 rounded-full bg-ink px-4 py-2 text-[0.8125rem] text-pearl">
+                    <Spinner /> Taking a snapshot…
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selection && (
+              <SelectionToolbar
+                selection={selection.sel}
+                at={selection.at}
+                onHighlight={(c) => markSelection(selection.sel, "highlight", c)}
+                onUnderline={() => markSelection(selection.sel, "underline")}
+                onComment={() => commentOn(selection.sel)}
+                onSave={() => saveToNotebook(selection.sel)}
+                onAsk={() => openAiBox(selection.sel)}
+              />
+            )}
+
+            {hovered && hovered.kind !== "note" && hovered.kind !== "ai" && hover && (
+              <div
+                data-room-ui
+                className="pointer-events-none absolute z-50 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/90 py-1 pr-2.5 pl-1 text-[0.6875rem] whitespace-nowrap text-pearl shadow-lg backdrop-blur"
+                style={{ left: hover.x, top: hover.y + 18 }}
+              >
+                <span
+                  className="grid size-4 place-items-center rounded-full text-[0.5rem] font-bold"
+                  style={{ backgroundColor: hovered.author.color }}
+                >
+                  {hovered.author.name[0]?.toUpperCase()}
+                </span>
+                {KIND_LABEL[hovered.kind]} by{" "}
+                <strong>{hovered.author.id === me.id ? "you" : hovered.author.name}</strong>
+                <span className="text-pearl/50">· {timeAgo(hovered.at)}</span>
+              </div>
+            )}
+          </article>
+        </div>
       </div>
     </ReactLenis>
   );

@@ -153,6 +153,8 @@ export function useRoomChannel(
   const [peers, setPeers] = useState<Peer[]>([]);
   const [cursors, setCursors] = useState<Record<string, RemoteCursor>>({});
   const [scrolls, setScrolls] = useState<Record<string, RemoteScroll>>({});
+  // Bumped to rebuild the channel after the server closed it (see the CLOSED case below).
+  const [generation, setGeneration] = useState(0);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const focusingRef = useRef(new Set<string>());
   const handlersRef = useRef(handlers);
@@ -291,6 +293,12 @@ export function useRoomChannel(
             post(channel, "sync-req", syncRequest(meId, handlersRef.current.allEvents()));
           } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
             setStatus("solo");
+          } else if (s === "CLOSED" && !cancelled) {
+            // The server closed the channel while the socket stayed up. supabase-js doesn't rejoin a
+            // closed channel, so without this the room went quietly deaf: no presence, cursors, laser
+            // focus or live changes, while still looking live. Build a fresh one.
+            setStatus("connecting");
+            setTimeout(() => !cancelled && setGeneration((g) => g + 1), 1000);
           }
         });
 
@@ -310,7 +318,7 @@ export function useRoomChannel(
       });
       removing.set(topic, removal);
     };
-  }, [roomId, meId, meName, meColor, meSignedIn]);
+  }, [roomId, meId, meName, meColor, meSignedIn, generation]);
 
   // Keep presence current when you switch documents, open an artifact, follow someone or lead a focus.
   useEffect(() => {

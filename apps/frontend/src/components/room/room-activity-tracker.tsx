@@ -4,10 +4,11 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { getFreshSession } from "@/lib/session";
-import { onRoomStatus } from "./room-status-bus";
+import { emitRoomStatus, onRoomStatus } from "./room-status-bus";
 
 const ACTIVITY_THROTTLE_MS = 30_000;
 const PRESENCE_HEARTBEAT_MS = 60_000;
+const HEARTBEAT = "heartbeat";
 
 export function RoomActivityTracker({ roomId }: { roomId: string }) {
   const lastActivitySent = useRef<number>(0);
@@ -24,8 +25,11 @@ export function RoomActivityTracker({ roomId }: { roomId: string }) {
         if (res.status === "running" && isPausedRef.current) {
           isPausedRef.current = false;
           toast.success("Room resumed.");
+          // A tab that missed the realtime broadcast still catches up (the room store listens).
+          emitRoomStatus({ status: "running", reason: HEARTBEAT });
         } else if (res.status === "paused" && !isPausedRef.current) {
           isPausedRef.current = true;
+          emitRoomStatus({ status: "paused", reason: HEARTBEAT });
         }
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
@@ -98,6 +102,7 @@ export function RoomActivityTracker({ roomId }: { roomId: string }) {
     // 3. Listen for Realtime status updates (auto-pause / auto-archive / owner resume). They arrive
     // on the room channel that useRoomChannel opens; a second channel here would break that one.
     const stopStatus = onRoomStatus(({ status, reason }) => {
+      if (reason === HEARTBEAT) return; // our own relay of what the heartbeat said, already handled
       if (status === "paused") {
         isPausedRef.current = true;
         const msg =

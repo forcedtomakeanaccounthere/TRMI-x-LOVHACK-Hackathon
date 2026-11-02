@@ -18,6 +18,7 @@ import {
   saveHighlight,
 } from "./docs";
 import { buildCatchup, lastVisit, markVisit } from "./catchup";
+import { onRoomStatus } from "./room-status-bus";
 import { guestKey, type Identity } from "./identity";
 import { authFor, LedgerSync } from "./ledger-sync";
 import { can, loadLedger, mergeEvents, reduceLedger, type RoomState, roleOf, saveLedger } from "./ledger";
@@ -144,8 +145,7 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     if (isDemo) return;
     let cancelled = false;
     let warned = false;
-    const auth = async () =>
-      authFor(me, (await getFreshSession().catch(() => null))?.access_token ?? null, guestKey);
+    const auth = async () => authFor(me, (await getFreshSession().catch(() => null))?.access_token ?? null, guestKey);
     const sync = new LedgerSync({
       list: async (after) => {
         const a = await auth();
@@ -159,6 +159,13 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
       },
       onRejected: (rejected) => {
         console.warn("[room] changes the server refused:", rejected);
+        // They never reached anyone else and never will: drop them here too, so they aren't sent
+        // (and refused) again every time the room opens.
+        // Only events refused as malformed: a whole batch refused (signed out, say) is kept.
+        const refused = new Set(
+          rejected.filter((r) => /^(Invalid event|The event is too large)/.test(r.reason)).map((r) => r.id),
+        );
+        if (refused.size) setEvents((list) => list.filter((e) => !refused.has(e.id)));
         if (!warned && rejected[0]) {
           warned = true;
           toast.error(`Some changes weren't saved for others: ${rejected[0].reason}`);
@@ -187,7 +194,10 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   // --- While you were away ---
   // The last time this browser had the room open (kept up to date while it's open), and when this
   // visit began: the catch-up covers what others did in between.
-  const [visit] = useState(() => ({ since: isDemo ? null : lastVisit(roomId, me.id), start: new Date().toISOString() }));
+  const [visit] = useState(() => ({
+    since: isDemo ? null : lastVisit(roomId, me.id),
+    start: new Date().toISOString(),
+  }));
   useEffect(() => {
     if (isDemo) return;
     const mark = () => markVisit(roomId, me.id);
@@ -473,7 +483,31 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
   const ownerId = primary.created_by;
   const role: Role =
     isDemo && !ownerId ? (state.roles[me.id] ?? "owner") : roleOf({ id: me.id, signedIn: me.signedIn }, ownerId, state);
-  const readOnly = primary.status !== "running";
+  // The room's status, kept live: the backend pauses a room nobody has used for a while and says so
+  // on the room channel. A paused room is read only until it's resumed.
+  const [status, setStatus] = useState<string>(primary.status);
+  useEffect(() => onRoomStatus((m) => m.status && setStatus(m.status)), []);
+  const isOwner = me.signedIn && ownerId === me.id;
+  const [resuming, setResuming] = useState(false);
+  async function resume() {
+    if (isDemo || resuming) return;
+    setResuming(true);
+    try {
+      const session = await getFreshSession();
+      if (!session) throw new Error("Sign in again to resume the room");
+      const room = await api.updateRoom(roomId, { status: "running" }, session.access_token);
+      setStatus(room.status);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't resume the room");
+    } finally {
+      setResuming(false);
+    }
+  }
+  // The owner opening a paused room picks it back up: they're here to use it.
+  useEffect(() => {
+    if (!isDemo && isOwner && status === "paused") void resume(); // eslint-disable-line react-hooks/set-state-in-effect -- resumes on the server
+  }, [isOwner, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const readOnly = status !== "running";
   const perms = {
     annotate: can.annotate(role) && !readOnly,
     addSources: can.addSources(role) && !readOnly,
@@ -738,6 +772,9 @@ function useRoomValue({ roomId, primary, bundled, me }: Omit<Props, "children">)
     role,
     perms,
     readOnly,
+    status,
+    resume: perms.manage ? () => void resume() : null, // the owner or an admin
+    resuming,
     canRemove,
     tool,
     setTool,

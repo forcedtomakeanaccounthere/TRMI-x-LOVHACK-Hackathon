@@ -2,8 +2,8 @@
 
 import { motion, useInView, useReducedMotion, useScroll, useTransform } from "motion/react";
 import dynamic from "next/dynamic";
-import { useRef } from "react";
-import { EASE_OUT_EXPO, SplitReveal } from "@/components/fx/reveal";
+import { useEffect, useRef, useState } from "react";
+import { EASE_OUT_EXPO, SplitReveal, useFontsReady } from "@/components/fx/reveal";
 import { useTheme } from "@/lib/theme";
 import { DemoModal, DemoTrigger } from "./demo-modal";
 import { HeroLinkForm } from "./hero-link-form";
@@ -24,6 +24,29 @@ export function Hero() {
   const cardY = useTransform(scrollYProgress, [0, 1], ["0%", reduce ? "0%" : "-18%"]);
   const copyY = useTransform(scrollYProgress, [0, 1], ["0%", reduce ? "0%" : "22%"]);
   const fade = useTransform(scrollYProgress, [0, 0.75], [1, 0]);
+
+  // First load: the headline starts first, then the WebGL rings mount (their code is fetched from
+  // the start, in parallel). They stay hidden until their first frame is drawn, then rise into
+  // place from behind the card, so they never pop in half-built.
+  const fontsReady = useFontsReady();
+  const [sceneOn, setSceneOn] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  useEffect(() => {
+    void import("./hero-scene");
+  }, []);
+  useEffect(() => {
+    if (!fontsReady) return;
+    let idle = 0;
+    const timer = setTimeout(() => {
+      const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+      if (w.requestIdleCallback) idle = w.requestIdleCallback(() => setSceneOn(true), { timeout: 250 });
+      else setSceneOn(true);
+    }, 350);
+    return () => {
+      clearTimeout(timer);
+      (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(idle);
+    };
+  }, [fontsReady]);
 
   return (
     <section ref={ref} id="hero" className="relative isolate min-h-dvh overflow-hidden pt-32 pb-20 md:pt-40">
@@ -50,23 +73,24 @@ export function Hero() {
           </motion.div>
 
           <h1 className="mt-8 font-display text-[clamp(3.6rem,8.4vw,7.75rem)] font-normal">
-            <SplitReveal text="Every link," className="block" delay={0.15} />
+            <SplitReveal text="Every link," className="block" delay={0.05} immediate />
             <SplitReveal
               text="read together."
               className="block"
-              delay={0.35}
+              delay={0.25}
+              immediate
               wordClassName={(_, i) => (i === 1 ? "italic text-royal-gradient" : undefined)}
             />
           </h1>
 
           <motion.p
-            initial={{ opacity: 0, y: 16, filter: "blur(8px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            transition={{ duration: 1.2, delay: 0.7, ease: EASE_OUT_EXPO }}
+            initial={{ opacity: 0, y: 16 }}
+            animate={fontsReady ? { opacity: 1, y: 0 } : undefined}
+            transition={{ duration: 1.2, delay: 0.6, ease: EASE_OUT_EXPO }}
             className="mt-7 max-w-[34rem] text-[1.0625rem] leading-[1.7] text-muted-foreground md:text-[1.1875rem]"
           >
-            LinkRoom turns any article or PDF into a live room. Share one link, then highlight, comment and
-            follow each other as you read, and finish with an AI recap of what the group cared about.
+            LinkRoom turns any article or PDF into a live room. Share one link, then highlight, comment and follow each
+            other as you read, and finish with an AI recap of what the group cared about.
           </motion.p>
 
           <motion.div
@@ -104,13 +128,19 @@ export function Hero() {
         <div className="relative mx-auto w-full max-w-xl lg:max-w-none">
           <motion.div
             style={{ y: sceneY }}
-            initial={{ opacity: 0, scale: 0.92 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 1.8, delay: 0.3, ease: EASE_OUT_EXPO }}
             className="absolute -inset-x-16 -top-24 -bottom-10 -z-10 md:-inset-x-24"
             aria-hidden
           >
-            <HeroScene still={!!reduce} active={inView} dark={dark} />
+            <motion.div
+              className="size-full"
+              initial={{ opacity: 0, y: reduce ? 0 : 90, scale: 0.9 }}
+              animate={sceneReady ? { opacity: 1, y: 0, scale: 1 } : undefined}
+              transition={{ duration: 1.6, ease: EASE_OUT_EXPO }}
+            >
+              {sceneOn && (
+                <HeroScene still={!!reduce} active={inView} dark={dark} onReady={() => setSceneReady(true)} />
+              )}
+            </motion.div>
           </motion.div>
           <motion.div
             style={{ y: cardY, transformPerspective: 1400 }}

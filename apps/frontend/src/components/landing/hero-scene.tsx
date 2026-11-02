@@ -62,12 +62,14 @@ function Rings({ still, dark }: { still: boolean; dark: boolean }) {
   );
 }
 
-type Props = { still?: boolean; active?: boolean; dark?: boolean };
+type Props = { still?: boolean; active?: boolean; dark?: boolean; onReady?: () => void };
 
 // `active` pauses the render loop while the hero is off screen, so the GPU is free for scroll effects.
-export default function HeroScene({ still = false, active = true, dark = false }: Props) {
+export default function HeroScene({ still = false, active = true, dark = false, onReady }: Props) {
   return (
     <Canvas
+      // Two frames after the renderer is up: the first real frame (shaders compiled) is on screen.
+      onCreated={() => requestAnimationFrame(() => requestAnimationFrame(() => onReady?.()))}
       dpr={[1, 1.75]}
       camera={{ position: [0, 0, 5.4], fov: 38 }}
       gl={{ alpha: true, antialias: true, powerPreference: "high-performance" }}
@@ -79,8 +81,21 @@ export default function HeroScene({ still = false, active = true, dark = false }
       <Environment resolution={256}>
         <group rotation={[-Math.PI / 3, 0, 0]}>
           <Lightformer form="circle" intensity={4} position={[0, 5, -9]} scale={10} />
-          <Lightformer form="rect" intensity={2} color="#9fb4ff" position={[-5, 1, -1]} rotation={[0, Math.PI / 2, 0]} scale={[20, 2, 1]} />
-          <Lightformer form="rect" intensity={2.5} position={[5, -1, -1]} rotation={[0, -Math.PI / 2, 0]} scale={[20, 1.5, 1]} />
+          <Lightformer
+            form="rect"
+            intensity={2}
+            color="#9fb4ff"
+            position={[-5, 1, -1]}
+            rotation={[0, Math.PI / 2, 0]}
+            scale={[20, 2, 1]}
+          />
+          <Lightformer
+            form="rect"
+            intensity={2.5}
+            position={[5, -1, -1]}
+            rotation={[0, -Math.PI / 2, 0]}
+            scale={[20, 1.5, 1]}
+          />
           <Lightformer form="ring" intensity={3} color="#2f5bff" position={[2, 2, 4]} scale={3} />
         </group>
       </Environment>
