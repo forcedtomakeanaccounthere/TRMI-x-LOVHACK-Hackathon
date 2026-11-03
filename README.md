@@ -10,7 +10,7 @@ Paste any article or drop a PDF, share one link, then highlight, comment and fol
 
 Built for the **TRMI x LOVHACK Hackathon**.
 
-**[API documentation](https://link-room-swaq.onrender.com/docs/)** · **[Try it as a guest judge](#try-it-in-one-click)**
+**[▶ Demo video (2½ min)](docs/demo/linkroom-demo.mp4)** · **[API documentation](https://link-room-swaq.onrender.com/docs/)** · **[Try it as a guest judge](#try-it-in-one-click)**
 
 ![LinkRoom landing page](docs/images/landing-hero.jpg)
 
