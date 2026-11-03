@@ -1,0 +1,15 @@
+[
+  {"id":"s01_hook","title":"The internet is single-player","vo":"The internet is single-player. We share a link, everyone reads it alone, and the conversation happens somewhere else. LinkRoom puts the people back on the page."},
+  {"id":"s02_dashboard","title":"Your reading HQ","vo":"Every link and every PDF becomes a live room. Your dashboard shows which rooms are running, who is reading right now, your study groups, and a shared calendar, all in one place."},
+  {"id":"s03_sources","title":"Multiple documents, one room","vo":"Add as many sources as you need. Drop in PDFs, Word, PowerPoint and Markdown files, paste a web link, or pull straight from Google Drive. Every source sits side by side, and you choose which ones the AI should use."},
+  {"id":"s04_youtube","title":"YouTube to document","vo":"Got a lecture on YouTube? Paste the link, and LinkRoom reads the captions, turning the video into a timestamped document your group can highlight and question, just like text."},
+  {"id":"s05_annotate","title":"Annotations and text boxes","vo":"Reading together means marking things up. Highlight, underline, draw, or drop a text box anywhere on the page. Every mark shows up in your own colour, live, for everyone in the room."},
+  {"id":"s06_presence","title":"Live cursors and follow mode","vo":"You can always see where everyone is. Live cursors show each reader's position, the activity feed tracks every highlight and question, and follow mode lets you ride along with a friend's scroll."},
+  {"id":"s07_laser","title":"Laser Focus","vo":"Need everyone on the same line? Laser Focus pulls the whole room to your paragraph in one click. Everyone, look here."},
+  {"id":"s08_huddle","title":"Huddle voice chat","vo":"When typing is too slow, start a huddle. Talk it through by voice with live captions, and when you hang up, the AI writes the notes: questions, action items and key points, anchored to the passages you were reading."},
+  {"id":"s09_lens","title":"AI Lens","vo":"AI Lens lets you drag over any part of a page, a diagram, a table, a scanned equation, and ask about exactly that."},
+  {"id":"s10_chat","title":"AI chat with citations","vo":"AI chat answers across all of your sources, with citations that jump straight to the passage."},
+  {"id":"s11_studio","title":"Studio","vo":"And Studio turns your sources into study material in one click. A summary. A quiz to check what stuck. Flashcards to remember key terms. A mind map of how ideas connect. And a one-page infographic."},
+  {"id":"s12_rooms","title":"Dynamic study rooms","vo":"Rooms are dynamic. Organise them into groups, decide who can view or edit, chat in the discussion tab, keep a shared notebook, and catch up instantly with While you were away."},
+  {"id":"s13_outro","title":"Make your next read multiplayer","vo":"Reading was never meant to be a solitary act. LinkRoom. Make your next read multiplayer."}
+]

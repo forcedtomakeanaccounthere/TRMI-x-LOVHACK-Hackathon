@@ -1,0 +1,23 @@
+{
+  "name": "linkroom-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LinkRoom product demo video, made with Remotion",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts LinkRoomDemo out/linkroom-demo.mp4",
+    "render:nobgm": "remotion render src/index.ts LinkRoomDemo out/linkroom-demo-nobgm.mp4 --props=props-nobgm.json",
+    "timings": "python3 scripts/timings.py"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.484",
+    "@remotion/google-fonts": "4.0.484",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.484"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "typescript": "6.0.3"
+  }
+}
