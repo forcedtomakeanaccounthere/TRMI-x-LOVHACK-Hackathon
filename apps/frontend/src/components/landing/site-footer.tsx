@@ -66,6 +66,35 @@ export function SiteFooter() {
 
         <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-(--hairline) pt-6 text-[0.8125rem] text-muted-foreground sm:flex-row">
           <span>Built for TRMI × LovHack · Multiplayer Everything</span>
+          <span className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
+            <span>Built by</span>
+            <a
+              href="https://github.com/forcedtomakeanaccounthere"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground hover:underline"
+            >
+              Abhishek Anand
+            </a>
+            <span aria-hidden>·</span>
+            <a
+              href="https://github.com/arungujjar123"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground hover:underline"
+            >
+              Arun
+            </a>
+            <span aria-hidden>·</span>
+            <a
+              href="https://github.com/arnavranjan005"
+              target="_blank"
+              rel="noreferrer"
+              className="transition-colors hover:text-foreground hover:underline"
+            >
+              Arnav Ranjan
+            </a>
+          </span>
           <span className="font-mono text-[0.75rem]">© MMXXVI LinkRoom</span>
         </div>
       </div>

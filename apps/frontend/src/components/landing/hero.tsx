@@ -5,8 +5,8 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { EASE_OUT_EXPO, SplitReveal, useFontsReady } from "@/components/fx/reveal";
 import { useTheme } from "@/lib/theme";
-import { DemoModal, DemoTrigger } from "./demo-modal";
 import { HeroLinkForm } from "./hero-link-form";
+import { HeroDemoModal } from "./hero-demo-modal";
 import { Avatars, RoomPreview } from "./room-preview";
 
 // WebGL never renders on the server; the rings fade in once the canvas is ready.
@@ -108,7 +108,7 @@ export function Hero() {
             transition={{ duration: 1.2, delay: 1.1 }}
             className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-5"
           >
-            <DemoModal trigger={<DemoTrigger />} />
+            <HeroDemoModal />
             <div className="flex items-center gap-3">
               <Avatars />
               <div className="text-[0.8125rem] leading-tight">

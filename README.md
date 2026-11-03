@@ -1,18 +1,15 @@
 <div align="center">
 
 # LinkRoom
-
-### Every link, read *together*.
-
 **The internet is single-player. LinkRoom makes every link multiplayer.**
 
-Paste any article or drop a PDF, share one link, then highlight, comment and follow each other as you read, and finish with an AI recap of what the group cared about.
-
-Built for the **TRMI x LOVHACK Hackathon**.
-
-**[API documentation](https://link-room-swaq.onrender.com/docs/)** · **[Try it as a guest judge](#try-it-in-one-click)**
+**[API documentation](https://link-room-swaq.onrender.com/docs/)** · **[Try it as a guest](#try-it-in-one-click)** · **[Watch Demo](https://youtu.be/SGm599w1M3U)**
 
 ![LinkRoom landing page](docs/images/landing-hero.jpg)
+
+Paste any article or drop a PDF, share one link, then highlight, comment and follow each other as you read, ask queries from AI - chatbox & AI lens, have a voice chat using Huddle, and finish with an AI recap of what the group cared about.
+
+Built for the **TRMI x LOVHACK Hackathon**.
 
 </div>
 
@@ -31,15 +28,18 @@ Their dashboard has **Robot Perception 101 · demo room** with two attached sour
 
 We share a link, everyone reads it alone, and the conversation happens somewhere else, in screenshots and "which paragraph?" messages. LinkRoom puts the people back on the page.
 
-![The problem](docs/images/landing-problem.jpg)
+<video src="docs/images/linkroom-demo.mp4" poster="docs/demo/youtube-mate-demo-poster.jpg" autoplay loop muted playsinline controls width="100%">
+  Your browser does not support embedded video. <img src="https://img.youtube.com/vi/SGm599w1M3U/maxresdefault.jpg" alt="The thirty-second moment" width="800" />
+</video>
 
 ## How it works
 
 Three steps, no onboarding:
 
-1. **Paste a link or drop a PDF** (up to 20 MB).
+1. **Paste a link** [Notion, Youtube video, Substack, Medium article, Wikipedia, any blogs] or **Upload a PDF/PPT/DOCX/Markdown/txt** file (up to 20 MB).
 2. **Share the room** with one short link or QR code. Guests just type a name, no account needed.
 3. **Read together** with live cursors, highlights, comments, reactions and follow mode. When you are done, the AI recaps the room.
+4. Use **advanced AI features** like AI lens, chatbox, or **create artifacts based on uploaded resources** like Mindmaps, Quiz, Flashcards, Infographics.
 
 ![How it works](docs/images/how-it-works.jpg)
 
