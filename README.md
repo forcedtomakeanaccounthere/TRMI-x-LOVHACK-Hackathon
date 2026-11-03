@@ -28,9 +28,10 @@ Their dashboard has **Robot Perception 101 · demo room** with two attached sour
 
 We share a link, everyone reads it alone, and the conversation happens somewhere else, in screenshots and "which paragraph?" messages. LinkRoom puts the people back on the page.
 
-<video src="docs/demo/linkroom-demo.mp4" poster="docs/demo/link-room-demo-poster.png" autoplay loop muted playsinline controls width="100%">
-  Your browser does not support embedded video. <img src="https://img.youtube.com/vi/SGm599w1M3U/maxresdefault.jpg" alt="The thirty-second moment" width="800" />
-</video>
+https://github.com/user-attachments/assets/d548839b-0f62-49d9-bd30-6cf45f9b7878
+
+*Watch on [YouTube](https://youtu.be/SGm599w1M3U) if the video preview fails to load.*
+
 
 ## How it works
 
